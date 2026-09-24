@@ -1135,6 +1135,40 @@ class BotHandlers(unittest.TestCase):
         row = self.con.execute("SELECT state FROM items WHERE id=?", (item_id,)).fetchone()
         self.assertEqual(row["state"], "open")
 
+    def _onb_time_cb(self, val):
+        cb = {"id": "cb", "data": "onb:time:%s" % val,
+              "message": {"chat": {"id": 1, "type": "private"}, "message_id": 1}}
+        bot.handle_callback(self.tg, self.con, cb, CFG)
+
+    def test_onb_time_accepts_a_valid_hour(self):
+        self._onb_time_cb("8")
+        self.assertEqual(fridge.get_pref(self.con, 1, "nudge_hour"), "8")
+
+    def test_onb_time_rejects_an_out_of_range_hour(self):
+        for bad in ("24", "-1", "9999"):
+            self.tg.answers.clear()
+            self._onb_time_cb(bad)
+            self.assertIsNone(fridge.get_pref(self.con, 1, "nudge_hour"), bad)
+            self.assertEqual(self.tg.answers, [None], bad)   # bare tg.answer(cb["id"])
+
+    def test_onb_time_rejects_a_non_integer_hour(self):
+        for bad in ("8am", "8.5", "abc", ""):
+            self.tg.answers.clear()
+            self._onb_time_cb(bad)
+            self.assertIsNone(fridge.get_pref(self.con, 1, "nudge_hour"), bad)
+
+    def test_closing_an_item_is_scoped_to_its_own_chat(self):
+        # B5: item ids are already scoped to chat_id in the lookup query; this
+        # is the regression test asked for, not a behavior change.
+        fridge.add_items(self.con, 1, ["milk"], TODAY)
+        item_id = fridge.open_items(self.con, 1)[0]["id"]
+        cb = {"id": "cb", "data": "used:%d" % item_id,
+              "message": {"chat": {"id": 2, "type": "private"}, "message_id": 1}}
+        bot.handle_callback(self.tg, self.con, cb, CFG)
+        self.assertEqual(self.tg.answers[-1], "Already handled.")
+        row = self.con.execute("SELECT state FROM items WHERE id=?", (item_id,)).fetchone()
+        self.assertEqual(row["state"], "open")
+
     def test_skip_does_not_crash(self):
         onb.begin(self.con, 1)
         bot.handle_message(self.tg, self.con, {"chat": {"id": 1, "type": "private"}, "text": "/skip"}, CFG)

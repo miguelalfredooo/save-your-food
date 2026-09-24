@@ -544,6 +544,9 @@ def handle_callback(tg, con, cb, cfg):
         except ValueError:
             tg.answer(cb["id"])
             return
+        if not (0 <= hour <= 23):
+            tg.answer(cb["id"])
+            return
         fridge.set_pref(con, chat_id, "nudge_hour", hour)
         tg.answer(cb["id"], "%02d:00 it is." % hour)
         tg.edit(chat_id, msg["message_id"], "Your message arrives at %02d:00." % hour)
