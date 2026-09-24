@@ -53,11 +53,12 @@ Most of the fights with this UI end the moment you type instead of aiming.
   field first — an editing row shows its date and location chips.
 - **Clicking a row in a suggestion popover does nothing.** Down-arrow to highlight,
   screenshot to confirm, then Return. True for both location and date suggestions.
-- **Location search wants a short query.** "Whole Foods Market" returns seven results
-  ordered by distance; "Whole Foods Market San Francisco" returns none.
-- **The Mini's location can resolve to the wrong metro.** It drifted to the South Bay
-  early in setup and later read correctly. Spell out the street address or the city
-  — the failure is silent.
+- **Location search wants a short query.** The chain name alone returns several results
+  ordered by distance; adding the city to the query returns none at all. The extra words
+  silently kill it.
+- **The machine's location can resolve to the wrong metro** — it drifted by about forty
+  miles early in setup and later read correctly. Spell out the street address, and check
+  the map in Edit Details before trusting a geofence. The failure is silent.
 - **Typing a store name into the location chip looks like it worked but sets nothing.**
   Check the Location toggle in Edit Details — if it's off, no geofence exists.
 - **Reminders parses dates out of titles** and silently attaches them. Keep them in
