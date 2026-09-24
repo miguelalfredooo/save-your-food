@@ -135,9 +135,13 @@ def skip(con, chat_id, hour):
 def handle_item(con, chat_id, text, today=None):
     """Step 1: one item. Returns (reply, next_prompt or None)."""
     today = today or date.today()
-    names = fridge.parse_list(text)
+    names, too_long = fridge.parse_list(text, report=True)
     if not names:
-        return ("I couldn't read an item in that. Just one thing, plainly. "
+        if too_long:
+            return ("That was too long to be a food name, so I left it out "
+                    "rather than guessing. Just one thing, plainly: milk, or "
+                    "chicken thighs, or spinach."), None
+        return ("I couldn't read a thing in that. Just one, plainly. "
                 "Like milk, or chicken thighs, or spinach."), None
 
     name = names[0]
@@ -152,15 +156,22 @@ def handle_item(con, chat_id, text, today=None):
                 "Send a perishable and you'll see the difference."
                 % (name, where)), None
 
-    fridge.add_items(con, chat_id, [name], today)
-    item = [i for i in fridge.open_items(con, chat_id)
-            if i["name"].lower() == name.lower()][0]
+    tracked, _, _, _ = fridge.add_items(con, chat_id, [name], today)
+    if tracked:
+        _, use_by_date, _, estimated = tracked[0]
+    else:
+        # Re-running /setup on a name already tracked: add_items just moved
+        # its date rather than inserting, so read the refreshed row instead.
+        match = next((i for i in fridge.open_items(con, chat_id)
+                      if i["name"].lower() == name.lower()), None)
+        use_by_date = match["use_by_date"] if match else sl.use_by(name, today)[0]
+        estimated = match["estimated"] if match else False
     guess = (" I guessed that from the type of thing it is, not from a date I "
              "read. Move it if you know better."
-             if item["estimated"] else
+             if estimated else
              " That's the usual life for %s once it's open." % name)
     set_step(con, chat_id, "2")
-    return ("%s: %s.%s" % (name, sl.when(item["use_by_date"], today),
+    return ("%s: %s.%s" % (name, sl.when(use_by_date, today),
                            guess)), STEP2
 
 
@@ -169,7 +180,7 @@ def handle_list(con, chat_id, text, today=None):
     today = today or date.today()
     names = fridge.parse_list(text)
     if not names:
-        return ("I couldn't pick items out of that. Put commas between "
+        return ("I couldn't pick anything out of that. Put commas between "
                 "things, like: milk, cumin, spinach"), None
 
     tracked, stable, outside, again = fridge.add_items(con, chat_id, names, today)

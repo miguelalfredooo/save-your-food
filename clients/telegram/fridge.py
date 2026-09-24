@@ -248,8 +248,8 @@ def reclassify_last(con, chat_id, target, today=None):
     con.commit()
     lines = ["Tracking %d now:" % len(moved), ""]
     for name, ub, est in moved:
-        lines.append("  \u2022 %s \u2014 %s%s" % (name, sl.when(ub, today),
-                                            " (est.)" if est else ""))
+        lines.append("  \u2022 %s: %s%s" % (name, sl.when(ub, today),
+                                            " (a guess)" if est else ""))
     return names, "\n".join(lines)
 
 
@@ -303,30 +303,40 @@ def add_items(con, chat_id, names, today=None):
         existing = open_names.get(name.lower())
         if existing is not None:
             # You bought more milk. That is one milk with a later date, not two
-            # milks — and two would mean two nudges for one carton.
-            con.execute("UPDATE items SET use_by=?, added=?, estimated=? WHERE id=?",
-                        (ub.isoformat(), today.isoformat(), 1 if est else 0, existing))
+            # milks, and two would mean two nudges for one carton. The batch
+            # still moves to today's, so /undo and a correction on this
+            # message act on it rather than whichever day first captured it.
+            con.execute("UPDATE items SET use_by=?, added=?, estimated=?, batch=? WHERE id=?",
+                        (ub.isoformat(), today.isoformat(), 1 if est else 0, batch, existing))
             again.append(name)
             continue
-        con.execute(
+        cur = con.execute(
             "INSERT INTO items (chat_id,name,use_by,risk,estimated,added,batch,state)"
             " VALUES (?,?,?,?,?,?,?, 'open')",
             (chat_id, name, ub.isoformat(), risk, 1 if est else 0,
              today.isoformat(), batch),
         )
         tracked.append((name, ub, risk, est))
-        open_names[name.lower()] = None
+        # The row's real id, not None, so a repeat of this name later in the
+        # same list hits the "again" branch above instead of inserting twice.
+        open_names[name.lower()] = cur.lastrowid
     con.commit()
     return tracked, stable, outside, again
 
 
 def remember(con, chat_id, name, kind, today=None, batch=None):
     """File a non-perishable as reference data. Idempotent \u2014 re-sending a list
-    must not stack duplicates, because people re-send lists."""
+    must not stack duplicates, because people re-send lists. The batch always
+    moves to this call's, even for a name already on file, so /undo and a
+    correction target today's message rather than whichever day first saw it."""
     con.execute(
         "INSERT OR IGNORE INTO pantry (chat_id,name,kind,added,batch)"
         " VALUES (?,?,?,?,?)",
         (chat_id, name, kind, (today or date.today()).isoformat(), batch),
+    )
+    con.execute(
+        "UPDATE pantry SET batch=? WHERE chat_id=? AND name=?",
+        (batch, chat_id, name),
     )
 
 
@@ -340,8 +350,8 @@ def pantry_items(con, chat_id):
 
 def compose_pantry(items):
     if not items:
-        return ("Nothing in your pantry yet. Anything you send me that has no "
-                "clock on it \u2014 spices, cans, oil, rice \u2014 lands here.")
+        return ("Nothing in your pantry yet. Anything you send me with no clock "
+                "on it, like spices, cans, oil or rice, lands here.")
     stable = [i["name"] for i in items if i["kind"] == "stable"]
     outside = [i["name"] for i in items if i["kind"] == "outside"]
     out = ["Not tracked, but I remember you have it.", ""]
@@ -387,7 +397,7 @@ def undo_last(con, chat_id):
         return "Nothing to undo."
     bits = []
     if n_i:
-        bits.append("%d tracked item%s" % (n_i, "" if n_i == 1 else "s"))
+        bits.append("%d tracked thing%s" % (n_i, "" if n_i == 1 else "s"))
     if n_p:
         bits.append("%d pantry entr%s" % (n_p, "y" if n_p == 1 else "ies"))
     return "Took back " + " and ".join(bits) + "."
@@ -484,8 +494,8 @@ def compose_nudge(items, today=None):
         head = ("Use the %s tonight, or freeze it" % hero if len(t1) == 1
                 else "%s and %d more to use tonight or freeze" % (hero, len(t1) - 1))
     elif t0 and not t1:
-        head = ("1 item past its date: check before eating" if len(t0) == 1
-                else "%d items past their date: check before eating" % len(t0))
+        head = ("1 thing past its best: check before eating" if len(t0) == 1
+                else "%d things past their best: check before eating" % len(t0))
     else:
         head = "%d to use tonight, %d to check" % (len(t1), len(t0))
 
@@ -495,12 +505,12 @@ def compose_nudge(items, today=None):
         for i in t1:
             lines.append("  • %s: %s%s" % (
                 i["name"], sl.when(i["use_by_date"], today),
-                " (est.)" if i["estimated"] else ""))
+                " (a guess)" if i["estimated"] else ""))
         lines.append("")
     if t0:
         lines.append(sl.TIERS[0])
         for i in t0:
-            note = ": raw, throw it out" if i["risk"] == sl.RED else ""
+            note = ": raw, toss it" if i["risk"] == sl.RED else ""
             lines.append("  • %s: %s%s" % (
                 i["name"], sl.when(i["use_by_date"], today), note))
     return "\n".join(lines).strip()
@@ -509,7 +519,7 @@ def compose_nudge(items, today=None):
 def compose_inventory(items, today=None):
     today = today or date.today()
     if not items:
-        return "Nothing logged. Send me a list and I'll start tracking it."
+        return "Nothing tracked yet. Send me a list and I'll start."
     out, seen = [], None
     for i in items:
         t = sl.tier(i["use_by_date"], today)
@@ -519,5 +529,5 @@ def compose_inventory(items, today=None):
             seen = t
         out.append("  • %s: %s%s" % (
             i["name"], sl.when(i["use_by_date"], today),
-            " (est.)" if i["estimated"] else ""))
+            " (a guess)" if i["estimated"] else ""))
     return "\n".join(x for x in out if x is not None).strip()

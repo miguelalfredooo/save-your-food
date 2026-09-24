@@ -157,23 +157,23 @@ class Nudge(unittest.TestCase):
         fridge.add_items(self.con, 1, ["chicken thighs"], TODAY)
         day = TODAY + timedelta(days=2)
         body = fridge.compose_nudge(fridge.at_risk(self.con, 1, day), day)
-        self.assertIn("throw it out", body)
+        self.assertIn("toss it", body)
 
     def test_past_date_headline_agrees_in_number(self):
         fridge.add_items(self.con, 1, ["spinach"], TODAY)
         day = TODAY + timedelta(days=5)
-        self.assertIn("1 item past its date",
+        self.assertIn("1 thing past its best",
                       fridge.compose_nudge(fridge.at_risk(self.con, 1, day), day))
         fridge.add_items(self.con, 1, ["cilantro", "parsley"], TODAY)
         body = fridge.compose_nudge(fridge.at_risk(self.con, 1, day), day)
-        self.assertIn("3 items past their date", body)
+        self.assertIn("3 things past their best", body)
         self.assertNotIn("past its date", body)
 
     def test_estimates_are_marked_as_estimates(self):
         fridge.add_items(self.con, 1, ["dragonfruit curd"], TODAY)
         day = TODAY + timedelta(days=5)
         body = fridge.compose_nudge(fridge.at_risk(self.con, 1, day), day)
-        self.assertIn("(est.)", body)
+        self.assertIn("(a guess)", body)
 
 
 # ---------------------------------------------------------------------------
@@ -657,7 +657,7 @@ class Onboarding(unittest.TestCase):
     def test_step_one_recovers_from_an_unreadable_answer(self):
         onb.begin(self.con, 1)
         reply, nxt = onb.handle_item(self.con, 1, "   ", TODAY)
-        self.assertIn("one thing", reply.lower())
+        self.assertIn("just one", reply.lower())
         self.assertEqual(onb.step(self.con, 1), "1")   # does not advance
 
     def test_step_two_teaches_the_sort_by_doing_it(self):

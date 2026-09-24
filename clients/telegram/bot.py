@@ -34,7 +34,7 @@ STATE_LABELS = {"used": "Used it", "frozen": "Froze it", "tossed": "Tossed it"}
 
 CLOSE_LINES = {
     "used": "That one did not go to waste.",
-    "frozen": "Frozen. The clock stops there.",
+    "frozen": "Frozen. Good for months.",
 }
 
 # Held back deliberately. A milestone that arrives every Tuesday is not one.
@@ -131,7 +131,7 @@ HELP = (
     "/help: this"
 )
 
-CLEAR_ASK = ("This wipes everything: tracked items and pantry both. "
+CLEAR_ASK = ("This wipes everything: what's tracked and what's in your pantry. "
              "There is no getting it back.")
 
 
@@ -151,7 +151,7 @@ def handle_seed(tg, con, chat_id):
         tg.send(chat_id, "No seed.json here.")
         return
     if fridge.open_items(con, chat_id):
-        tg.send(chat_id, "You already have things logged \u2014 not seeding over them.")
+        tg.send(chat_id, "You already have things tracked. I won't seed over them.")
         return
     with open(path) as f:
         data = json.load(f)
@@ -352,7 +352,7 @@ def handle_message(tg, con, msg, cfg):
     # a whole clause for a name, which then turns up in a nudge.
     if fridge.looks_like_sentence(text):
         tg.send(chat_id, "That reads like a sentence rather than a list, so I "
-                         "haven't logged it.\n\nFood goes in with commas "
+                         "haven't tracked it.\n\nFood goes in with commas "
                          "between: milk, spinach, chicken thighs. If I sorted "
                          "your last list wrong, say \"those are pantry\" or "
                          "\"those are fridge\" and I'll move them.")
@@ -361,11 +361,11 @@ def handle_message(tg, con, msg, cfg):
     names, too_long = fridge.parse_list(text, report=True)
 
     if too_long:
-        tg.send(chat_id, "These were too long to be item names, so I left them "
+        tg.send(chat_id, "These were too long to be food names, so I left them "
                          "out rather than guessing: " + "; ".join(too_long))
 
     if not names:
-        tg.send(chat_id, "I couldn't pick any items out of that. "
+        tg.send(chat_id, "I couldn't pick anything out of that. "
                          "Try: milk, spinach, chicken thighs")
         return
 
@@ -380,7 +380,7 @@ def handle_message(tg, con, msg, cfg):
             len(tracked), "" if len(tracked) == 1 else "s"), ""]
         for name, ub, risk, est in tracked:
             lines.append("  • %s: %s%s" % (
-                name, sl.when(ub), " (est.)" if est else ""))
+                name, sl.when(ub), " (a guess)" if est else ""))
     if again:
         if lines:
             lines.append("")
@@ -444,7 +444,7 @@ def handle_callback(tg, con, cb):
         n_items, n_pantry = fridge.clear_chat(con, chat_id)
         tg.answer(cb["id"], "Wiped.")
         tg.edit(chat_id, msg["message_id"],
-                "Wiped %d tracked item%s and %d pantry entr%s. Send a list when "
+                "Wiped %d tracked thing%s and %d pantry entr%s. Send a list when "
                 "you are ready." % (n_items, "" if n_items == 1 else "s",
                                     n_pantry, "y" if n_pantry == 1 else "ies"))
         return
@@ -471,7 +471,7 @@ def handle_callback(tg, con, cb):
     # Used or froze: a small drawing, matched to the food where there is one.
     # Tossed gets a line and no picture, on purpose (see art.FORBIDDEN).
     if state == "tossed":
-        tg.send(chat_id, "Noted. Logged so the monthly count is honest.")
+        tg.send(chat_id, "Noted.")
         return
     n = fridge.count_closed(con, chat_id, "used")
     if state == "used" and n in MILESTONES:
@@ -515,7 +515,7 @@ def sweep(tg, con, cfg, now=None):
             continue
         for i in fridge.expired_past_budget(con, chat_id, today):
             tg.send(chat_id,
-                    "%s has been past its date for a while now. Safe to assume it's "
+                    "%s has been past its best for a while now. Safe to assume it's "
                     "gone?" % i["name"],
                     buttons=[[
                         {"text": "\U0001f5d1 Tossed it", "callback_data": "tossed:%d" % i["id"]},
