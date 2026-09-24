@@ -1,0 +1,92 @@
+# Fridge Loop — Telegram client
+
+The Mac version is v1. This is the same system with a chat UI, for people who
+don't have a Mac Mini, an iCloud account set up for it, or the patience for a
+seven-step setup.
+
+Standard library only. Nothing to install.
+
+## Running it
+
+**1. Make a bot.** In Telegram, message **@BotFather** and send `/newbot`.
+Give it a name. It replies with a token that looks like
+`8123456789:AAF...`. That token is a password — don't paste it into a chat,
+including a chat with Claude.
+
+**2. Put the token in a config file.** In Terminal:
+
+    cd ~/Recipes/_fridge-bot
+    cp config.example.json config.json
+    open -e config.json
+
+Replace `PUT_YOUR_BOTFATHER_TOKEN_HERE` with the token. Save and close.
+
+**3. Start it.**
+
+    python3 bot.py
+
+Leave that Terminal window open. It prints one line and then waits. Ctrl-C stops it.
+
+**4. Message your bot** in Telegram. Send `/start`, then `/seed` to load the
+fridge contents as of Sep 23.
+
+## What it does
+
+| You send | It does |
+|---|---|
+| `milk, spinach, chicken thighs` | Logs them, works out roughly when each turns, tells you which to watch |
+| `/fridge` | Everything open, soonest first, grouped by urgency |
+| `/nudge` | The at-risk message on demand, rather than waiting for the daily one |
+| `/seed` | Loads `seed.json` once. Refuses if you already have things logged |
+| `/help` | The above |
+
+Once a day at 16:30 (change `nudge_hour` in `config.json`) it sends one message
+naming what needs using, then one tappable line per item:
+
+    [ ✅ Used it ]  [ ❄️ Froze it ]  [ 🗑 Tossed it ]
+
+Tapping any of the three closes that item. Nothing nags after that.
+
+Items that sit past their date longer than their risk class allows — 1 day for
+raw meat, 3 for dairy and greens, 7 for hard cheese and root veg — get one
+disposal prompt and then stop.
+
+## What it deliberately doesn't do
+
+No recipe matching, no pantry, no cook log, no scorecard, no geofences. This is
+the thinnest loop that can prove whether a Telegram nudge gets answered more
+often than a Reminders alert. Everything else is in the `fridge-loop` skill and
+can come across once that question is settled.
+
+Photo capture needs a vision model and an API key, so it's not here either —
+typed lists only for now.
+
+## Files
+
+| File | |
+|---|---|
+| `bot.py` | Telegram transport and conversation. The only file that touches the network |
+| `fridge.py` | Storage, list parsing, composing messages |
+| `shelf_life.py` | The use-by table and risk classes, ported from the skill |
+| `test_logic.py` | 21 tests. `python3 test_logic.py` |
+| `preview.py` | Renders the messages for any date, no token needed. `python3 preview.py 2026-09-26` |
+| `seed.json` | Real fridge contents as of Sep 23, so the test runs against real food |
+| `fridge.db` | Created on first run. Your data. Not synced anywhere |
+
+`test_logic.py` and `preview.py` need no token and no network — the logic is
+checkable on its own, which is how it was built, since `api.telegram.org` is
+unreachable from the environment Claude runs in.
+
+## If something breaks
+
+**"Couldn't reach Telegram"** — the token is wrong, or you're offline.
+
+**Nothing arrives at 16:30** — the Terminal window has to still be open and the
+Mac awake. Check the window for errors.
+
+**It logged something odd** — send `/fridge` to see what it thinks it has. The
+parser splits on commas and newlines and strips quantities, so
+`2 bunches cilantro` becomes `cilantro`.
+
+**Dates look wrong** — anything marked `(est.)` was guessed because the item
+isn't in `shelf_life.py`. Add it to the table there.

@@ -1,0 +1,18 @@
+# Personal instance data — never commit. This repo is the system, not one kitchen.
+Pantry.md
+Patterns.md
+CookLog.md
+Restock.md
+.last-sync
+
+# Telegram client runtime
+clients/telegram/config.json
+clients/telegram/fridge.db
+clients/telegram/seed.json
+
+# Python
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store

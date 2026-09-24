@@ -1,0 +1,8 @@
+{
+  "_comment": "Optional starting inventory, loaded once with /seed. Use real dates from wherever you already track this, so a parallel test runs against real food rather than invented data. Shelf-stable things that live in the fridge but keep for months are deliberately left out.",
+  "items": [
+    {"name": "cilantro", "use_by": "2026-09-24", "risk": "yellow"},
+    {"name": "milk",     "use_by": "2026-09-28", "risk": "yellow"},
+    {"name": "chicken thighs", "use_by": "2026-09-25", "risk": "red"}
+  ]
+}
