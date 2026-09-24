@@ -85,6 +85,54 @@ Arrive and exit triggers for the same store must point at the **same branch**. D
 
 Accept: photo, typed list, or receipt. Record per item: name, **quantity and container state**, date added, printed date if visible. "Cilantro (loose bunch, crisper drawer)", not "greens" — the reminder has to match the physical object.
 
+### Sort what arrives. Never reject it.
+
+**Nobody answers "what's in your fridge" the way you meant it.** Asked that question, people send their whole kitchen — spices, cans, oil, rice. That is not a wrong answer to correct. It is a list that belongs in more than one place, so put it in the right places and say what went where.
+
+| Bucket | What lands there | Gets a date? | Gets nudged? |
+|---|---|---|---|
+| **Tracked** | perishables | yes | yes, until closed out |
+| **Pantry** | spices, cans, oil, vinegar, rice, flour, sugar, frozen things | no | never |
+| **Counter** | onions, potatoes, garlic, winter squash | no | never |
+
+The last two are still worth keeping — they are what makes "can I cook X tonight" answerable. They just have no clock on them.
+
+**Never reply with a count of zero.** Someone who sent their spice rack must not read "Logged 0 items" as a failure. Lead with whatever the list actually turned out to be.
+
+**Match on whole words, not substrings.** Every one of these broke a real capture:
+
+| Pantry | Tracked | The trap |
+|---|---|---|
+| ground ginger | ground **beef** | `ground` is a pantry modifier |
+| dried parsley | parsley | `dried` is too |
+| coconut milk | oat milk | `milk` matched a can |
+| black pepper | bell pepper | bare `pepper` is produce |
+| black beans | green beans | bare `bean` is produce |
+| Calrose rice | cooked rice | a leftover, not a grain |
+| garlic powder, garlic paste | garlic | counter rules need whole words |
+| peanut butter, butter | butternut squash, buttermilk | `butter` is a substring of both |
+| minced garlic | minced beef | `minced` is a pantry modifier |
+
+### A sentence is not an item, and it is usually a correction
+
+**Prose must never be logged as food.** "these items are all from the pantry" is a 35-character sentence, and logging it produces a dated fridge item with a clause for a name that then turns up in a nudge. A list has commas or few function words; prose has several words and the small words that glue them together.
+
+**When the sentence is a correction, act on it.** The user telling you the sort was wrong is the single most important thing to get right, because it is the only way they can fix your guess without learning a command.
+
+- "those are pantry" / "that's all in my cupboard" / "none of these go bad" → move the last captured list out of tracking
+- "those are fridge" / "those are perishable" / "track these" → move them back
+- **Negation flips the bucket.** "none of these go bad" means the opposite of "these go bad". A bare leading "no" does not — in "no, those go off quickly" it is a discourse marker.
+- A comma or a newline means they are listing food, not correcting you, even if a keyword is in there.
+
+**One exception, and it is a safety one: never move raw meat or fish out of tracking on a vague instruction.** A pantry item is never nudged again, so obeying would quietly stop watching raw chicken, and the cost of being wrong there is not a wasted bunch of parsley. Move everything else in the list, name what you held back, and offer to remove it outright.
+
+### Nothing is lost silently
+
+- A fragment too long to be an item name gets **named back to the user**, not dropped.
+- "ok", "thanks", "yes" are answers to you, not food. Logged, each becomes a five-day guess in tomorrow's nudge.
+- Re-sending a list **moves the date, it does not add a second copy**. Two cartons of milk mean one item with a later date, or you nudge twice for one carton.
+- Every capture is one **batch**, so the last one can be taken back whole.
+
 ### A receipt is a diff, not just a capture
 
 | On the receipt | On the list | Means | Do |
@@ -347,11 +395,32 @@ If ticks fall or tosses climb, name the likeliest cause: wrong reminder time, no
 
 Never compare the waste figure to a budget or a target. It is a measurement, not a verdict.
 
-## 18. Tone
+## 18. Onboarding — orient by demonstrating, not describing
+
+A description of what the system does earns nothing. The user cannot tell whether it works, what it will do tomorrow, or how to get out of it when it gets something wrong. **Nothing is explained before the user has watched it act on food of theirs.**
+
+Four steps, in this order for a reason:
+
+1. **One item, not a list.** A list is a chore before any trust exists. One item is enough to show the dating — and to admit the date is a guess when it is one. If the first thing they name is a spice, say so and invent no date; a fake demo costs more than a slow one.
+2. **The sort, taught by doing.** Ask for something that does *not* go off. They watch their own spice land in the pantry instead of reading a rule about it.
+3. **The time, as a number.** "Once a day" is not a promise anyone can hold you to; "08:00" is. Buttons, not typing, and store it **per person** — 08:00 is not everyone's morning.
+4. **The way out, before it is needed.** Undo and the plain-language corrections, shown while nothing is at stake, on a **real nudge with live buttons** — not a mock-up.
+
+Then **say what silence means**: if nothing needs using, nothing arrives. This is the line that makes a daily message tolerable, and it is the one people are never told.
+
+Rules that hold throughout:
+
+- Buttons over typing wherever a question has a fixed set of answers.
+- **Every step takes a skip**, and skipping leaves no half-finished state.
+- Resume, never restart: state survives a restart, and a second `/start` must not cost someone their fridge.
+- No scheduled nudge fires at someone mid-onboarding.
+- An unreadable answer re-asks the same question. It does not advance.
+
+## 19. Tone
 
 Flat and factual. "Chicken, 2 days past. Check it." Never urgent, never scolding, no guilt. A month of waste is information, not a failing — and that holds double once it has a dollar sign on it.
 
-## 19. Answering questions
+## 20. Answering questions
 
 **This is the only channel he opens.** The one-per-day cap exists to stop unsolicited noise; a question he asked carries no such cost, so everything the cap suppresses can live here.
 

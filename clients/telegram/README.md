@@ -90,3 +90,37 @@ parser splits on commas and newlines and strips quantities, so
 
 **Dates look wrong** — anything marked `(est.)` was guessed because the item
 isn't in `shelf_life.py`. Add it to the table there.
+
+## Commands
+
+| | |
+|---|---|
+| a typed list | capture. Sorted into tracked / pantry / counter |
+| `/start` | first run walks four onboarding steps; later runs just say hello |
+| `/setup` | run the onboarding again |
+| `/skip` | leave onboarding at any step |
+| `/fridge` | what is tracked, soonest first |
+| `/pantry` | what is remembered but never nudged |
+| `/nudge` | what is at risk right now |
+| `/undo` | take back the last captured list, whole |
+| `/clear` | wipe everything, with a confirmation |
+| `/seed` | load `seed.json`, refused if the chat is not empty |
+| "those are pantry" | move the last list out of tracking |
+| "those are fridge" | move it back |
+
+## What it refuses to do
+
+- **Track a shelf-stable item.** Spices, cans, oil and rice go to the pantry, which is never nudged. A nudge asking whether you used your oregano is the noise that kills these systems.
+- **Log a sentence as food.** Prose is either a correction or a miss, never an item.
+- **Move raw meat or fish out of tracking on a vague instruction.** Everything else in the list moves; the meat is named and kept.
+- **Drop anything silently.** An over-long fragment is named back to you.
+- **Stack duplicates.** Re-sending a list moves the date instead.
+- **Invent a demo.** The onboarding nudge is a real item of yours with live buttons, or it says there isn't one yet.
+
+## Tests
+
+    python3 test_logic.py
+
+88 tests, no network needed. The interesting ones are the bucket collisions
+(`ground beef` vs `ground ginger`, `coconut milk` vs `oat milk`, `butternut
+squash` vs `peanut butter`) and the correction phrasings, including negation.

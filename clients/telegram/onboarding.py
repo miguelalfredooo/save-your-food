@@ -1,0 +1,189 @@
+"""Onboarding: four steps, each one demonstrated on the user's own food.
+
+Why it works this way
+---------------------
+The old opening was a paragraph describing what the bot does. Descriptions do
+not earn trust — the user cannot tell whether the thing works, what it will do
+tomorrow, or how to get out of it if it gets something wrong. So nothing here
+explains a feature before the user has seen it act on something of theirs.
+
+Four steps, in this order for a reason:
+
+  1  ONE item, not a list. A list is a chore before any trust exists, and one
+     item is enough to show the dating and to admit the date is a guess.
+  2  The sort, taught by doing. The user is asked for something that does not
+     go off, so they watch their own spice land in the pantry instead of
+     reading a rule about it.
+  3  The nudge time, chosen with buttons. "Once a day" is not a promise anyone
+     can hold you to. "08:00" is.
+  4  The way out, before it is needed. Undo and a plain-language correction,
+     shown while nothing is at stake.
+
+Then the last line says what silence means, which is the part that makes a
+daily message tolerable: if nothing needs using, nothing arrives.
+
+State lives in the meta table, so a restart mid-onboarding resumes rather than
+starting over. Every step takes /skip.
+"""
+
+from datetime import date
+
+import fridge
+import shelf_life as sl
+
+BULLET = "\u2022"
+B = BULLET
+
+KEY = "onboarding"
+DONE = "done"
+STEPS = ("1", "2", "3", "4")
+
+
+# --- state -----------------------------------------------------------------
+
+def step(con, chat_id):
+    row = con.execute("SELECT value FROM meta WHERE chat_id=? AND key=?",
+                      (chat_id, KEY)).fetchone()
+    return row["value"] if row else None
+
+
+def set_step(con, chat_id, value):
+    con.execute("INSERT OR REPLACE INTO meta (chat_id,key,value) VALUES (?,?,?)",
+                (chat_id, KEY, value))
+    con.commit()
+
+
+def active(con, chat_id):
+    return step(con, chat_id) in STEPS
+
+
+def started(con, chat_id):
+    return step(con, chat_id) is not None
+
+
+# --- copy ------------------------------------------------------------------
+
+STEP1 = (
+    "I stop food going off. One message a day, only when something needs using.\n\n"
+    "Let's do it on your actual food so you can see what you're getting.\n\n"
+    "Name one thing in your fridge right now. Just one."
+)
+
+STEP2 = (
+    "Now the part that matters.\n\n"
+    "Send me three or four more things, and put something in there that does "
+    "NOT go off — a spice, a can, a bottle of oil. Anything."
+)
+
+STEP3 = (
+    "That's the whole idea: perishables get a date, everything else I just "
+    "remember.\n\n"
+    "When do you want your one message a day?"
+)
+
+STEP4_HEAD = (
+    "Set. Last thing, and it's the one people need most.\n\n"
+    "I will get things wrong. When I do, you don't have to learn a command — "
+    "just tell me:\n\n"
+    "    \u201cthose are pantry\u201d   moves the last list out of tracking\n"
+    "    \u201cthose are fridge\u201d   moves them back\n"
+    "    /undo                takes back the last list entirely\n\n"
+    "Here is what a nudge looks like. Tap one and it stops asking."
+)
+
+TIME_BUTTONS = [
+    [{"text": "07:00", "callback_data": "onb:time:7"},
+     {"text": "08:00", "callback_data": "onb:time:8"},
+     {"text": "09:00", "callback_data": "onb:time:9"}],
+    [{"text": "12:00", "callback_data": "onb:time:12"},
+     {"text": "17:00", "callback_data": "onb:time:17"},
+     {"text": "19:00", "callback_data": "onb:time:19"}],
+]
+
+
+def finished(hour):
+    return (
+        "You're done. What happens from here:\n\n"
+        "  %s Every day at %02d:00 I message you, but only if something needs "
+        "using. If nothing does, you hear nothing from me. Silence means you're "
+        "fine.\n"
+        "  %s Bought something? Send it as a list, commas between things.\n"
+        "  %s /fridge what's tracked •  /pantry what I remember •  /help the rest\n\n"
+        "That's it. No app, no login, nothing to keep open."
+        % (B, hour, B, B)
+    )
+
+
+# --- steps -----------------------------------------------------------------
+
+def begin(con, chat_id):
+    set_step(con, chat_id, "1")
+    return STEP1
+
+
+def skip(con, chat_id, hour):
+    set_step(con, chat_id, DONE)
+    return ("Skipped. Send a list whenever — commas between things — and I'll "
+            "message you at %02d:00 if anything needs using. /help for the rest."
+            % hour)
+
+
+def handle_item(con, chat_id, text, today=None):
+    """Step 1: one item. Returns (reply, next_prompt or None)."""
+    today = today or date.today()
+    names = fridge.parse_list(text)
+    if not names:
+        return ("I couldn't read an item in that. One thing, plainly — "
+                "\u201cmilk\u201d, \u201cchicken thighs\u201d, \u201cspinach\u201d."), None
+
+    name = names[0]
+    skip_it, reason = sl.not_tracked(name)
+    if skip_it:
+        where = ("the counter, where it keeps better than in the fridge"
+                 if reason == "outside" else "your pantry")
+        fridge.add_items(con, chat_id, [name], today)
+        set_step(con, chat_id, "2")
+        return ("%s doesn't go off on a clock, so I put it in %s rather than "
+                "making up a date for it. Nothing to nudge you about.\n\n"
+                "Try a perishable and you'll see the difference." % (name, where)), None
+
+    fridge.add_items(con, chat_id, [name], today)
+    item = [i for i in fridge.open_items(con, chat_id)
+            if i["name"].lower() == name.lower()][0]
+    guess = (" I guessed that from the type of thing it is, not from a date I "
+             "read, so move it if you know better."
+             if item["estimated"] else
+             " That's the usual life for %s once it's open." % name)
+    set_step(con, chat_id, "2")
+    return ("%s — %s.%s" % (name, sl.when(item["use_by_date"], today), guess)), STEP2
+
+
+def handle_list(con, chat_id, text, today=None):
+    """Step 2: the sort, shown on their own list."""
+    today = today or date.today()
+    names = fridge.parse_list(text)
+    if not names:
+        return ("I couldn't pick items out of that. Commas between things: "
+                "milk, cumin, spinach"), None
+
+    tracked, stable, outside, again = fridge.add_items(con, chat_id, names, today)
+    lines = []
+    if tracked:
+        lines.append("On a clock, so I'll watch these:")
+        for name, ub, risk, est in tracked:
+            lines.append("  • %s — %s%s" % (name, sl.when(ub, today),
+                                              " (guess)" if est else ""))
+    if stable or outside:
+        if lines:
+            lines.append("")
+        lines.append("No clock, so I'll shut up about these:")
+        for name in stable + outside:
+            lines.append("  • %s" % name)
+    if not stable and not outside:
+        if lines:
+            lines.append("")
+        lines.append("All of those were perishable, so nothing went to the "
+                     "pantry this time. Send a spice or a can any time and it "
+                     "will land there instead.")
+    set_step(con, chat_id, "3")
+    return "\n".join(lines), STEP3

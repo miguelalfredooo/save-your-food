@@ -23,6 +23,7 @@ sys.path.insert(0, HERE)
 
 import fridge          # noqa: E402
 import shelf_life as sl  # noqa: E402
+import onboarding as onb  # noqa: E402
 
 CONFIG_PATH = os.path.join(HERE, "config.json")
 API = "https://api.telegram.org/bot%s/%s"
@@ -88,19 +89,28 @@ class Telegram:
 # --- conversation ----------------------------------------------------------
 
 WELCOME = (
-    "I help you use food before it goes bad.\n\n"
-    "Tell me what's in your fridge. Just type it, with commas between things:\n\n"
+    "I stop food going off.\n\n"
+    "What did you just buy? Type it, commas between things:\n\n"
     "    milk, spinach, chicken thighs\n\n"
-    "I'll work out roughly when each one turns. I'll message you once a day when "
-    "something needs using. Tap a button to say what happened, and it stops asking."
+    "Send whatever you like — I sort it. Things with a clock on them get "
+    "tracked, and I message you once a day when one needs using. Spices, cans and "
+    "rice go to your pantry instead, where I remember them but never nag you."
 )
 
 HELP = (
-    "Type a list any time to add things.\n\n"
-    "/fridge shows what's in there, soonest first\n"
-    "/nudge shows what's at risk right now\n"
-    "/help shows this"
+    "Type a list any time. I sort it — perishables get tracked, everything "
+    "else goes to your pantry.\n\n"
+    "/fridge — what's tracked, soonest first\n"
+    "/pantry — what I remember but don't track\n"
+    "/nudge — what's at risk right now\n"
+    "/undo — take back the last list I added\n"
+    "\"those are pantry\" — move the last list out of tracking\n"
+    "/clear — wipe everything and start over\n"
+    "/help — this"
 )
+
+CLEAR_ASK = ("This wipes everything — tracked items and pantry both. "
+             "There is no getting it back.")
 
 
 def item_buttons(item_id):
@@ -119,7 +129,7 @@ def handle_seed(tg, con, chat_id):
         tg.send(chat_id, "No seed.json here.")
         return
     if fridge.open_items(con, chat_id):
-        tg.send(chat_id, "You already have things logged. I won't seed over them.")
+        tg.send(chat_id, "You already have things logged \u2014 not seeding over them.")
         return
     with open(path) as f:
         data = json.load(f)
@@ -148,28 +158,100 @@ def send_nudge(tg, con, chat_id, today=None):
         return 0
     tg.send(chat_id, body)
     for i in items:
-        tg.send(chat_id, "%s: %s" % (i["name"], sl.when(i["use_by_date"], today)),
+        tg.send(chat_id, "%s — %s" % (i["name"], sl.when(i["use_by_date"], today)),
                 buttons=item_buttons(i["id"]))
     return len(items)
+
+
+def run_onboarding(tg, con, chat_id, text):
+    stage = onb.step(con, chat_id)
+
+    if stage == "1":
+        reply, nxt = onb.handle_item(con, chat_id, text)
+        tg.send(chat_id, reply)
+        if nxt:
+            tg.send(chat_id, nxt)
+        return
+
+    if stage == "2":
+        reply, nxt = onb.handle_list(con, chat_id, text)
+        tg.send(chat_id, reply)
+        if nxt:
+            tg.send(chat_id, nxt, buttons=onb.TIME_BUTTONS)
+        return
+
+    # Step 3 is answered with a button and step 4 with a tap on the sample
+    # nudge. A typed message at either point is a list, so take it as one.
+    onb.set_step(con, chat_id, onb.DONE)
+    handle_message(tg, con, {"chat": {"id": chat_id}, "text": text})
+
+
+def send_sample_nudge(tg, con, chat_id, today=None):
+    """Step 4: a real nudge, on a real item of theirs, with live buttons.
+
+    Deliberately not a mock-up. The user needs to see the message that will
+    arrive tomorrow, and to find out that one tap ends it, while nothing is at
+    stake. If they have nothing perishable yet, say so rather than inventing an
+    item — a fake nudge is exactly the thing that costs trust.
+    """
+    items = fridge.open_items(con, chat_id)
+    if not items:
+        tg.send(chat_id, "Nothing of yours is on a clock yet, so there is no "
+                         "nudge to show you. Send a perishable and you will get "
+                         "one tomorrow.")
+        return
+    soonest = items[0]
+    tg.send(chat_id, "%s — %s" % (soonest["name"],
+                                    sl.when(soonest["use_by_date"], today)),
+            buttons=item_buttons(soonest["id"]))
 
 
 def handle_message(tg, con, msg):
     chat_id = msg["chat"]["id"]
     text = (msg.get("text") or "").strip()
     if not text:
-        tg.send(chat_id, "I can only read typed lists for now. "
-                         "Put commas between things.")
+        tg.send(chat_id, "I can only read typed lists for now — "
+                         "commas between things.")
+        return
+
+    # While onboarding is running it owns plain text, because each step is a
+    # question and the answer means something different at each one.
+    if onb.active(con, chat_id) and not text.startswith("/"):
+        run_onboarding(tg, con, chat_id, text)
         return
 
     low = text.lower()
     if low.startswith("/start"):
-        tg.send(chat_id, WELCOME)
+        # A first /start onboards. A later one does not restart it: someone
+        # tapping /start out of curiosity should not lose their fridge.
+        if not onb.started(con, chat_id):
+            tg.send(chat_id, onb.begin(con, chat_id))
+        else:
+            tg.send(chat_id, WELCOME)
+        return
+    if low.startswith("/setup"):
+        tg.send(chat_id, onb.begin(con, chat_id))
+        return
+    if low.startswith("/skip"):
+        tg.send(chat_id, onb.skip(con, chat_id, cfg["nudge_hour"]))
         return
     if low.startswith("/help"):
         tg.send(chat_id, HELP)
         return
     if low.startswith("/fridge"):
         tg.send(chat_id, fridge.compose_inventory(fridge.open_items(con, chat_id)))
+        return
+    if low.startswith("/pantry"):
+        tg.send(chat_id, fridge.compose_pantry(fridge.pantry_items(con, chat_id)))
+        return
+    if low.startswith("/undo"):
+        tg.send(chat_id, fridge.undo_last(con, chat_id))
+        return
+    if low.startswith("/clear"):
+        tg.send(chat_id, CLEAR_ASK, buttons=[[
+            {"text": "Yes, wipe it", "callback_data": "clear:yes"},
+            {"text": "No, keep it", "callback_data": "clear:no"},
+        ]])
         return
     if low.startswith("/seed"):
         handle_seed(tg, con, chat_id)
@@ -182,20 +264,74 @@ def handle_message(tg, con, msg):
         tg.send(chat_id, HELP)
         return
 
-    names = fridge.parse_list(text)
+    # "ok", "thanks", "yes" are answers to me, not things in a fridge. Without
+    # this they each become a five-day guess and turn up in tomorrow's nudge.
+    if fridge.is_chatter(text):
+        tg.send(chat_id, "Noted. Send a list whenever you want to add something, "
+                         "or /help for what I can do.")
+        return
+
+    # "these items are all from the pantry" is a correction, not an item. Act on
+    # it rather than logging the sentence, which is what used to happen.
+    fix = fridge.correction(text)
+    if fix:
+        _, reply = fridge.reclassify_last(con, chat_id, fix)
+        tg.send(chat_id, reply)
+        return
+
+    # Any other sentence is prose. Logging it produces a dated fridge item with
+    # a whole clause for a name, which then turns up in a nudge.
+    if fridge.looks_like_sentence(text):
+        tg.send(chat_id, "That reads like a sentence rather than a list, so I "
+                         "haven't logged it.\n\nFood goes in with commas "
+                         "between: milk, spinach, chicken thighs. If I sorted "
+                         "your last list wrong, say \"those are pantry\" or "
+                         "\"those are fridge\" and I'll move them.")
+        return
+
+    names, too_long = fridge.parse_list(text, report=True)
+
+    if too_long:
+        tg.send(chat_id, "These were too long to be item names, so I left them "
+                         "out rather than guessing: " + "; ".join(too_long))
+
     if not names:
         tg.send(chat_id, "I couldn't pick any items out of that. "
                          "Try: milk, spinach, chicken thighs")
         return
 
-    added, outside = fridge.add_items(con, chat_id, names)
-    lines = ["Logged %d thing%s:" % (len(added), "" if len(added) == 1 else "s"), ""]
-    for name, ub, risk, est in added:
-        lines.append("  • %s: %s%s" % (
-            name, sl.when(ub), " (est.)" if est else ""))
+    tracked, stable, outside, again = fridge.add_items(con, chat_id, names)
+
+    # Lead with what the list actually turned out to be. Someone who sent their
+    # spice rack must not read "Logged 0 things" as a failure — the list went
+    # somewhere useful, it just was not the tracked pile.
+    lines = []
+    if tracked:
+        lines += ["Tracking %d thing%s:" % (
+            len(tracked), "" if len(tracked) == 1 else "s"), ""]
+        for name, ub, risk, est in tracked:
+            lines.append("  • %s — %s%s" % (
+                name, sl.when(ub), " (est.)" if est else ""))
+    if again:
+        if lines:
+            lines.append("")
+        lines += ["Already had %s, so I moved the date instead of adding a second one:"
+                  % ("this" if len(again) == 1 else "these"),
+                  "  " + ", ".join(again)]
+    if stable:
+        if lines:
+            lines.append("")
+        lines += ["Put %d in your pantry — no clock on %s, so no nudges:" % (
+            len(stable), "it" if len(stable) == 1 else "them"),
+            "  " + ", ".join(stable)]
     if outside:
-        lines += ["", "Left these out. They keep better outside the fridge, so I'm "
-                      "not tracking them: " + ", ".join(outside)]
+        if lines:
+            lines.append("")
+        lines += ["These keep better on the counter than in the fridge, so I am "
+                  "remembering them without tracking them:",
+                  "  " + ", ".join(outside)]
+    if stable or outside:
+        lines += ["", "/pantry any time to see that list."]
     soonest = min((a[1] for a in added), default=None)
     if soonest:
         lines += ["", "First one to watch: %s." % sl.when(soonest)]
@@ -210,6 +346,40 @@ def handle_callback(tg, con, cb):
         tg.answer(cb["id"])
         return
     state, _, raw_id = data.partition(":")
+
+    if state == "onb":
+        kind, _, val = raw_id.partition(":")
+        if kind != "time":
+            tg.answer(cb["id"])
+            return
+        try:
+            hour = int(val)
+        except ValueError:
+            tg.answer(cb["id"])
+            return
+        fridge.set_pref(con, chat_id, "nudge_hour", hour)
+        tg.answer(cb["id"], "%02d:00 it is." % hour)
+        tg.edit(chat_id, msg["message_id"], "Your message arrives at %02d:00." % hour)
+        onb.set_step(con, chat_id, "4")
+        tg.send(chat_id, onb.STEP4_HEAD)
+        send_sample_nudge(tg, con, chat_id)
+        onb.set_step(con, chat_id, onb.DONE)
+        tg.send(chat_id, onb.finished(hour))
+        return
+
+    if state == "clear":
+        if raw_id != "yes":
+            tg.answer(cb["id"], "Left it alone.")
+            tg.edit(chat_id, msg["message_id"], "Nothing wiped.")
+            return
+        n_items, n_pantry = fridge.clear_chat(con, chat_id)
+        tg.answer(cb["id"], "Wiped.")
+        tg.edit(chat_id, msg["message_id"],
+                "Wiped %d tracked item%s and %d pantry entr%s. Send a list when "
+                "you are ready." % (n_items, "" if n_items == 1 else "s",
+                                    n_pantry, "y" if n_pantry == 1 else "ies"))
+        return
+
     if state not in STATE_LABELS:
         tg.answer(cb["id"])
         return
@@ -227,7 +397,7 @@ def handle_callback(tg, con, cb):
 
     fridge.close_item(con, chat_id, item_id, state)
     tg.answer(cb["id"], STATE_LABELS[state])
-    tg.edit(chat_id, msg["message_id"], "%s: %s" % (row["name"], STATE_LABELS[state].lower()))
+    tg.edit(chat_id, msg["message_id"], "%s — %s" % (row["name"], STATE_LABELS[state].lower()))
 
 
 # --- daily nudge -----------------------------------------------------------
@@ -238,8 +408,8 @@ def due_today(con, chat_id, cfg, now):
                       (chat_id,)).fetchone()
     if row and row["value"] == now.date().isoformat():
         return False
-    target = now.replace(hour=cfg["nudge_hour"], minute=cfg["nudge_minute"],
-                         second=0, microsecond=0)
+    target = now.replace(hour=fridge.nudge_hour(con, chat_id, cfg["nudge_hour"]),
+                         minute=cfg["nudge_minute"], second=0, microsecond=0)
     return now >= target
 
 
@@ -256,6 +426,10 @@ def sweep(tg, con, cfg, now=None):
     chats = [r["chat_id"] for r in
              con.execute("SELECT DISTINCT chat_id FROM items").fetchall()]
     for chat_id in chats:
+        # Someone halfway through onboarding must not get a scheduled nudge on
+        # top of the step they are answering.
+        if onb.active(con, chat_id):
+            continue
         if not due_today(con, chat_id, cfg, now):
             continue
         for i in fridge.expired_past_budget(con, chat_id, today):
