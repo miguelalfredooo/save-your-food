@@ -38,6 +38,8 @@ below. Anything wider than MAX_WIDTH scrolls sideways on a phone, which is the
 opposite of delight.
 """
 
+import re
+
 MAX_WIDTH = 16
 MAX_LINES = 6
 
@@ -250,12 +252,23 @@ def all_frames():
 
 # --- choosing ---------------------------------------------------------------
 
+# Keywords short enough to appear inside an unrelated word ("egg" in
+# "eggplant") get whole-word matching. Everything else, including the
+# deliberately truncated stems ("strawberr" for strawberry/strawberries),
+# stays on substring matching, or a prefix match would break them.
+_EXACT_WORD_KEYS = {"egg"}
+
+
 def category(name):
     """The category a food name belongs to, or None."""
     n = (name or "").lower()
     for keys, cat in ITEM_CATEGORY:
-        if any(k in n for k in keys):
-            return cat
+        for k in keys:
+            if k in _EXACT_WORD_KEYS:
+                if re.search(r"\b%ss?\b" % re.escape(k), n):
+                    return cat
+            elif k in n:
+                return cat
     return None
 
 

@@ -123,7 +123,12 @@ NEGATORS = ("none", "not", "never", "nothing", "dont", "doesnt", "wont",
 
 
 def _words(text):
-    return [w for w in re.split(r"[^a-z]+", text.lower()) if w]
+    # Apostrophes (straight or curly) drop before splitting, so "don't" and
+    # "don’t" both tokenize as "dont" and match the apostrophe-free
+    # NEGATORS/FUNCTION_WORDS entries — otherwise every real contraction
+    # misses and a negated correction flips to the wrong bucket.
+    n = text.lower().replace("'", "").replace("’", "")
+    return [w for w in re.split(r"[^a-z]+", n) if w]
 
 
 def looks_like_sentence(text):
@@ -370,14 +375,9 @@ def undo_last(con, chat_id):
     the escape hatch for a list that went in wrong — without it the only fix is
     /clear, which throws away the good with the bad.
     """
-    stamps = [r[0] for r in con.execute(
-        "SELECT MAX(batch) FROM items WHERE chat_id=? AND batch IS NOT NULL"
-        " UNION ALL"
-        " SELECT MAX(batch) FROM pantry WHERE chat_id=? AND batch IS NOT NULL",
-        (chat_id, chat_id)) if r[0]]
-    if not stamps:
+    stamp = last_batch(con, chat_id)
+    if not stamp:
         return "Nothing to undo."
-    stamp = max(stamps)
     n_i = con.execute("DELETE FROM items WHERE chat_id=? AND batch=?",
                       (chat_id, stamp)).rowcount
     n_p = con.execute("DELETE FROM pantry WHERE chat_id=? AND batch=?",

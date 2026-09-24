@@ -4,6 +4,7 @@ Deliberately free of any Telegram or storage code so it can be tested on its own
 Days are the LOW end of each range: it is better to nudge a day early than a day late.
 """
 
+import re
 from datetime import date, timedelta
 
 RED, YELLOW, GREEN = "red", "yellow", "green"
@@ -157,8 +158,7 @@ def lookup(name):
 
 
 def _tokens(name):
-    import re as _re
-    return [w for w in _re.split(r"[^a-z]+", name.lower()) if w]
+    return [w for w in re.split(r"[^a-z]+", name.lower()) if w]
 
 
 def better_outside(name):

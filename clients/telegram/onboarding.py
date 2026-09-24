@@ -179,13 +179,20 @@ def handle_list(con, chat_id, text, today=None):
         for name, ub, risk, est in tracked:
             lines.append("  %s %s: %s%s" % (B, name, sl.when(ub, today),
                                             " (guess)" if est else ""))
+    if again:
+        if lines:
+            lines.append("")
+        lines.append("Already had %s, so I moved the date instead of adding "
+                     "a second one:" % ("this" if len(again) == 1 else "these"))
+        for name in again:
+            lines.append("  %s %s" % (B, name))
     if stable or outside:
         if lines:
             lines.append("")
         lines.append("No clock, so I'll stay quiet about these:")
         for name in stable + outside:
             lines.append("  %s %s" % (B, name))
-    if not stable and not outside:
+    if not stable and not outside and not again:
         if lines:
             lines.append("")
         lines.append("All of those were perishable, so nothing went to the "
