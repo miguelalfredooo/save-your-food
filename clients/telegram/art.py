@@ -40,8 +40,21 @@ opposite of delight.
 
 import re
 
-MAX_WIDTH = 16
-MAX_LINES = 6
+# 24x8 is the largest canvas that still holds still on a phone. Telegram's
+# <pre> block keeps the monospace column width, but the bubble itself is
+# still proportional to screen width: on the narrowest phones still in use
+# (roughly 320 logical pixels wide) a pre block has room for about 28
+# monospace columns before it wraps and scrolls sideways, which is the exact
+# failure MAX_WIDTH exists to prevent. 24 keeps a safety margin under that
+# for older/smaller phones and larger system fonts, while still being half
+# again as wide as the old 16 - enough for a bigger, single-scene frame
+# instead of another small icon. 8 lines gives those bigger scenes room to
+# read as a scene rather than a cropped fragment, without turning into a
+# wall of text under a one-line nudge. The small evergreen glyphs below do
+# not need the extra room and are left exactly as they were: nobody should
+# have to relearn one.
+MAX_WIDTH = 24
+MAX_LINES = 8
 
 
 def _f(*lines):
@@ -208,14 +221,76 @@ CROWN = _f(
     "   \\/  \\/",
     "  [======]")
 
+# General-purpose frames. Bigger scenes, sized for the wider canvas above,
+# and deliberately not owned by a single moment: each is wired into every
+# moment its scene actually fits, so the shared "no repeat" rule against
+# `avoid` does real work across moments instead of only within one. A cake
+# after a milestone and a cake on the scorecard a week later still reads as
+# two different surprises; a cake twice in the same breath would not.
+CUPBOARD = _f(
+    "  .-----------------.",
+    "  |  ------------   |",
+    "  |                 |",
+    "  |  ------------   |",
+    "  |                 |",
+    "  |  ------------   |",
+    "  '-----------------'")
+
+BASKET = _f(
+    "     o   o   o   o",
+    "   .-----------------.",
+    "  / v v v v v v v v \\",
+    "  \\_________________/")
+
+CAKE = _f(
+    "        *",
+    "        |",
+    "     .-------.",
+    "    |:::::::::|",
+    "    |_________|",
+    "   |:::::::::::|",
+    "   |_____________|")
+
+MUG = _f(
+    "      (  (  (",
+    "     .----------.",
+    "    |            |",
+    "    |            |_",
+    "    |            | )",
+    "    |____________|_)",
+    "     '----------'")
+
+# A fourth occasion marker, distinct from CAKE (a dessert), CROWN (regalia)
+# and STARS (a burst): bunting, the thing you actually string up for an
+# event. Shares milestone and scorecard with those three so the rotation
+# pool for "something worth marking" is wider, which is what keeps any one
+# of them from turning into furniture.
+BANNER = _f(
+    "  *      o      *",
+    " /\\  /\\  /\\  /\\ ",
+    "/  \\/  \\/  \\/  \\")
+
 MOMENT_ART = {
     "used": (PLATE, CUTLERY),
     "frozen": (FLAKE,),
-    "allclear": (SHELVES, SUN),
-    "welcome": (ICEBOX,),
-    "milestone": (STARS, CROWN),
-    "scorecard": (CROWN,),
+    "allclear": (SHELVES, SUN, CUPBOARD, BASKET),
+    "welcome": (ICEBOX, MUG, CUPBOARD),
+    "milestone": (STARS, CROWN, CAKE, BANNER),
+    "scorecard": (CROWN, BASKET, CAKE, BANNER),
 }
+
+# Deliberately no coins/wallet/piggy-bank frame anywhere above. This system
+# has no "money saved" figure to draw honestly: the only dollar amount it
+# ever produces is what tossed food cost, reported loosely and never
+# measured against a target, because it is meant to read as information,
+# not a verdict. A cheerful currency drawing next to that number would
+# either look like it is celebrating waste or like the app is grading a
+# figure it is supposed to stay neutral about - exactly what keeping money
+# out of a nudge already guards against. The honest version of "money
+# saved" here is food used instead of tossed, one item at a time, and that
+# is already drawn: PLATE and CUTLERY mark the moment it happens, CUPBOARD
+# and BASKET echo a kitchen that is provisioned rather than bare. A second
+# icon chasing the same idea would be vanity, not vocabulary.
 
 # Moments that must never carry a drawing, and why. A rule without a reason
 # gets deleted by the next person who reads it.

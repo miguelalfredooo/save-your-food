@@ -973,9 +973,57 @@ class Delight(unittest.TestCase):
         self.assertNotEqual(art.CAN, art.ONION)
 
     def test_a_single_frame_moment_repeats_rather_than_vanishing(self):
-        # "welcome" has one frame. Better the same door twice than nothing:
-        # onboarding only finishes once per person anyway.
-        self.assertEqual(art.choose("welcome", avoid=art.ICEBOX), art.ICEBOX)
+        # "frozen" only ever resolves to the flake, since it doubles as the
+        # frozen glyph and no other frame is wired to it. Better the same
+        # snowflake twice than nothing.
+        self.assertEqual(art.choose("frozen", avoid=art.FLAKE), art.FLAKE)
+
+    # --- general-purpose frames ---
+
+    def test_general_frames_are_wired_to_every_moment_they_fit(self):
+        # These are not owned by a single moment: a cake belongs to a
+        # milestone and to a scorecard, a stocked cupboard belongs to
+        # setup finishing and to an at-risk list turning up empty.
+        self.assertIn(art.CUPBOARD, art.MOMENT_ART["allclear"])
+        self.assertIn(art.CUPBOARD, art.MOMENT_ART["welcome"])
+        self.assertIn(art.BASKET, art.MOMENT_ART["allclear"])
+        self.assertIn(art.BASKET, art.MOMENT_ART["scorecard"])
+        self.assertIn(art.CAKE, art.MOMENT_ART["milestone"])
+        self.assertIn(art.CAKE, art.MOMENT_ART["scorecard"])
+        self.assertIn(art.MUG, art.MOMENT_ART["welcome"])
+        self.assertIn(art.BANNER, art.MOMENT_ART["milestone"])
+        self.assertIn(art.BANNER, art.MOMENT_ART["scorecard"])
+
+    def test_the_banner_is_not_a_repaint_of_the_other_celebrations(self):
+        # A fourth occasion marker only earns its place if it is not just
+        # CAKE, CROWN or STARS with different characters.
+        self.assertNotIn(art.BANNER, (art.CAKE, art.CROWN, art.STARS))
+        self.assertNotIn(art.BANNER, art.MOMENT_ART["allclear"])
+        self.assertNotIn(art.BANNER, art.MOMENT_ART["welcome"])
+
+    def test_no_frame_anywhere_draws_money(self):
+        # There is no "money saved" figure in this system to draw honestly:
+        # the only dollar amount is a loosely-reported toss cost that must
+        # never read as a verdict, so no frame gets to put a dollar sign on
+        # anything, celebratory or otherwise.
+        for f in art.all_frames():
+            self.assertNotIn("$", f, f)
+
+    def test_welcome_now_rotates_through_more_than_one_frame(self):
+        # Onboarding only finishes once per chat, but different chats should
+        # not all see the exact same door.
+        first = art.choose("welcome")
+        second = art.choose("welcome", avoid=first)
+        self.assertIn(first, art.MOMENT_ART["welcome"])
+        self.assertIn(second, art.MOMENT_ART["welcome"])
+        self.assertNotEqual(first, second)
+
+    def test_a_general_frame_does_not_repeat_across_moments_either(self):
+        # The same chat seeing a cupboard for finishing setup and then, right
+        # after, an empty at-risk list should not see the same cupboard
+        # twice running just because the two moments are different.
+        self.assertNotEqual(
+            art.choose("allclear", avoid=art.CUPBOARD), art.CUPBOARD)
 
     def test_the_last_frame_is_remembered_per_chat(self):
         fridge.note_art(self.con, 1, art.CARTON)
