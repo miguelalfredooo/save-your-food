@@ -92,24 +92,24 @@ WELCOME = (
     "I stop food going off.\n\n"
     "What did you just buy? Type it, commas between things:\n\n"
     "    milk, spinach, chicken thighs\n\n"
-    "Send whatever you like — I sort it. Things with a clock on them get "
+    "Send whatever you like: I sort it. Things with a clock on them get "
     "tracked, and I message you once a day when one needs using. Spices, cans and "
     "rice go to your pantry instead, where I remember them but never nag you."
 )
 
 HELP = (
-    "Type a list any time. I sort it — perishables get tracked, everything "
+    "Type a list any time. I sort it: perishables get tracked, everything "
     "else goes to your pantry.\n\n"
-    "/fridge — what's tracked, soonest first\n"
-    "/pantry — what I remember but don't track\n"
-    "/nudge — what's at risk right now\n"
-    "/undo — take back the last list I added\n"
-    "\"those are pantry\" — move the last list out of tracking\n"
-    "/clear — wipe everything and start over\n"
-    "/help — this"
+    "/fridge: what's tracked, soonest first\n"
+    "/pantry: what I remember but don't track\n"
+    "/nudge: what's at risk right now\n"
+    "/undo: take back the last list I added\n"
+    "\"those are pantry\": move the last list out of tracking\n"
+    "/clear: wipe everything and start over\n"
+    "/help: this"
 )
 
-CLEAR_ASK = ("This wipes everything — tracked items and pantry both. "
+CLEAR_ASK = ("This wipes everything: tracked items and pantry both. "
              "There is no getting it back.")
 
 
@@ -158,7 +158,7 @@ def send_nudge(tg, con, chat_id, today=None):
         return 0
     tg.send(chat_id, body)
     for i in items:
-        tg.send(chat_id, "%s — %s" % (i["name"], sl.when(i["use_by_date"], today)),
+        tg.send(chat_id, "%s: %s" % (i["name"], sl.when(i["use_by_date"], today)),
                 buttons=item_buttons(i["id"]))
     return len(items)
 
@@ -201,7 +201,7 @@ def send_sample_nudge(tg, con, chat_id, today=None):
                          "one tomorrow.")
         return
     soonest = items[0]
-    tg.send(chat_id, "%s — %s" % (soonest["name"],
+    tg.send(chat_id, "%s: %s" % (soonest["name"],
                                     sl.when(soonest["use_by_date"], today)),
             buttons=item_buttons(soonest["id"]))
 
@@ -210,7 +210,7 @@ def handle_message(tg, con, msg):
     chat_id = msg["chat"]["id"]
     text = (msg.get("text") or "").strip()
     if not text:
-        tg.send(chat_id, "I can only read typed lists for now — "
+        tg.send(chat_id, "I can only read typed lists for now: "
                          "commas between things.")
         return
 
@@ -310,7 +310,7 @@ def handle_message(tg, con, msg):
         lines += ["Tracking %d thing%s:" % (
             len(tracked), "" if len(tracked) == 1 else "s"), ""]
         for name, ub, risk, est in tracked:
-            lines.append("  • %s — %s%s" % (
+            lines.append("  • %s: %s%s" % (
                 name, sl.when(ub), " (est.)" if est else ""))
     if again:
         if lines:
@@ -321,7 +321,7 @@ def handle_message(tg, con, msg):
     if stable:
         if lines:
             lines.append("")
-        lines += ["Put %d in your pantry — no clock on %s, so no nudges:" % (
+        lines += ["Put %d in your pantry: no clock on %s, so no nudges:" % (
             len(stable), "it" if len(stable) == 1 else "them"),
             "  " + ", ".join(stable)]
     if outside:
@@ -397,7 +397,7 @@ def handle_callback(tg, con, cb):
 
     fridge.close_item(con, chat_id, item_id, state)
     tg.answer(cb["id"], STATE_LABELS[state])
-    tg.edit(chat_id, msg["message_id"], "%s — %s" % (row["name"], STATE_LABELS[state].lower()))
+    tg.edit(chat_id, msg["message_id"], "%s: %s" % (row["name"], STATE_LABELS[state].lower()))
 
 
 # --- daily nudge -----------------------------------------------------------

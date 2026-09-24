@@ -1,9 +1,9 @@
-"""Onboarding: four steps, each one demonstrated on the user's own food.
+"""Onboarding: four steps, each demonstrated on the user's own food.
 
 Why it works this way
 ---------------------
 The old opening was a paragraph describing what the bot does. Descriptions do
-not earn trust — the user cannot tell whether the thing works, what it will do
+not earn trust. The user cannot tell whether the thing works, what it will do
 tomorrow, or how to get out of it if it gets something wrong. So nothing here
 explains a feature before the user has seen it act on something of theirs.
 
@@ -24,6 +24,8 @@ daily message tolerable: if nothing needs using, nothing arrives.
 
 State lives in the meta table, so a restart mid-onboarding resumes rather than
 starting over. Every step takes /skip.
+
+Copy style follows the rest of the bot: plain words, short sentences, no dashes.
 """
 
 from datetime import date
@@ -31,7 +33,7 @@ from datetime import date
 import fridge
 import shelf_life as sl
 
-BULLET = "\u2022"
+BULLET = "•"
 B = BULLET
 
 KEY = "onboarding"
@@ -64,29 +66,30 @@ def started(con, chat_id):
 # --- copy ------------------------------------------------------------------
 
 STEP1 = (
-    "I stop food going off. One message a day, only when something needs using.\n\n"
-    "Let's do it on your actual food so you can see what you're getting.\n\n"
+    "I help you use food before it goes bad. One message a day, and only when "
+    "something needs using.\n\n"
+    "Let's set it up on your real food, so you can see what you're getting.\n\n"
     "Name one thing in your fridge right now. Just one."
 )
 
 STEP2 = (
     "Now the part that matters.\n\n"
-    "Send me three or four more things, and put something in there that does "
-    "NOT go off — a spice, a can, a bottle of oil. Anything."
+    "Send me three or four more things. Put something in there that does NOT "
+    "go off. A spice, a can, a bottle of oil. Anything."
 )
 
 STEP3 = (
-    "That's the whole idea: perishables get a date, everything else I just "
+    "That's the whole idea. Perishables get a date. Everything else I just "
     "remember.\n\n"
     "When do you want your one message a day?"
 )
 
 STEP4_HEAD = (
-    "Set. Last thing, and it's the one people need most.\n\n"
-    "I will get things wrong. When I do, you don't have to learn a command — "
-    "just tell me:\n\n"
-    "    \u201cthose are pantry\u201d   moves the last list out of tracking\n"
-    "    \u201cthose are fridge\u201d   moves them back\n"
+    "Set. One last thing, and it's the one people need most.\n\n"
+    "I will get things wrong. When I do, you don't have to learn a command. "
+    "Just tell me:\n\n"
+    "    “those are pantry”   moves the last list out of tracking\n"
+    "    “those are fridge”   moves them back\n"
     "    /undo                takes back the last list entirely\n\n"
     "Here is what a nudge looks like. Tap one and it stops asking."
 )
@@ -103,12 +106,13 @@ TIME_BUTTONS = [
 
 def finished(hour):
     return (
-        "You're done. What happens from here:\n\n"
+        "You're done. Here is what happens from here.\n\n"
         "  %s Every day at %02d:00 I message you, but only if something needs "
-        "using. If nothing does, you hear nothing from me. Silence means you're "
-        "fine.\n"
-        "  %s Bought something? Send it as a list, commas between things.\n"
-        "  %s /fridge what's tracked •  /pantry what I remember •  /help the rest\n\n"
+        "using. If nothing does, you hear nothing from me. Silence means "
+        "you're fine.\n"
+        "  %s Bought something? Send it as a list, with commas between things.\n"
+        "  %s /fridge shows what's tracked. /pantry shows what I remember. "
+        "/help shows the rest.\n\n"
         "That's it. No app, no login, nothing to keep open."
         % (B, hour, B, B)
     )
@@ -123,9 +127,9 @@ def begin(con, chat_id):
 
 def skip(con, chat_id, hour):
     set_step(con, chat_id, DONE)
-    return ("Skipped. Send a list whenever — commas between things — and I'll "
-            "message you at %02d:00 if anything needs using. /help for the rest."
-            % hour)
+    return ("Skipped. Send a list whenever you like, with commas between "
+            "things. I'll message you at %02d:00 if anything needs using. "
+            "/help shows the rest." % hour)
 
 
 def handle_item(con, chat_id, text, today=None):
@@ -133,29 +137,31 @@ def handle_item(con, chat_id, text, today=None):
     today = today or date.today()
     names = fridge.parse_list(text)
     if not names:
-        return ("I couldn't read an item in that. One thing, plainly — "
-                "\u201cmilk\u201d, \u201cchicken thighs\u201d, \u201cspinach\u201d."), None
+        return ("I couldn't read an item in that. Just one thing, plainly. "
+                "Like milk, or chicken thighs, or spinach."), None
 
     name = names[0]
     skip_it, reason = sl.not_tracked(name)
     if skip_it:
-        where = ("the counter, where it keeps better than in the fridge"
-                 if reason == "outside" else "your pantry")
+        where = ("on the counter, where it keeps better than in the fridge"
+                 if reason == "outside" else "in your pantry")
         fridge.add_items(con, chat_id, [name], today)
         set_step(con, chat_id, "2")
-        return ("%s doesn't go off on a clock, so I put it in %s rather than "
-                "making up a date for it. Nothing to nudge you about.\n\n"
-                "Try a perishable and you'll see the difference." % (name, where)), None
+        return ("%s doesn't go off on a clock. I put it %s rather than making "
+                "up a date for it. Nothing to nudge you about.\n\n"
+                "Send a perishable and you'll see the difference."
+                % (name, where)), None
 
     fridge.add_items(con, chat_id, [name], today)
     item = [i for i in fridge.open_items(con, chat_id)
             if i["name"].lower() == name.lower()][0]
     guess = (" I guessed that from the type of thing it is, not from a date I "
-             "read, so move it if you know better."
+             "read. Move it if you know better."
              if item["estimated"] else
              " That's the usual life for %s once it's open." % name)
     set_step(con, chat_id, "2")
-    return ("%s — %s.%s" % (name, sl.when(item["use_by_date"], today), guess)), STEP2
+    return ("%s: %s.%s" % (name, sl.when(item["use_by_date"], today),
+                           guess)), STEP2
 
 
 def handle_list(con, chat_id, text, today=None):
@@ -163,22 +169,22 @@ def handle_list(con, chat_id, text, today=None):
     today = today or date.today()
     names = fridge.parse_list(text)
     if not names:
-        return ("I couldn't pick items out of that. Commas between things: "
-                "milk, cumin, spinach"), None
+        return ("I couldn't pick items out of that. Put commas between "
+                "things, like: milk, cumin, spinach"), None
 
     tracked, stable, outside, again = fridge.add_items(con, chat_id, names, today)
     lines = []
     if tracked:
         lines.append("On a clock, so I'll watch these:")
         for name, ub, risk, est in tracked:
-            lines.append("  • %s — %s%s" % (name, sl.when(ub, today),
-                                              " (guess)" if est else ""))
+            lines.append("  %s %s: %s%s" % (B, name, sl.when(ub, today),
+                                            " (guess)" if est else ""))
     if stable or outside:
         if lines:
             lines.append("")
-        lines.append("No clock, so I'll shut up about these:")
+        lines.append("No clock, so I'll stay quiet about these:")
         for name in stable + outside:
-            lines.append("  • %s" % name)
+            lines.append("  %s %s" % (B, name))
     if not stable and not outside:
         if lines:
             lines.append("")

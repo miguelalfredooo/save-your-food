@@ -665,7 +665,7 @@ class Onboarding(unittest.TestCase):
         reply, nxt = onb.handle_list(self.con, 1, "spinach, cumin, olive oil", TODAY)
         self.assertIn("spinach", reply)
         self.assertIn("cumin", reply)
-        self.assertIn("shut up about these", reply)
+        self.assertIn("stay quiet about these", reply)
         self.assertEqual(onb.step(self.con, 1), "3")
 
     def test_step_two_says_so_when_nothing_went_to_the_pantry(self):

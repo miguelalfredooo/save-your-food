@@ -411,6 +411,7 @@ Then **say what silence means**: if nothing needs using, nothing arrives. This i
 Rules that hold throughout:
 
 - Buttons over typing wherever a question has a fixed set of answers.
+- **Plain words, short sentences, no dashes** in anything the user reads. The doctrine here uses them; the product does not.
 - **Every step takes a skip**, and skipping leaves no half-finished state.
 - Resume, never restart: state survives a restart, and a second `/start` must not cost someone their fridge.
 - No scheduled nudge fires at someone mid-onboarding.
