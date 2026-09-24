@@ -1043,6 +1043,24 @@ class BotHandlers(unittest.TestCase):
         bot.handle_message(self.tg, self.con, {"chat": {"id": 1}, "text": "milk"}, cfg)
         self.assertTrue(self.tg.sent)
 
+    def test_seed_is_owner_only(self):
+        # seed.json is the owner's real fridge. A second allowed chat (e.g. a
+        # family member let onto the bot) is not the owner and must not be
+        # able to load it just because nothing is logged there yet.
+        cfg = dict(CFG, allowed_chat_ids=[1, 2])
+        bot.handle_message(self.tg, self.con, {"chat": {"id": 2}, "text": "/seed"}, cfg)
+        self.assertEqual(self.tg.sent[-1], bot.HELP)
+
+    def test_seed_works_for_the_owner(self):
+        cfg = dict(CFG, allowed_chat_ids=[1, 2])
+        bot.handle_message(self.tg, self.con, {"chat": {"id": 1}, "text": "/seed"}, cfg)
+        self.assertNotEqual(self.tg.sent[-1], bot.HELP)
+
+    def test_seed_refuses_everyone_when_no_owner_is_set(self):
+        cfg = dict(CFG, allowed_chat_ids=[])
+        bot.handle_message(self.tg, self.con, {"chat": {"id": 1}, "text": "/seed"}, cfg)
+        self.assertEqual(self.tg.sent[-1], bot.HELP)
+
     def test_a_callback_from_a_disallowed_chat_is_ignored(self):
         cfg = dict(CFG, allowed_chat_ids=[1])
         fridge.add_items(self.con, 999, ["milk"], TODAY)

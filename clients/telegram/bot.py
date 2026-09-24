@@ -386,7 +386,13 @@ def handle_message(tg, con, msg, cfg):
         ]])
         return
     if low.startswith("/seed"):
-        handle_seed(tg, con, chat_id)
+        # seed.json is the owner's real fridge. Anyone with nothing logged
+        # could otherwise load it, which leaks personal data.
+        owner = cfg["allowed_chat_ids"][0] if cfg["allowed_chat_ids"] else None
+        if chat_id == owner:
+            handle_seed(tg, con, chat_id)
+        else:
+            tg.send(chat_id, HELP)
         return
     if low.startswith("/nudge"):
         if send_nudge(tg, con, chat_id) == 0:

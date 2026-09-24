@@ -44,6 +44,10 @@ reply at all, not even an error, since a reply would confirm the bot exists.
 Leave the list empty and the bot prints a warning on startup that it is open
 to anyone.
 
+`seed.json` is your real fridge, so `/seed` only ever works for the first id
+in `allowed_chat_ids`. Anyone else gets the normal help text instead, and if
+the list is empty, `/seed` refuses everyone.
+
 ## What it does
 
 | You send | It does |
