@@ -294,6 +294,19 @@ def handle_message(tg, con, msg, cfg):
                          "commas between things.")
         return
 
+    # A reply to me or a genuine question can arrive at any point, onboarding
+    # included, and answering it must never look like a captured fridge item.
+    # Before this existed, "what's toss?" became a tracked item with a fake
+    # date on it, which is the exact confusion the bot exists to prevent.
+    if not text.startswith("/"):
+        if fridge.is_chatter(text):
+            tg.send(chat_id, "Noted. Send a list whenever you want to add "
+                             "something, or /help for what I can do.")
+            return
+        if fridge.is_question(text):
+            tg.send(chat_id, fridge.answer_question(text))
+            return
+
     # While onboarding is running it owns plain text, because each step is a
     # question and the answer means something different at each one.
     if onb.active(con, chat_id) and not text.startswith("/"):
@@ -348,13 +361,6 @@ def handle_message(tg, con, msg, cfg):
         return
     if low.startswith("/"):
         tg.send(chat_id, HELP)
-        return
-
-    # "ok", "thanks", "yes" are answers to me, not things in a fridge. Without
-    # this they each become a five-day guess and turn up in tomorrow's nudge.
-    if fridge.is_chatter(text):
-        tg.send(chat_id, "Noted. Send a list whenever you want to add something, "
-                         "or /help for what I can do.")
         return
 
     # "these items are all from the pantry" is a correction, not an item. Act on

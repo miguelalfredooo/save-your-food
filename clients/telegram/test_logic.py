@@ -458,6 +458,36 @@ class MigratesInPlace(unittest.TestCase):
 
 
 
+class Questions(unittest.TestCase):
+    """A genuine question about a word or a date must never fall through to
+    capture. "what's toss?" becoming a tracked fridge item with a fake date
+    was the bug that motivated this."""
+
+    def test_a_question_mark_is_recognised(self):
+        self.assertTrue(fridge.is_question("what's toss?"))
+        self.assertTrue(fridge.is_question("why did you say past its best"))
+
+    def test_a_list_is_never_a_question(self):
+        self.assertFalse(fridge.is_question("milk, spinach, eggs?"))
+        self.assertFalse(fridge.is_question("milk\nspinach"))
+
+    def test_a_single_word_needs_a_question_mark(self):
+        # A bare wh-word with no "?" and no second word reads as a reaction,
+        # not a question, and is left for is_chatter to classify instead.
+        self.assertFalse(fridge.is_question("what"))
+        self.assertFalse(fridge.is_question("why"))
+
+    def test_known_terms_get_a_real_answer(self):
+        self.assertIn("estimated", fridge.answer_question("what's a guess?"))
+        self.assertIn("throw it out", fridge.answer_question("what does toss mean?"))
+        self.assertIn("freezer", fridge.answer_question("what does freeze mean?"))
+        self.assertIn("watching", fridge.answer_question("what does tracked mean?"))
+
+    def test_an_unknown_question_still_gets_an_answer(self):
+        reply = fridge.answer_question("how does this whole thing work")
+        self.assertIn("/help", reply)
+
+
 class SentencesAreNotFood(unittest.TestCase):
     """The sentence he actually typed, and its neighbours. Each of these used to
     become a dated fridge item with a clause for a name."""

@@ -83,6 +83,69 @@ def is_chatter(text):
     return n in CHATTER
 
 
+# --- questions, not lists or corrections ------------------------------------
+#
+# Someone who does not follow "a guess" or "past its best" is not going to
+# type a command, they are going to ask in plain words: "what's toss?",
+# "why did you say past its best". Before this existed, a short question fell
+# through to capture and became a fridge item with a fake date on it — the
+# exact confusion the bot exists to prevent.
+
+QUESTION_STARTS = ("what", "whats", "why", "how", "when", "which", "who")
+
+GLOSSARY = (
+    (("guess",), "A guess means I did not know exactly how long that keeps, "
+                 "so I estimated from what kind of food it is. Tell me a "
+                 "better date and I will use that instead."),
+    (("past its best", "past due", "past its date"),
+     "Past its best means the date I had for it has gone by. It might "
+     "still be fine, so check it: smell, look, texture."),
+    (("toss",), "Toss just means throw it out."),
+    (("use up", "use it"), "Use up means eat or cook it before it turns."),
+    (("freeze",), "Freeze it means put it in the freezer. That stops the "
+                  "clock, so it keeps for months."),
+    (("tonight",), "Tonight means it needs using today, or it will likely "
+                   "turn by tomorrow."),
+    (("tracked", "tracking"), "Tracked means I am watching it and will "
+                              "message you before it goes bad."),
+    (("pantry",), "Pantry means things with no clock on them, like spices, "
+                  "cans, oil or rice. I remember them but never message you "
+                  "about them."),
+    (("counter",), "Counter means food that keeps better outside the "
+                   "fridge, like onions, potatoes or garlic."),
+    (("nudge",), "A nudge is the one message a day I send, and only when "
+                 "something needs using."),
+    (("clock",), "Clock just means the countdown to when something turns."),
+    (("date", "day"), "The day and date is when I think it turns, like "
+                      "\"Wed Sep 30\". \"(today)\", \"(tomorrow)\" or "
+                      "\"(2 days past)\" says how soon."),
+)
+
+
+def is_question(text):
+    """True for a genuine question about a word or a date, not a list or a
+    correction. Checked before capture and before chatter has already been
+    ruled out by the caller, so a bare reaction like "why" or "what" stays
+    chatter rather than becoming a half-answered question."""
+    if "," in text or "\n" in text:
+        return False
+    if "?" in text:
+        return True
+    words = text.lower().strip("!?. ").split()
+    return bool(words) and words[0] in QUESTION_STARTS and len(words) > 1
+
+
+def answer_question(text):
+    """A short, plain answer for a recognised term, or a fallback that still
+    answers rather than leaving the question ignored."""
+    n = text.lower()
+    for keys, answer in GLOSSARY:
+        if any(k in n for k in keys):
+            return answer
+    return ("Not sure which word you mean. Ask about one I used, like "
+            "\"what's a guess\", or send /help to see everything I can do.")
+
+
 # --- sentences, not lists --------------------------------------------------
 #
 # A list is "milk, spinach, chicken". A sentence is "these items are all from
