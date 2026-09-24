@@ -88,18 +88,18 @@ class Telegram:
 # --- conversation ----------------------------------------------------------
 
 WELCOME = (
-    "I stop food going off.\n\n"
-    "Tell me what's in your fridge — just type it, commas between things:\n\n"
+    "I help you use food before it goes bad.\n\n"
+    "Tell me what's in your fridge. Just type it, with commas between things:\n\n"
     "    milk, spinach, chicken thighs\n\n"
-    "I'll work out roughly when each one turns, and message you once a day when "
-    "something needs using. Tap a button to tell me what happened and it stops asking."
+    "I'll work out roughly when each one turns. I'll message you once a day when "
+    "something needs using. Tap a button to say what happened, and it stops asking."
 )
 
 HELP = (
     "Type a list any time to add things.\n\n"
-    "/fridge — what's in there, soonest first\n"
-    "/nudge — show me what's at risk right now\n"
-    "/help — this"
+    "/fridge shows what's in there, soonest first\n"
+    "/nudge shows what's at risk right now\n"
+    "/help shows this"
 )
 
 
@@ -119,7 +119,7 @@ def handle_seed(tg, con, chat_id):
         tg.send(chat_id, "No seed.json here.")
         return
     if fridge.open_items(con, chat_id):
-        tg.send(chat_id, "You already have things logged \u2014 not seeding over them.")
+        tg.send(chat_id, "You already have things logged. I won't seed over them.")
         return
     with open(path) as f:
         data = json.load(f)
@@ -148,7 +148,7 @@ def send_nudge(tg, con, chat_id, today=None):
         return 0
     tg.send(chat_id, body)
     for i in items:
-        tg.send(chat_id, "%s — %s" % (i["name"], sl.when(i["use_by_date"], today)),
+        tg.send(chat_id, "%s: %s" % (i["name"], sl.when(i["use_by_date"], today)),
                 buttons=item_buttons(i["id"]))
     return len(items)
 
@@ -157,8 +157,8 @@ def handle_message(tg, con, msg):
     chat_id = msg["chat"]["id"]
     text = (msg.get("text") or "").strip()
     if not text:
-        tg.send(chat_id, "I can only read typed lists for now — "
-                         "commas between things.")
+        tg.send(chat_id, "I can only read typed lists for now. "
+                         "Put commas between things.")
         return
 
     low = text.lower()
@@ -191,11 +191,11 @@ def handle_message(tg, con, msg):
     added, outside = fridge.add_items(con, chat_id, names)
     lines = ["Logged %d thing%s:" % (len(added), "" if len(added) == 1 else "s"), ""]
     for name, ub, risk, est in added:
-        lines.append("  • %s — %s%s" % (
+        lines.append("  • %s: %s%s" % (
             name, sl.when(ub), " (est.)" if est else ""))
     if outside:
-        lines += ["", "Left these out — they keep better outside the fridge and "
-                      "don't need tracking: " + ", ".join(outside)]
+        lines += ["", "Left these out. They keep better outside the fridge, so I'm "
+                      "not tracking them: " + ", ".join(outside)]
     soonest = min((a[1] for a in added), default=None)
     if soonest:
         lines += ["", "First one to watch: %s." % sl.when(soonest)]
@@ -227,7 +227,7 @@ def handle_callback(tg, con, cb):
 
     fridge.close_item(con, chat_id, item_id, state)
     tg.answer(cb["id"], STATE_LABELS[state])
-    tg.edit(chat_id, msg["message_id"], "%s — %s" % (row["name"], STATE_LABELS[state].lower()))
+    tg.edit(chat_id, msg["message_id"], "%s: %s" % (row["name"], STATE_LABELS[state].lower()))
 
 
 # --- daily nudge -----------------------------------------------------------

@@ -126,8 +126,8 @@ def compose_nudge(items, today=None):
         head = ("Use the %s tonight, or freeze it" % hero if len(t1) == 1
                 else "%s and %d more to use tonight or freeze" % (hero, len(t1) - 1))
     elif t0 and not t1:
-        head = ("1 item past its date — check before eating" if len(t0) == 1
-                else "%d items past their date — check before eating" % len(t0))
+        head = ("1 item past its date. Check before eating" if len(t0) == 1
+                else "%d items past their date. Check before eating" % len(t0))
     else:
         head = "%d to use tonight, %d to check" % (len(t1), len(t0))
 
@@ -135,15 +135,15 @@ def compose_nudge(items, today=None):
     if t1:
         lines.append(sl.TIERS[1])
         for i in t1:
-            lines.append("  • %s — %s%s" % (
+            lines.append("  • %s: %s%s" % (
                 i["name"], sl.when(i["use_by_date"], today),
                 " (est.)" if i["estimated"] else ""))
         lines.append("")
     if t0:
         lines.append(sl.TIERS[0])
         for i in t0:
-            note = " — raw, throw it out" if i["risk"] == sl.RED else ""
-            lines.append("  • %s — %s%s" % (
+            note = ". Raw, throw it out" if i["risk"] == sl.RED else ""
+            lines.append("  • %s: %s%s" % (
                 i["name"], sl.when(i["use_by_date"], today), note))
     return "\n".join(lines).strip()
 
@@ -159,7 +159,7 @@ def compose_inventory(items, today=None):
             out.append("" if seen is not None else None)
             out.append(sl.TIERS[t])
             seen = t
-        out.append("  • %s — %s%s" % (
+        out.append("  • %s: %s%s" % (
             i["name"], sl.when(i["use_by_date"], today),
             " (est.)" if i["estimated"] else ""))
     return "\n".join(x for x in out if x is not None).strip()
