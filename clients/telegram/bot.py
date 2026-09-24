@@ -226,6 +226,27 @@ def compose_pantry_html(items):
     return art.esc(head) + "\n\n" + "\n\n".join(parts)
 
 
+FRIDGE_LISTING_PHRASES = ("in my fridge", "in the fridge")
+PANTRY_LISTING_PHRASES = ("in my pantry", "in the pantry", "in my cupboard",
+                          "in the cupboard")
+
+
+def answer_question(tg, con, chat_id, text):
+    """A genuine question about contents gets the real listing, not a
+    definition. "Is there anything in my fridge" asks what's there, not what
+    "fridge" means, and answering with the actual list is strictly more
+    useful than the glossary line for the word itself."""
+    n = text.lower()
+    if any(p in n for p in FRIDGE_LISTING_PHRASES):
+        tg.send(chat_id, fridge.compose_inventory(fridge.open_items(con, chat_id)))
+        return
+    if any(p in n for p in PANTRY_LISTING_PHRASES):
+        items = fridge.pantry_items(con, chat_id)
+        tg.send(chat_id, compose_pantry_html(items), html=bool(items))
+        return
+    tg.send(chat_id, fridge.answer_question(text))
+
+
 def send_delight(tg, con, chat_id, moment, item=None, caption=None):
     """One place every drawing goes through, so the rules hold everywhere.
 
@@ -260,8 +281,19 @@ def run_onboarding(tg, con, chat_id, text, cfg):
             tg.send(chat_id, nxt, buttons=onb.TIME_BUTTONS)
         return
 
-    # Step 3 is answered with a button and step 4 with a tap on the sample
-    # nudge. A typed message at either point is a list, so take it as one.
+    if stage == "3":
+        # Only a button answers this step; there is no reliable time to parse
+        # from free text. Taking any typed text as a grocery list used to
+        # force-end onboarding on it: "ignored, buttons only" got tracked as
+        # two fake fridge items and setup silently stopped.
+        tg.send(chat_id, "Tap one of the times above, or /skip.",
+                buttons=onb.TIME_BUTTONS)
+        return
+
+    # No other step is left waiting on a message (step 4 resolves inside the
+    # same callback that sets it), so this is unexpected. End onboarding
+    # defensively rather than leaving the chat stuck, and handle the text
+    # normally.
     onb.set_step(con, chat_id, onb.DONE)
     handle_message(tg, con, {"chat": {"id": chat_id}, "text": text}, cfg)
 
@@ -304,7 +336,7 @@ def handle_message(tg, con, msg, cfg):
                              "something, or /help for what I can do.")
             return
         if fridge.is_question(text):
-            tg.send(chat_id, fridge.answer_question(text))
+            answer_question(tg, con, chat_id, text)
             return
 
     # While onboarding is running it owns plain text, because each step is a
@@ -384,7 +416,7 @@ def handle_message(tg, con, msg, cfg):
     names, too_long = fridge.parse_list(text, report=True)
 
     if too_long:
-        tg.send(chat_id, "These were too long to be food names, so I left them "
+        tg.send(chat_id, "These didn't look like food names, so I left them "
                          "out rather than guessing: " + "; ".join(too_long))
 
     if not names:
@@ -481,8 +513,9 @@ def handle_callback(tg, con, cb):
         tg.answer(cb["id"])
         return
 
-    row = con.execute("SELECT name FROM items WHERE id=? AND chat_id=?",
-                      (item_id, chat_id)).fetchone()
+    row = con.execute(
+        "SELECT name FROM items WHERE id=? AND chat_id=? AND state='open'",
+        (item_id, chat_id)).fetchone()
     if not row:
         tg.answer(cb["id"], "Already handled.")
         return

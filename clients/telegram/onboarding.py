@@ -138,7 +138,7 @@ def handle_item(con, chat_id, text, today=None):
     names, too_long = fridge.parse_list(text, report=True)
     if not names:
         if too_long:
-            return ("That was too long to be a food name, so I left it out "
+            return ("That didn't look like a food name, so I left it out "
                     "rather than guessing. Just one thing, plainly: milk, or "
                     "chicken thighs, or spinach."), None
         return ("I couldn't read a thing in that. Just one, plainly. "
@@ -178,14 +178,24 @@ def handle_item(con, chat_id, text, today=None):
 def handle_list(con, chat_id, text, today=None):
     """Step 2: the sort, shown on their own list."""
     today = today or date.today()
-    names = fridge.parse_list(text)
+    names, too_long = fridge.parse_list(text, report=True)
     if not names:
+        if too_long:
+            return ("Those didn't look like food names, so I left them "
+                    "out rather than guessing: " + "; ".join(too_long) +
+                    "\n\nPut commas between things, like: milk, cumin, "
+                    "spinach"), None
         return ("I couldn't pick anything out of that. Put commas between "
                 "things, like: milk, cumin, spinach"), None
 
     tracked, stable, outside, again = fridge.add_items(con, chat_id, names, today)
     lines = []
+    if too_long:
+        lines.append("These didn't look like food names, so I left them "
+                     "out rather than guessing: " + "; ".join(too_long))
     if tracked:
+        if lines:
+            lines.append("")
         lines.append("On a clock, so I'll watch these:")
         for name, ub, risk, est in tracked:
             lines.append("  %s %s: %s%s" % (B, name, sl.when(ub, today),

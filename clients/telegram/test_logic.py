@@ -12,6 +12,7 @@ import fridge
 import shelf_life as sl
 import onboarding as onb
 import art
+import bot
 
 TODAY = date(2026, 9, 23)   # a Wednesday, so weekday names are checkable
 
@@ -413,6 +414,14 @@ class NothingIsLostSilently(unittest.TestCase):
     def test_parse_list_still_works_without_report(self):
         self.assertEqual(fridge.parse_list("milk, spinach"), ["milk", "spinach"])
 
+    def test_punctuation_or_emoji_only_is_rejected_not_captured(self):
+        # "!!!???" used to pass through as a literal item name with a fake
+        # guessed date, because only length was ever checked.
+        names, rejected = fridge.parse_list("milk, !!!???..., \U0001F389\U0001F389\U0001F389, spinach",
+                                            report=True)
+        self.assertEqual(names, ["milk", "spinach"])
+        self.assertEqual(len(rejected), 2)
+
     def test_a_reply_to_me_is_not_a_fridge_item(self):
         for text in ("ok", "thanks", "Thank you", "yes", "nope", "hi", "cool",
                      "got it", "done", "testing", "OK!", "sure."):
@@ -477,6 +486,14 @@ class Questions(unittest.TestCase):
         self.assertFalse(fridge.is_question("what"))
         self.assertFalse(fridge.is_question("why"))
 
+    def test_natural_phrasings_without_a_wh_word_are_recognised(self):
+        # None of these start with what/why/how/etc, and none end in "?".
+        # "do I have anything in my pantry" used to reach correction() and
+        # silently move real tracked items to the pantry.
+        self.assertTrue(fridge.is_question("can you tell me what is in my fridge"))
+        self.assertTrue(fridge.is_question("is there anything in my fridge"))
+        self.assertTrue(fridge.is_question("do I have anything in my pantry"))
+
     def test_known_terms_get_a_real_answer(self):
         self.assertIn("estimated", fridge.answer_question("what's a guess?"))
         self.assertIn("throw it out", fridge.answer_question("what does toss mean?"))
@@ -540,6 +557,17 @@ class Corrections(unittest.TestCase):
         self.assertEqual(fridge.correction("nothing here is perishable"), "pantry")
         self.assertEqual(fridge.correction("these are not pantry items"), "fridge")
         self.assertEqual(fridge.correction("none of that is shelf stable"), "fridge")
+
+    def test_pre_negated_idioms_do_not_collide_with_fridge_words(self):
+        # "wont go bad" contains "go bad" (a FRIDGE_WORDS entry), so a
+        # PANTRY_WORDS entry for the whole idiom made both buckets True before
+        # the negation flip ever ran, and the flip just swapped two Trues,
+        # falling through to None. "this wont go bad" was silently tracked as
+        # a literal fridge item instead of moved to the pantry.
+        self.assertEqual(fridge.correction("this wont go bad"), "pantry")
+        self.assertEqual(fridge.correction("those wont go bad either"), "pantry")
+        self.assertEqual(fridge.correction("these are not perishable"), "pantry")
+        self.assertEqual(fridge.correction("this does not go bad"), "pantry")
 
     def test_a_leading_no_is_not_a_negation(self):
         # "no, those go off quickly" is agreement-then-claim, not negation.
@@ -956,6 +984,93 @@ class Delight(unittest.TestCase):
         fridge.close_item(self.con, 1, item["id"], "tossed")
         self.assertEqual(fridge.count_closed(self.con, 1, "used"), 0)
 
+
+class FakeTG:
+    """Records what bot.py would have sent, instead of calling Telegram."""
+
+    def __init__(self):
+        self.sent = []
+        self.edits = []
+        self.answers = []
+
+    def send(self, chat_id, text, buttons=None, html=False):
+        self.sent.append(text)
+
+    def answer(self, callback_id, text=None):
+        self.answers.append(text)
+
+    def edit(self, chat_id, message_id, text):
+        self.edits.append(text)
+
+
+CFG = {"nudge_hour": 16, "nudge_minute": 30}
+
+
+class BotHandlers(unittest.TestCase):
+    """Drives bot.py's handlers directly. This is the one place the crash
+    bugs and the mistracked-question bugs actually lived, and pure fridge.py/
+    onboarding.py tests never touch handle_message or handle_callback at
+    all — several real bugs shipped and went undetected until an end-to-end
+    pass actually called them."""
+
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.tmp.close()
+        self.con = fridge.connect(self.tmp.name)
+        self.tg = FakeTG()
+
+    def tearDown(self):
+        self.con.close()
+        os.unlink(self.tmp.name)
+
+    def test_capturing_a_list_does_not_crash(self):
+        bot.handle_message(self.tg, self.con, {"chat": {"id": 1}, "text": "milk, spinach"}, CFG)
+        self.assertIn("First one to watch", self.tg.sent[-1])
+
+    def test_skip_does_not_crash(self):
+        onb.begin(self.con, 1)
+        bot.handle_message(self.tg, self.con, {"chat": {"id": 1}, "text": "/skip"}, CFG)
+        self.assertIn("Skipped", self.tg.sent[-1])
+
+    def test_retapping_a_closed_item_says_already_handled(self):
+        fridge.add_items(self.con, 1, ["milk"], TODAY)
+        item_id = fridge.open_items(self.con, 1)[0]["id"]
+        cb = {"id": "cb", "data": "used:%d" % item_id,
+              "message": {"chat": {"id": 1}, "message_id": 1}}
+        bot.handle_callback(self.tg, self.con, cb)
+        self.assertEqual(self.tg.answers[-1], "Used it")
+
+        # Tapping a DIFFERENT button on the same, now-closed item must not
+        # silently flip its final state or double-count a milestone.
+        cb2 = {"id": "cb2", "data": "tossed:%d" % item_id,
+               "message": {"chat": {"id": 1}, "message_id": 1}}
+        bot.handle_callback(self.tg, self.con, cb2)
+        self.assertEqual(self.tg.answers[-1], "Already handled.")
+        row = self.con.execute("SELECT state FROM items WHERE id=?", (item_id,)).fetchone()
+        self.assertEqual(row["state"], "used")
+
+    def test_onboarding_step_three_ignores_typed_text(self):
+        onb.begin(self.con, 1)
+        onb.handle_item(self.con, 1, "milk", TODAY)
+        onb.handle_list(self.con, 1, "cumin, spinach", TODAY)
+        self.assertEqual(onb.step(self.con, 1), "3")
+        bot.handle_message(self.tg, self.con, {"chat": {"id": 1}, "text": "ignored, buttons only"}, CFG)
+        self.assertEqual(onb.step(self.con, 1), "3")   # still waiting on a button
+        names = [i["name"] for i in fridge.open_items(self.con, 1)]
+        self.assertNotIn("ignored", names)
+        self.assertNotIn("buttons only", names)
+
+    def test_a_question_never_mutates_data(self):
+        fridge.add_items(self.con, 1, ["milk"], TODAY)
+        bot.handle_message(self.tg, self.con, {"chat": {"id": 1},
+                           "text": "do I have anything in my pantry"}, CFG)
+        self.assertTrue(any(i["name"] == "milk" for i in fridge.open_items(self.con, 1)))
+
+    def test_a_fridge_question_gets_the_real_listing(self):
+        fridge.add_items(self.con, 1, ["milk"], TODAY)
+        bot.handle_message(self.tg, self.con, {"chat": {"id": 1},
+                           "text": "is there anything in my fridge"}, CFG)
+        self.assertIn("milk", self.tg.sent[-1])
 
 
 if __name__ == "__main__":

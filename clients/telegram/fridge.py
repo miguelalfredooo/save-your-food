@@ -93,6 +93,13 @@ def is_chatter(text):
 
 QUESTION_STARTS = ("what", "whats", "why", "how", "when", "which", "who")
 
+# Whole-phrase openers, for the natural phrasings that do not start with a
+# bare wh-word. Without these, "do I have anything in my pantry" read as a
+# correction and silently moved real tracked items to the pantry.
+QUESTION_PHRASES = ("can you", "could you", "would you", "will you",
+                     "is there", "are there", "do i", "does it", "did you",
+                     "should i", "am i")
+
 GLOSSARY = (
     (("guess",), "A guess means I did not know exactly how long that keeps, "
                  "so I estimated from what kind of food it is. Tell me a "
@@ -131,8 +138,11 @@ def is_question(text):
         return False
     if "?" in text:
         return True
-    words = text.lower().strip("!?. ").split()
-    return bool(words) and words[0] in QUESTION_STARTS and len(words) > 1
+    n = text.lower().strip("!?. ")
+    words = n.split()
+    if words and words[0] in QUESTION_STARTS and len(words) > 1:
+        return True
+    return n.startswith(QUESTION_PHRASES)
 
 
 def answer_question(text):
@@ -172,8 +182,16 @@ FUNCTION_WORDS = {
 
 PANTRY_WORDS = ("pantry", "cupboard", "cabinet", "shelf", "shelves",
                 "shelf stable", "shelf-stable", "spice rack", "dry goods",
-                "not perishable", "dont go bad", "do not go bad",
-                "wont go bad", "never go bad", "no expiry", "no expiration")
+                "no expiry", "no expiration")
+
+# Pre-negated idioms like "wont go bad" or "not perishable" used to live here
+# too, but each one contains a FRIDGE_WORDS substring ("go bad", "perishable"),
+# so both buckets hit before the flip below ever runs and the flip just swaps
+# two Trues, falling through to None — "this wont go bad" was silently
+# tracked as a literal fridge item instead of moved to the pantry. The
+# negation flip already covers every one of these on its own: "not
+# perishable" hits FRIDGE_WORDS' "perishable" and NEGATORS' "not", flips to
+# pantry, no separate entry needed.
 
 FRIDGE_WORDS = ("fridge", "refrigerator", "perishable", "goes bad", "go bad",
                 "goes off", "go off", "track these", "track them", "track it")
@@ -316,15 +334,20 @@ def reclassify_last(con, chat_id, target, today=None):
     return names, "\n".join(lines)
 
 
+_HAS_LETTER_OR_DIGIT = re.compile(r"[a-zA-Z0-9]")
+
+
 def parse_list(text, report=False):
     """A free-typed list into clean item names. Commas, newlines and bullets all work.
 
-    With report=True, also returns the fragments that were too long to be item
-    names. They used to vanish without a word, which broke the one promise
-    capture has to keep: never drop anything silently.
+    With report=True, also returns the fragments rejected as not real food
+    names: too long, or made of no letters or digits at all ("!!!???",
+    emoji). They used to vanish without a word, or worse, get tracked as a
+    literal item with a fake date, which broke the one promise capture has to
+    keep: never drop or mistrack anything silently.
     """
     parts = re.split(r"[,\n;]+", text)
-    out, too_long = [], []
+    out, rejected = [], []
     for p in parts:
         p = _LEADING_QTY.sub("", p)
         p = _TRAILING_QTY.sub("", p)
@@ -332,10 +355,13 @@ def parse_list(text, report=False):
         if not p:
             continue
         if len(p) >= MAX_NAME:
-            too_long.append(p[:40].rstrip() + "...")
+            rejected.append(p[:40].rstrip() + "...")
+            continue
+        if not _HAS_LETTER_OR_DIGIT.search(p):
+            rejected.append(p)
             continue
         out.append(p)
-    return (out, too_long) if report else out
+    return (out, rejected) if report else out
 
 
 def add_items(con, chat_id, names, today=None):
