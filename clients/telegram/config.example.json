@@ -1,5 +1,6 @@
 {
   "token": "PUT_YOUR_BOTFATHER_TOKEN_HERE",
   "nudge_hour": 16,
-  "nudge_minute": 30
+  "nudge_minute": 30,
+  "allowed_chat_ids": []
 }

@@ -30,6 +30,20 @@ Leave that Terminal window open. It prints one line and then waits. Ctrl-C stops
 **4. Message your bot** in Telegram. Send `/start`, then `/seed` to load the
 fridge contents as of Sep 23.
 
+## Who can use it
+
+By default the bot answers anyone who finds it. Lock it to yourself by adding
+your chat id to `config.json`:
+
+    "allowed_chat_ids": [123456789]
+
+Message **@userinfobot** in Telegram to get your own numeric chat id, add it
+to the list, and restart the bot. A chat that is not on the list gets no
+reply at all, not even an error, since a reply would confirm the bot exists.
+
+Leave the list empty and the bot prints a warning on startup that it is open
+to anyone.
+
 ## What it does
 
 | You send | It does |

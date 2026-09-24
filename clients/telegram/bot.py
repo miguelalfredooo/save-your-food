@@ -77,6 +77,7 @@ def load_config():
         sys.exit("config.json has no real token in it yet.")
     cfg.setdefault("nudge_hour", 16)
     cfg.setdefault("nudge_minute", 30)
+    cfg.setdefault("allowed_chat_ids", [])
     return cfg
 
 
@@ -320,6 +321,10 @@ def send_sample_nudge(tg, con, chat_id, today=None):
 
 def handle_message(tg, con, msg, cfg):
     chat_id = msg["chat"]["id"]
+    # A reply confirms the bot exists, so a chat that isn't on the allow
+    # list gets nothing at all, not even an error.
+    if cfg["allowed_chat_ids"] and chat_id not in cfg["allowed_chat_ids"]:
+        return
     text = (msg.get("text") or "").strip()
     if not text:
         tg.send(chat_id, "I can only read typed lists for now: "
@@ -462,12 +467,14 @@ def handle_message(tg, con, msg, cfg):
     tg.send(chat_id, "\n".join(lines))
 
 
-def handle_callback(tg, con, cb):
+def handle_callback(tg, con, cb, cfg):
     data = cb.get("data", "")
     msg = cb.get("message") or {}
     chat_id = msg.get("chat", {}).get("id")
     if ":" not in data or chat_id is None:
         tg.answer(cb["id"])
+        return
+    if cfg["allowed_chat_ids"] and chat_id not in cfg["allowed_chat_ids"]:
         return
     state, _, raw_id = data.partition(":")
 
@@ -585,6 +592,9 @@ def sweep(tg, con, cfg, now=None):
 
 def main():
     cfg = load_config()
+    if not cfg["allowed_chat_ids"]:
+        print("! No allowed_chat_ids set in config.json. This bot will "
+              "respond to anyone who finds it.")
     tg = Telegram(cfg["token"])
     con = fridge.connect()
 
@@ -605,7 +615,7 @@ def main():
                     if "message" in upd:
                         handle_message(tg, con, upd["message"], cfg)
                     elif "callback_query" in upd:
-                        handle_callback(tg, con, upd["callback_query"])
+                        handle_callback(tg, con, upd["callback_query"], cfg)
             sweep(tg, con, cfg)
         except KeyboardInterrupt:
             print("\nStopped.")

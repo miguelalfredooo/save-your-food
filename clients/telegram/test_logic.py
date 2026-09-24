@@ -1003,7 +1003,7 @@ class FakeTG:
         self.edits.append(text)
 
 
-CFG = {"nudge_hour": 16, "nudge_minute": 30}
+CFG = {"nudge_hour": 16, "nudge_minute": 30, "allowed_chat_ids": []}
 
 
 class BotHandlers(unittest.TestCase):
@@ -1027,6 +1027,33 @@ class BotHandlers(unittest.TestCase):
         bot.handle_message(self.tg, self.con, {"chat": {"id": 1}, "text": "milk, spinach"}, CFG)
         self.assertIn("First one to watch", self.tg.sent[-1])
 
+    def test_an_empty_allow_list_lets_everyone_through(self):
+        cfg = dict(CFG, allowed_chat_ids=[])
+        bot.handle_message(self.tg, self.con, {"chat": {"id": 999}, "text": "milk"}, cfg)
+        self.assertTrue(self.tg.sent)
+
+    def test_a_chat_not_on_the_allow_list_gets_nothing(self):
+        cfg = dict(CFG, allowed_chat_ids=[1])
+        bot.handle_message(self.tg, self.con, {"chat": {"id": 999}, "text": "milk"}, cfg)
+        self.assertEqual(self.tg.sent, [])
+        self.assertEqual(fridge.open_items(self.con, 999), [])
+
+    def test_an_allowed_chat_still_works(self):
+        cfg = dict(CFG, allowed_chat_ids=[1])
+        bot.handle_message(self.tg, self.con, {"chat": {"id": 1}, "text": "milk"}, cfg)
+        self.assertTrue(self.tg.sent)
+
+    def test_a_callback_from_a_disallowed_chat_is_ignored(self):
+        cfg = dict(CFG, allowed_chat_ids=[1])
+        fridge.add_items(self.con, 999, ["milk"], TODAY)
+        item_id = fridge.open_items(self.con, 999)[0]["id"]
+        cb = {"id": "cb", "data": "used:%d" % item_id,
+              "message": {"chat": {"id": 999}, "message_id": 1}}
+        bot.handle_callback(self.tg, self.con, cb, cfg)
+        self.assertEqual(self.tg.answers, [])
+        row = self.con.execute("SELECT state FROM items WHERE id=?", (item_id,)).fetchone()
+        self.assertEqual(row["state"], "open")
+
     def test_skip_does_not_crash(self):
         onb.begin(self.con, 1)
         bot.handle_message(self.tg, self.con, {"chat": {"id": 1}, "text": "/skip"}, CFG)
@@ -1037,14 +1064,14 @@ class BotHandlers(unittest.TestCase):
         item_id = fridge.open_items(self.con, 1)[0]["id"]
         cb = {"id": "cb", "data": "used:%d" % item_id,
               "message": {"chat": {"id": 1}, "message_id": 1}}
-        bot.handle_callback(self.tg, self.con, cb)
+        bot.handle_callback(self.tg, self.con, cb, CFG)
         self.assertEqual(self.tg.answers[-1], "Used it")
 
         # Tapping a DIFFERENT button on the same, now-closed item must not
         # silently flip its final state or double-count a milestone.
         cb2 = {"id": "cb2", "data": "tossed:%d" % item_id,
                "message": {"chat": {"id": 1}, "message_id": 1}}
-        bot.handle_callback(self.tg, self.con, cb2)
+        bot.handle_callback(self.tg, self.con, cb2, CFG)
         self.assertEqual(self.tg.answers[-1], "Already handled.")
         row = self.con.execute("SELECT state FROM items WHERE id=?", (item_id,)).fetchone()
         self.assertEqual(row["state"], "used")
