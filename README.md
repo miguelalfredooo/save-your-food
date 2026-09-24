@@ -95,3 +95,9 @@ the system; your instance is not.
 This gives quality estimates, not food-safety guarantees. Raw meat and seafood past
 their date get thrown out, not cooked. Smell, look, texture — and when in doubt,
 bin it.
+
+## Agents
+
+| Agent | Owns |
+|---|---|
+| `ascii-art-curator` | The ASCII drawings and the rules for where they may appear |

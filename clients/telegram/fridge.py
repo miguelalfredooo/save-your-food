@@ -393,6 +393,20 @@ def undo_last(con, chat_id):
     return "Took back " + " and ".join(bits) + "."
 
 
+def last_art(con, chat_id):
+    return get_pref(con, chat_id, "last_art")
+
+
+def note_art(con, chat_id, frame):
+    """Remember the frame just shown, so the next one differs.
+
+    The same drawing twice running stops being a surprise and becomes
+    furniture, which is the failure mode for anything meant as delight.
+    """
+    if frame:
+        set_pref(con, chat_id, "last_art", frame)
+
+
 def set_pref(con, chat_id, key, value):
     con.execute("INSERT OR REPLACE INTO meta (chat_id,key,value) VALUES (?,?,?)",
                 (chat_id, key, str(value)))
@@ -436,6 +450,11 @@ def close_item(con, chat_id, item_id, state):
 
 
 # --- the nudge -------------------------------------------------------------
+
+def count_closed(con, chat_id, state):
+    return con.execute("SELECT COUNT(*) FROM items WHERE chat_id=? AND state=?",
+                       (chat_id, state)).fetchone()[0]
+
 
 def at_risk(con, chat_id, today=None):
     """Tier 0 and 1 only — what actually needs a decision today."""

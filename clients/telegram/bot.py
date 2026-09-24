@@ -24,12 +24,25 @@ sys.path.insert(0, HERE)
 import fridge          # noqa: E402
 import shelf_life as sl  # noqa: E402
 import onboarding as onb  # noqa: E402
+import art  # noqa: E402
 
 CONFIG_PATH = os.path.join(HERE, "config.json")
 API = "https://api.telegram.org/bot%s/%s"
 
 POLL_TIMEOUT = 50      # long-poll seconds
 STATE_LABELS = {"used": "Used it", "frozen": "Froze it", "tossed": "Tossed it"}
+
+CLOSE_LINES = {
+    "used": "That one did not go to waste.",
+    "frozen": "Frozen. The clock stops there.",
+}
+
+# Held back deliberately. A milestone that arrives every Tuesday is not one.
+MILESTONES = (10, 25, 50, 100, 250, 500)
+
+
+def milestone_line(n):
+    return "%d things used before they turned. That is the whole idea." % n
 
 
 # --- config ----------------------------------------------------------------
@@ -71,8 +84,17 @@ class Telegram:
             print("! telegram %s failed: %s" % (method, e))
         return None
 
-    def send(self, chat_id, text, buttons=None):
+    def send(self, chat_id, text, buttons=None, html=False):
+        """html=True is only for messages carrying a pre block.
+
+        Telegram uses a proportional font unless told otherwise, which turns
+        every ASCII drawing into rubble. Nothing else asks for HTML, because
+        turning it on means hand-escaping any stray angle bracket in a food
+        name, and food names come from users.
+        """
         params = {"chat_id": chat_id, "text": text}
+        if html:
+            params["parse_mode"] = "HTML"
         if buttons:
             params["reply_markup"] = {"inline_keyboard": buttons}
         return self.call("sendMessage", **params)
@@ -89,7 +111,7 @@ class Telegram:
 # --- conversation ----------------------------------------------------------
 
 WELCOME = (
-    "I stop food going off.\n\n"
+    "I help you use food before it goes bad.\n\n"
     "What did you just buy? Type it, commas between things:\n\n"
     "    milk, spinach, chicken thighs\n\n"
     "Send whatever you like: I sort it. Things with a clock on them get "
@@ -161,6 +183,23 @@ def send_nudge(tg, con, chat_id, today=None):
         tg.send(chat_id, "%s: %s" % (i["name"], sl.when(i["use_by_date"], today)),
                 buttons=item_buttons(i["id"]))
     return len(items)
+
+
+def send_delight(tg, con, chat_id, moment, item=None, caption=None):
+    """One place every drawing goes through, so the rules hold everywhere.
+
+    Returns True if something was drawn. A forbidden moment sends the caption
+    on its own rather than nothing: the outcome still needs acknowledging, it
+    just does not get a picture over it.
+    """
+    frame = art.choose(moment, item=item, avoid=fridge.last_art(con, chat_id))
+    if not frame:
+        if caption:
+            tg.send(chat_id, caption)
+        return False
+    tg.send(chat_id, art.render(frame, caption), html=True)
+    fridge.note_art(con, chat_id, frame)
+    return True
 
 
 def run_onboarding(tg, con, chat_id, text):
@@ -258,7 +297,11 @@ def handle_message(tg, con, msg):
         return
     if low.startswith("/nudge"):
         if send_nudge(tg, con, chat_id) == 0:
-            tg.send(chat_id, "Nothing at risk today.")
+            # The one place a drawing earns its keep on an empty result: this is
+            # the state the whole system is trying to produce, and it otherwise
+            # looks identical to the bot being broken.
+            send_delight(tg, con, chat_id, "allclear",
+                         caption="Nothing at risk today.")
         return
     if low.startswith("/"):
         tg.send(chat_id, HELP)
@@ -364,7 +407,7 @@ def handle_callback(tg, con, cb):
         tg.send(chat_id, onb.STEP4_HEAD)
         send_sample_nudge(tg, con, chat_id)
         onb.set_step(con, chat_id, onb.DONE)
-        tg.send(chat_id, onb.finished(hour))
+        send_delight(tg, con, chat_id, "welcome", caption=onb.finished(hour))
         return
 
     if state == "clear":
@@ -398,6 +441,18 @@ def handle_callback(tg, con, cb):
     fridge.close_item(con, chat_id, item_id, state)
     tg.answer(cb["id"], STATE_LABELS[state])
     tg.edit(chat_id, msg["message_id"], "%s: %s" % (row["name"], STATE_LABELS[state].lower()))
+
+    # Used or froze: a small drawing, matched to the food where there is one.
+    # Tossed gets a line and no picture, on purpose (see art.FORBIDDEN).
+    if state == "tossed":
+        tg.send(chat_id, "Noted. Logged so the monthly count is honest.")
+        return
+    n = fridge.count_closed(con, chat_id, "used")
+    if state == "used" and n in MILESTONES:
+        send_delight(tg, con, chat_id, "milestone", caption=milestone_line(n))
+        return
+    send_delight(tg, con, chat_id, state, item=row["name"],
+                 caption=CLOSE_LINES[state])
 
 
 # --- daily nudge -----------------------------------------------------------

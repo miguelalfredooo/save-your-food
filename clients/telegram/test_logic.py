@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fridge
 import shelf_life as sl
 import onboarding as onb
+import art
 
 TODAY = date(2026, 9, 23)   # a Wednesday, so weekday names are checkable
 
@@ -719,6 +720,173 @@ class Onboarding(unittest.TestCase):
         onb.begin(self.con, 1)
         self.assertEqual(fridge.open_items(self.con, 1), [])
         self.assertEqual(fridge.at_risk(self.con, 1, TODAY), [])
+
+
+
+
+class Delight(unittest.TestCase):
+    """The art is the easiest thing here to get wrong, because a drawing that
+    breaks a rule still looks fine in isolation. These tests hold the rules."""
+
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.tmp.close()
+        self.con = fridge.connect(self.tmp.name)
+
+    def tearDown(self):
+        self.con.close()
+        os.unlink(self.tmp.name)
+
+    # --- the frames themselves ---
+
+    def test_every_frame_fits_a_phone(self):
+        for f in art.all_frames():
+            lines, width = art.measure(f)
+            self.assertLessEqual(width, art.MAX_WIDTH,
+                                 "too wide (%d): %r" % (width, f))
+            self.assertLessEqual(lines, art.MAX_LINES,
+                                 "too tall (%d): %r" % (lines, f))
+
+    def test_ascii_art_is_actually_ascii(self):
+        # A Cyrillic o got into the cheese wedge once. It renders as a box on
+        # some phones, which is worse than no drawing at all.
+        for f in art.all_frames():
+            for ch in f:
+                self.assertLess(ord(ch), 127,
+                                "non-ascii %r in %r" % (ch, f[:20]))
+
+    def test_no_frame_is_blank_or_ragged(self):
+        for f in art.all_frames():
+            self.assertTrue(f.strip(), "empty frame")
+            self.assertFalse(f.startswith("\n"), "leading blank line")
+            self.assertFalse(f.endswith("\n"), "trailing blank line")
+
+    def test_frames_are_distinct(self):
+        frames = art.all_frames()
+        self.assertEqual(len(frames), len(set(frames)))
+
+    # --- where art may not go ---
+
+    def test_a_nudge_never_carries_a_drawing(self):
+        self.assertIsNone(art.choose("nudge"))
+        self.assertIsNone(art.choose("nudge", item="milk"))
+
+    def test_a_toss_is_never_celebrated(self):
+        # Food was wasted. A picture over it reads as mockery.
+        self.assertIsNone(art.choose("tossed"))
+        self.assertIsNone(art.choose("tossed", item="spinach"))
+
+    def test_a_disposal_question_carries_no_drawing(self):
+        self.assertIsNone(art.choose("toss_prompt"))
+
+    def test_every_forbidden_moment_states_a_reason(self):
+        # A rule without a reason gets deleted by the next person.
+        for moment, why in art.FORBIDDEN.items():
+            self.assertTrue(why and len(why) > 15, moment)
+
+    # --- where it does go ---
+
+    def test_using_something_gets_a_drawing(self):
+        self.assertIsNotNone(art.choose("used"))
+        self.assertIsNotNone(art.choose("frozen"))
+        self.assertIsNotNone(art.choose("allclear"))
+        self.assertIsNotNone(art.choose("welcome"))
+
+    def test_the_drawing_matches_the_food(self):
+        self.assertEqual(art.choose("used", item="milk"), art.CARTON)
+        self.assertEqual(art.choose("used", item="oat milk"), art.CARTON)
+        self.assertEqual(art.choose("used", item="baby spinach"), art.LEAF)
+        self.assertEqual(art.choose("used", item="chicken thighs"), art.PAN)
+        self.assertEqual(art.choose("used", item="leftover guiso"), art.POT)
+        self.assertEqual(art.choose("used", item="eggs"), art.EGG)
+        self.assertEqual(art.choose("used", item="parmesan"), art.WEDGE)
+
+    def test_an_unmatched_food_still_gets_something(self):
+        frame = art.choose("used", item="dragonfruit curd")
+        self.assertIsNotNone(frame)
+        self.assertIn(frame, art.MOMENT_ART["used"])
+
+    def test_food_matching_does_not_leak_into_other_moments(self):
+        # A carton on the all-clear message would make no sense.
+        self.assertIn(art.choose("allclear", item="milk"),
+                      art.MOMENT_ART["allclear"])
+
+    # --- never twice running ---
+
+    def test_the_same_frame_never_lands_twice(self):
+        first = art.choose("used", item="dragonfruit curd")
+        second = art.choose("used", item="dragonfruit curd", avoid=first)
+        self.assertNotEqual(first, second)
+
+    def test_avoiding_a_matched_frame_falls_back(self):
+        # Two milks in a row: the carton is right both times, but showing it
+        # twice is not, so it falls through to the moment's own frames.
+        again = art.choose("used", item="milk", avoid=art.CARTON)
+        self.assertNotEqual(again, art.CARTON)
+        self.assertIsNotNone(again)
+
+    def test_a_single_frame_moment_repeats_rather_than_vanishing(self):
+        # "welcome" has one frame. Better the same door twice than nothing:
+        # onboarding only finishes once per person anyway.
+        self.assertEqual(art.choose("welcome", avoid=art.DOOR), art.DOOR)
+
+    def test_the_last_frame_is_remembered_per_chat(self):
+        fridge.note_art(self.con, 1, art.CARTON)
+        self.assertEqual(fridge.last_art(self.con, 1), art.CARTON)
+        self.assertIsNone(fridge.last_art(self.con, 2))
+
+    def test_noting_nothing_is_harmless(self):
+        fridge.note_art(self.con, 1, None)
+        self.assertIsNone(fridge.last_art(self.con, 1))
+
+    # --- rendering ---
+
+    def test_a_frame_renders_inside_a_pre_block(self):
+        out = art.render(art.CARTON)
+        self.assertTrue(out.startswith("<pre>"))
+        self.assertTrue(out.endswith("</pre>"))
+
+    def test_angle_brackets_in_a_frame_are_escaped(self):
+        # Unescaped, Telegram reads them as tags and drops the drawing.
+        out = art.render("<&>")
+        self.assertIn("&lt;", out)
+        self.assertIn("&gt;", out)
+        self.assertIn("&amp;", out)
+        self.assertNotIn("<&", out)
+
+    def test_a_caption_sits_under_the_drawing(self):
+        out = art.render(art.CARTON, "That one did not go to waste.")
+        self.assertTrue(out.index("</pre>") < out.index("That one"))
+
+    def test_no_frame_means_just_the_caption(self):
+        self.assertEqual(art.render(None, "Noted."), "Noted.")
+        self.assertEqual(art.render(None), "")
+
+    # --- milestones stay rare ---
+
+    def test_milestones_are_held_back(self):
+        import bot
+        self.assertNotIn(1, bot.MILESTONES)
+        self.assertNotIn(2, bot.MILESTONES)
+        self.assertIn(10, bot.MILESTONES)
+        # Sparse enough that they stay special: no two within 10 of each other
+        # after the first.
+        gaps = [b - a for a, b in zip(bot.MILESTONES, bot.MILESTONES[1:])]
+        self.assertTrue(all(g >= 10 for g in gaps), gaps)
+
+    def test_used_items_are_counted_for_milestones(self):
+        for name in ("milk", "spinach", "yogurt"):
+            fridge.add_items(self.con, 1, [name], TODAY)
+        for i in fridge.open_items(self.con, 1):
+            fridge.close_item(self.con, 1, i["id"], "used")
+        self.assertEqual(fridge.count_closed(self.con, 1, "used"), 3)
+        self.assertEqual(fridge.count_closed(self.con, 1, "tossed"), 0)
+
+    def test_a_toss_does_not_count_toward_a_milestone(self):
+        fridge.add_items(self.con, 1, ["spinach"], TODAY)
+        item = fridge.open_items(self.con, 1)[0]
+        fridge.close_item(self.con, 1, item["id"], "tossed")
+        self.assertEqual(fridge.count_closed(self.con, 1, "used"), 0)
 
 
 

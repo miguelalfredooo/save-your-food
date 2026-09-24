@@ -124,3 +124,27 @@ isn't in `shelf_life.py`. Add it to the table there.
 88 tests, no network needed. The interesting ones are the bucket collisions
 (`ground beef` vs `ground ginger`, `coconut milk` vs `oat milk`, `butternut
 squash` vs `peanut butter`) and the correction phrasings, including negation.
+
+## Delight
+
+`art.py` holds small ASCII drawings shown at closing moments, matched to the
+food where there is a match: a carton for the milk, a leaf for the spinach, a
+pan for the chicken.
+
+Where they appear: using something, freezing it, an empty at-risk list,
+finishing setup, and milestones (10, 25, 50, 100, 250, 500 uses).
+
+Where they never appear, and why:
+
+| Never | Why |
+|---|---|
+| A nudge needing a decision | It has to scan on a lock screen. A drawing pushes the item name down. |
+| A toss | Food was wasted. A picture over it reads as mockery. One quiet line instead. |
+| Twice running | Delight is a surprise; the same drawing three times is furniture. |
+
+Limits: pure ASCII (a Cyrillic `o` renders as an empty box on some phones), 16
+characters wide, 6 lines tall, and a `<pre>` block with HTML parse mode, because
+Telegram's default font is proportional and destroys columns.
+
+The `ascii-art-curator` agent in `.claude/agents/` authors and vets frames.
+Nothing is drawn at runtime: the bot is stdlib-only with no model behind it.
