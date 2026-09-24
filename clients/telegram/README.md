@@ -48,6 +48,14 @@ The bot only ever replies in a private chat. In a group, anyone in it could
 wipe the shared fridge with `/clear`, and the daily nudge would go out to
 everyone in the group.
 
+## Limits
+
+A message over 2,000 characters is refused with a note to send it in a few
+smaller messages. A single capture keeps only the first 50 items and says how
+many it left out, rather than growing without bound on a huge paste. Each
+chat is capped at 20 messages a minute, in memory only; past that, messages
+are ignored quietly until the minute rolls over.
+
 `seed.json` is your real fridge, so `/seed` only ever works for the first id
 in `allowed_chat_ids`. Anyone else gets the normal help text instead, and if
 the list is empty, `/seed` refuses everyone.

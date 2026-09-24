@@ -422,6 +422,19 @@ class NothingIsLostSilently(unittest.TestCase):
         self.assertEqual(names, ["milk", "spinach"])
         self.assertEqual(len(rejected), 2)
 
+    def test_a_huge_capture_is_capped_not_dropped_or_unbounded(self):
+        names = ["item%d" % i for i in range(70)]
+        kept, n_dropped = fridge.cap_names(names)
+        self.assertEqual(len(kept), fridge.MAX_ITEMS)
+        self.assertEqual(n_dropped, 20)
+        self.assertEqual(kept, names[:fridge.MAX_ITEMS])
+
+    def test_cap_names_is_a_no_op_under_the_limit(self):
+        names = ["milk", "spinach"]
+        kept, n_dropped = fridge.cap_names(names)
+        self.assertEqual(kept, names)
+        self.assertEqual(n_dropped, 0)
+
     def test_a_reply_to_me_is_not_a_fridge_item(self):
         for text in ("ok", "thanks", "Thank you", "yes", "nope", "hi", "cool",
                      "got it", "done", "testing", "OK!", "sure."):
@@ -1018,6 +1031,7 @@ class BotHandlers(unittest.TestCase):
         self.tmp.close()
         self.con = fridge.connect(self.tmp.name)
         self.tg = FakeTG()
+        bot.reset_rate_limits()
 
     def tearDown(self):
         self.con.close()
@@ -1026,6 +1040,33 @@ class BotHandlers(unittest.TestCase):
     def test_capturing_a_list_does_not_crash(self):
         bot.handle_message(self.tg, self.con, {"chat": {"id": 1, "type": "private"}, "text": "milk, spinach"}, CFG)
         self.assertIn("First one to watch", self.tg.sent[-1])
+
+    def test_an_overlong_message_is_refused_not_processed(self):
+        text = "milk, " * 400   # well over MAX_MESSAGE_LENGTH
+        bot.handle_message(self.tg, self.con, {"chat": {"id": 1, "type": "private"}, "text": text}, CFG)
+        self.assertIn("too long", self.tg.sent[-1])
+        self.assertEqual(fridge.open_items(self.con, 1), [])
+
+    def test_a_huge_list_is_capped_with_a_count_of_what_was_left_out(self):
+        text = ", ".join("item%d" % i for i in range(70))
+        bot.handle_message(self.tg, self.con, {"chat": {"id": 1, "type": "private"}, "text": text}, CFG)
+        self.assertTrue(any("left out 20" in m for m in self.tg.sent), self.tg.sent)
+        self.assertEqual(len(fridge.open_items(self.con, 1)), fridge.MAX_ITEMS)
+
+    def test_a_flood_is_rate_limited_quietly(self):
+        for _ in range(bot.RATE_LIMIT_PER_MINUTE):
+            bot.handle_message(self.tg, self.con, {"chat": {"id": 1, "type": "private"}, "text": "ok"}, CFG)
+        self.tg.sent.clear()
+        bot.handle_message(self.tg, self.con, {"chat": {"id": 1, "type": "private"}, "text": "milk"}, CFG)
+        self.assertEqual(self.tg.sent, [])
+        self.assertEqual(fridge.open_items(self.con, 1), [])
+
+    def test_rate_limit_is_per_chat_not_global(self):
+        for _ in range(bot.RATE_LIMIT_PER_MINUTE):
+            bot.handle_message(self.tg, self.con, {"chat": {"id": 1, "type": "private"}, "text": "ok"}, CFG)
+        self.tg.sent.clear()
+        bot.handle_message(self.tg, self.con, {"chat": {"id": 2, "type": "private"}, "text": "milk"}, CFG)
+        self.assertTrue(self.tg.sent)
 
     def test_an_empty_allow_list_lets_everyone_through(self):
         cfg = dict(CFG, allowed_chat_ids=[])

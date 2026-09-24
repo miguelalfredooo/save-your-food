@@ -49,6 +49,37 @@ API = "https://api.telegram.org/bot%s/%s"
 POLL_TIMEOUT = 50      # long-poll seconds
 STATE_LABELS = {"used": "Used it", "frozen": "Froze it", "tossed": "Tossed it"}
 
+MAX_MESSAGE_LENGTH = 2000
+MAX_ITEMS_PER_CAPTURE = 50
+RATE_LIMIT_PER_MINUTE = 20
+RATE_LIMIT_WINDOW = 60   # seconds
+
+# In-memory only, not persisted: a burst is a right-now problem, not a
+# things-to-remember one, and it resets on restart along with everything else
+# process-local. Keyed by chat_id, each value a list of recent message times.
+_MSG_TIMES = {}
+
+
+def _rate_limited(chat_id, now=None):
+    """True, and records nothing, once a chat is over budget for this
+    window. Under budget, records the hit and returns False."""
+    now = now if now is not None else time.time()
+    times = _MSG_TIMES.setdefault(chat_id, [])
+    cutoff = now - RATE_LIMIT_WINDOW
+    while times and times[0] < cutoff:
+        times.pop(0)
+    if len(times) >= RATE_LIMIT_PER_MINUTE:
+        return True
+    times.append(now)
+    return False
+
+
+def reset_rate_limits():
+    """Test hook. The limiter is deliberately process-global state, which a
+    test suite reusing the same chat ids across many tests should not
+    inherit from an earlier test."""
+    _MSG_TIMES.clear()
+
 CLOSE_LINES = {
     "used": "That one did not go to waste.",
     "frozen": "Frozen. Good for months.",
@@ -321,6 +352,9 @@ def send_sample_nudge(tg, con, chat_id, today=None):
 
 def handle_message(tg, con, msg, cfg):
     chat_id = msg["chat"]["id"]
+    # A flood gets nothing back, quietly, before any other work runs.
+    if _rate_limited(chat_id):
+        return
     # In a group, anyone in it could /clear the shared fridge, and the daily
     # nudge would go out to everyone in the group.
     if msg["chat"].get("type") != "private":
@@ -333,6 +367,10 @@ def handle_message(tg, con, msg, cfg):
     if not text:
         tg.send(chat_id, "I can only read typed lists for now: "
                          "commas between things.")
+        return
+    if len(text) > MAX_MESSAGE_LENGTH:
+        tg.send(chat_id, "That is too long for me to read in one go. Send it "
+                         "in a few smaller messages.")
         return
 
     # A reply to me or a genuine question can arrive at any point, onboarding
@@ -429,10 +467,16 @@ def handle_message(tg, con, msg, cfg):
         return
 
     names, too_long = fridge.parse_list(text, report=True)
+    names, n_dropped = fridge.cap_names(names)
 
     if too_long:
         tg.send(chat_id, "These didn't look like food names, so I left them "
                          "out rather than guessing: " + "; ".join(too_long))
+
+    if n_dropped:
+        tg.send(chat_id, "That is more than I can take in one go, so I kept "
+                         "the first %d and left out %d. Send the rest in a "
+                         "second message." % (fridge.MAX_ITEMS, n_dropped))
 
     if not names:
         tg.send(chat_id, "I couldn't pick anything out of that. "

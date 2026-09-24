@@ -66,6 +66,7 @@ _TRAILING_QTY = re.compile(r"\s*[x×]\s*\d+\s*$", re.I)
 
 
 MAX_NAME = 60
+MAX_ITEMS = 50
 
 # Answers to me, not food. Each of these used to become a five-day guess and
 # show up in the next morning's nudge.
@@ -362,6 +363,15 @@ def parse_list(text, report=False):
             continue
         out.append(p)
     return (out, rejected) if report else out
+
+
+def cap_names(names):
+    """Keep a single capture from growing without bound on a huge paste.
+    Returns (kept, n_dropped) rather than silently truncating, since nothing
+    is lost silently is the one promise capture has to keep."""
+    if len(names) <= MAX_ITEMS:
+        return names, 0
+    return names[:MAX_ITEMS], len(names) - MAX_ITEMS
 
 
 def add_items(con, chat_id, names, today=None):

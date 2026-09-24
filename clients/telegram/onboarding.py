@@ -179,6 +179,7 @@ def handle_list(con, chat_id, text, today=None):
     """Step 2: the sort, shown on their own list."""
     today = today or date.today()
     names, too_long = fridge.parse_list(text, report=True)
+    names, n_dropped = fridge.cap_names(names)
     if not names:
         if too_long:
             return ("Those didn't look like food names, so I left them "
@@ -193,6 +194,12 @@ def handle_list(con, chat_id, text, today=None):
     if too_long:
         lines.append("These didn't look like food names, so I left them "
                      "out rather than guessing: " + "; ".join(too_long))
+    if n_dropped:
+        if lines:
+            lines.append("")
+        lines.append("That is more than I can take in one go, so I kept the "
+                     "first %d and left out %d. Send the rest in a second "
+                     "message." % (fridge.MAX_ITEMS, n_dropped))
     if tracked:
         if lines:
             lines.append("")
