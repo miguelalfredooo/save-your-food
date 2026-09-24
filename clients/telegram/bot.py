@@ -344,7 +344,7 @@ def handle_message(tg, con, msg, cfg):
             # the state the whole system is trying to produce, and it otherwise
             # looks identical to the bot being broken.
             send_delight(tg, con, chat_id, "allclear",
-                         caption="Nothing at risk today.")
+                         caption="Nothing needs using today.")
         return
     if low.startswith("/"):
         tg.send(chat_id, HELP)
