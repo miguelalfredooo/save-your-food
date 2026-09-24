@@ -114,16 +114,18 @@ def acquire_lock():
 
 
 def load_config():
+    # A single, clearly marked line, not a paragraph: under a launchd
+    # crash loop this repeats every ThrottleInterval seconds, and status.sh
+    # only shows the tail of the log, so the reason it keeps restarting has
+    # to be readable in one line, not buried mid-paragraph.
     if not os.path.exists(CONFIG_PATH):
-        sys.exit(
-            "No config.json found.\n"
-            "Copy config.example.json to config.json and put your bot token in it.\n"
-            "Get a token from @BotFather in Telegram: /newbot"
-        )
+        sys.exit("! No config.json found. Copy config.example.json to "
+                 "config.json and put your bot token in it (from @BotFather "
+                 "in Telegram: /newbot).")
     with open(CONFIG_PATH) as f:
         cfg = json.load(f)
     if not cfg.get("token") or "PUT_YOUR" in cfg["token"]:
-        sys.exit("config.json has no real token in it yet.")
+        sys.exit("! config.json has no real token in it yet.")
     cfg.setdefault("nudge_hour", 16)
     cfg.setdefault("nudge_minute", 30)
     cfg.setdefault("allowed_chat_ids", [])
@@ -683,7 +685,7 @@ def main():
 
     me = tg.call("getMe")
     if not me or not me.get("ok"):
-        sys.exit("Couldn't reach Telegram. Check the token and your connection.")
+        sys.exit("! Couldn't reach Telegram. Check the token and your connection.")
     print("Fridge Loop running as @%s. Nudging at %02d:%02d. Ctrl-C to stop."
           % (me["result"]["username"], cfg["nudge_hour"], cfg["nudge_minute"]))
 

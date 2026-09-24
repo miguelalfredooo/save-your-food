@@ -1019,6 +1019,38 @@ class FakeTG:
 CFG = {"nudge_hour": 16, "nudge_minute": 30, "allowed_chat_ids": []}
 
 
+class CrashLoopMessages(unittest.TestCase):
+    """Under a launchd crash loop, status.sh only shows the log's tail, so a
+    fatal config error has to be one clearly marked line, not buried in a
+    paragraph that scrolls off with every restart."""
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.orig_config_path = bot.CONFIG_PATH
+
+    def tearDown(self):
+        bot.CONFIG_PATH = self.orig_config_path
+
+    def _fatal_message(self):
+        with self.assertRaises(SystemExit) as ctx:
+            bot.load_config()
+        return str(ctx.exception)
+
+    def test_a_missing_config_is_one_marked_line(self):
+        bot.CONFIG_PATH = os.path.join(self.tmp_dir, "does-not-exist.json")
+        msg = self._fatal_message()
+        self.assertTrue(msg.startswith("!"))
+        self.assertNotIn("\n", msg)
+
+    def test_a_placeholder_token_is_one_marked_line(self):
+        bot.CONFIG_PATH = os.path.join(self.tmp_dir, "config.json")
+        with open(bot.CONFIG_PATH, "w") as f:
+            f.write('{"token": "PUT_YOUR_BOTFATHER_TOKEN_HERE"}')
+        msg = self._fatal_message()
+        self.assertTrue(msg.startswith("!"))
+        self.assertNotIn("\n", msg)
+
+
 class SingleInstanceLock(unittest.TestCase):
     """Two copies of the bot polling getUpdates at once get HTTP 409 errors
     from Telegram and lose messages, so a second copy must refuse to start."""
