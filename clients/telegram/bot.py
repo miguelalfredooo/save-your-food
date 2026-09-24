@@ -10,6 +10,7 @@ Reads config.json for the bot token. The token is never logged or echoed.
 
 import json
 import os
+import socket
 import sys
 import time
 import traceback
@@ -17,6 +18,22 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import date, datetime, timedelta
+
+# Prefer IPv4 for outbound calls. Measured on this project: a getUpdates or
+# sendMessage socket that picks an IPv6 route can sit in SYN_SENT for minutes
+# before connecting, or time out and silently drop a reply, while IPv4 to the
+# same host connects instantly. Falls back to whatever getaddrinfo returned if
+# there is no IPv4 route at all, so an IPv6-only network still works.
+_getaddrinfo = socket.getaddrinfo
+
+
+def _ipv4_first_getaddrinfo(*args, **kwargs):
+    results = _getaddrinfo(*args, **kwargs)
+    ipv4 = [r for r in results if r[0] == socket.AF_INET]
+    return ipv4 or results
+
+
+socket.getaddrinfo = _ipv4_first_getaddrinfo
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
