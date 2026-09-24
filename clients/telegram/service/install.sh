@@ -31,6 +31,24 @@ echo "Logs:    $LOG_DIR"
 
 mkdir -p "$LOG_DIR"
 
+# Simple, install-time rotation: keep one prior generation rather than let a
+# log grow forever. This only runs when install.sh does, so it is not
+# continuous rotation. A proper ongoing rotation would be newsyslog, but that
+# needs a root-owned config file in /etc/newsyslog.d/ for a per-user
+# LaunchAgent's logs, which is more moving parts than this setup wants for a
+# single-purpose Mac mini. If the logs ever grow enormous between reinstalls,
+# switch to newsyslog; until then, this is the deliberate tradeoff.
+MAX_LOG_BYTES=$((5 * 1024 * 1024))
+for log in "$LOG_OUT" "$LOG_ERR"; do
+    if [ -f "$log" ]; then
+        size="$(stat -f%z "$log" 2>/dev/null || echo 0)"
+        if [ "$size" -gt "$MAX_LOG_BYTES" ]; then
+            echo "Rotating $log ($size bytes)..."
+            mv -f "$log" "$log.old"
+        fi
+    fi
+done
+
 # Two copies polling getUpdates at once get HTTP 409 errors and lose
 # messages, so a hand-started bot.py has to go before the managed one starts.
 # Matched on a trailing "bot.py" preceded by a space or slash, not the full
