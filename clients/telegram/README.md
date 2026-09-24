@@ -92,24 +92,43 @@ are ignored quietly until the minute rolls over.
 in `allowed_chat_ids`. Anyone else gets the normal help text instead, and if
 the list is empty, `/seed` refuses everyone.
 
-## Conversational mode (opt-in, costs money)
+## Conversational mode (opt-in)
 
 The default bot understands commands and typed lists via regex and a
 keyword table: fast, free, and exact, but it can't read "put butter chicken
 in the fridge as leftovers" as an add. `llm_agent.py` is a separate,
-self-contained mode that hands every typed message to a model via
-[OpenRouter](https://openrouter.ai) instead, so it can read natural phrasing
-and correct itself in conversation. Off by default.
+self-contained mode that hands every typed message (and now photos too) to a
+model instead, so it can read natural phrasing and correct itself in
+conversation. Off by default.
 
-To turn it on, add an OpenRouter API key to `config.json`:
+**Two providers, same code path.** Pick one with `llm_provider`:
 
     "llm_mode": true,
+    "llm_provider": "openrouter",
     "openrouter_api_key": "sk-or-...",
     "llm_model": "anthropic/claude-haiku-4.5"
 
-Every message sent to the model costs money on your OpenRouter account. The
-bot refuses to start with `llm_mode` on and no key set, rather than silently
-falling back to the free path.
+or, to run entirely on your own machine with [Ollama](https://ollama.com)
+instead, free and offline once the model is pulled:
+
+    "llm_mode": true,
+    "llm_provider": "ollama",
+    "ollama_base_url": "http://localhost:11434/v1",
+    "ollama_model": "llama3.2-vision"
+
+`ollama pull llama3.2-vision` first (needs Ollama running locally). Every
+message on OpenRouter costs money on your account; Ollama costs nothing per
+message but needs a machine that can actually run the model — a vision
+model wants real RAM (roughly 8GB+ free for an 11B model in Q4). The bot
+refuses to start with `llm_mode` on and OpenRouter selected with no key set,
+rather than silently falling back to a different path.
+
+**Photos work in this mode too.** Send a photo of your fridge or a receipt,
+with or without a caption, and it goes to the model as an image alongside
+any text you typed — provided the model you picked actually supports vision
+("Capabilities: vision" in `ollama show <model>`, or a vision-capable
+OpenRouter model). A text-only model just never mentions the photo. Outside
+this mode, a photo gets a plain "I can't read photos yet."
 
 This mode is a genuinely different front end, not a layer over the regular
 one: a message never reaches onboarding, the sentence/correction logic, or

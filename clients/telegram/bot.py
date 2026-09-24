@@ -8,6 +8,7 @@ Standard library only. Nothing to install: if you can run python3, you can run t
 Reads config.json for the bot token. The token is never logged or echoed.
 """
 
+import base64
 import fcntl
 import json
 import os
@@ -48,8 +49,10 @@ import llm_agent  # noqa: E402
 CONFIG_PATH = os.path.join(HERE, "config.json")
 LOCK_PATH = os.path.join(HERE, ".bot.lock")
 API = "https://api.telegram.org/bot%s/%s"
+FILE_API = "https://api.telegram.org/file/bot%s/%s"
 
 POLL_TIMEOUT = 50      # long-poll seconds
+REQUEST_DOWNLOAD_TIMEOUT = 30
 STATE_LABELS = {"used": "Used it", "frozen": "Froze it", "tossed": "Tossed it"}
 
 MAX_MESSAGE_LENGTH = 2000
@@ -131,11 +134,15 @@ def load_config():
     cfg.setdefault("nudge_minute", 30)
     cfg.setdefault("allowed_chat_ids", [])
     cfg.setdefault("llm_mode", False)
+    cfg.setdefault("llm_provider", "openrouter")   # "openrouter" or "ollama"
     cfg.setdefault("openrouter_api_key", "")
     cfg.setdefault("llm_model", "anthropic/claude-haiku-4.5")
-    if cfg["llm_mode"] and (not cfg["openrouter_api_key"]
-                            or "PUT_YOUR" in cfg["openrouter_api_key"]):
-        sys.exit("! llm_mode is on but openrouter_api_key is not set in config.json.")
+    cfg.setdefault("ollama_base_url", "http://localhost:11434/v1")
+    cfg.setdefault("ollama_model", "llama3.2-vision")
+    if cfg["llm_mode"] and cfg["llm_provider"] == "openrouter" and (
+            not cfg["openrouter_api_key"] or "PUT_YOUR" in cfg["openrouter_api_key"]):
+        sys.exit("! llm_mode is on with llm_provider openrouter, but "
+                 "openrouter_api_key is not set in config.json.")
     return cfg
 
 
@@ -187,6 +194,24 @@ class Telegram:
     def edit(self, chat_id, message_id, text):
         self.call("editMessageText", chat_id=chat_id,
                   message_id=message_id, text=text)
+
+    def download_photo(self, file_id, timeout=REQUEST_DOWNLOAD_TIMEOUT):
+        """The actual image bytes for a photo, or None on any failure.
+        Two calls: getFile resolves file_id to a path, then the file itself
+        lives on a different host entirely (api.telegram.org/file/..., not
+        the regular bot API endpoint call() uses)."""
+        info = self.call("getFile", file_id=file_id)
+        if not info or not info.get("ok"):
+            return None
+        file_path = info["result"]["file_path"]
+        url = FILE_API % (self._token, file_path)
+        req = urllib.request.Request(url)
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return r.read()
+        except Exception as e:
+            print("! telegram file download failed: %s" % self._redact(str(e)))
+            return None
 
 
 # --- conversation ----------------------------------------------------------
@@ -401,6 +426,24 @@ def send_sample_nudge(tg, con, chat_id, today=None):
             buttons=item_buttons(soonest["id"]))
 
 
+def handle_photo(tg, con, chat_id, msg, cfg):
+    """A photo only means something in llm_mode: there is no way for the
+    regex pipeline to read an image, and pretending otherwise would be the
+    exact kind of silent guess this bot is built to avoid."""
+    if not cfg["llm_mode"]:
+        tg.send(chat_id, "I can't read photos yet, only typed lists: "
+                         "commas between things.")
+        return
+    caption = (msg.get("caption") or "").strip()
+    file_id = msg["photo"][-1]["file_id"]   # largest size Telegram sent
+    photo_bytes = tg.download_photo(file_id)
+    if photo_bytes is None:
+        tg.send(chat_id, "Couldn't get that photo from Telegram. Try sending it again.")
+        return
+    image_b64 = base64.b64encode(photo_bytes).decode()
+    tg.send(chat_id, llm_agent.run_agent(con, chat_id, caption, cfg, image_b64=image_b64))
+
+
 def handle_message(tg, con, msg, cfg):
     chat_id = msg["chat"]["id"]
     # A flood gets nothing back, quietly, before any other work runs.
@@ -413,6 +456,9 @@ def handle_message(tg, con, msg, cfg):
     # A reply confirms the bot exists, so a chat that isn't on the allow
     # list gets nothing at all, not even an error.
     if cfg["allowed_chat_ids"] and chat_id not in cfg["allowed_chat_ids"]:
+        return
+    if "photo" in msg:
+        handle_photo(tg, con, chat_id, msg, cfg)
         return
     text = (msg.get("text") or "").strip()
     if not text:

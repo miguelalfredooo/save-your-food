@@ -1,5 +1,6 @@
 """Everything that can be checked without Telegram. Run: python3 test_logic.py"""
 
+import base64
 import json
 import os
 import sys
@@ -1050,10 +1051,11 @@ class Delight(unittest.TestCase):
 class FakeTG:
     """Records what bot.py would have sent, instead of calling Telegram."""
 
-    def __init__(self):
+    def __init__(self, photo_bytes=b"fake-jpeg-bytes"):
         self.sent = []
         self.edits = []
         self.answers = []
+        self._photo_bytes = photo_bytes
 
     def send(self, chat_id, text, buttons=None, html=False):
         self.sent.append(text)
@@ -1064,9 +1066,14 @@ class FakeTG:
     def edit(self, chat_id, message_id, text):
         self.edits.append(text)
 
+    def download_photo(self, file_id):
+        return self._photo_bytes
+
 
 CFG = {"nudge_hour": 16, "nudge_minute": 30, "allowed_chat_ids": [],
-       "llm_mode": False, "openrouter_api_key": "", "llm_model": "anthropic/claude-haiku-4.5"}
+       "llm_mode": False, "llm_provider": "openrouter", "openrouter_api_key": "",
+       "llm_model": "anthropic/claude-haiku-4.5",
+       "ollama_base_url": "http://localhost:11434/v1", "ollama_model": "llama3.2-vision"}
 
 
 class CrashLoopMessages(unittest.TestCase):
@@ -1291,6 +1298,73 @@ class LLMAgentLoop(unittest.TestCase):
         reply = llm_agent.run_agent(self.con, 1, "wipe it all", CFG, TODAY, caller=caller)
         self.assertIn("remove one item", reply)
 
+    def test_a_photo_is_sent_as_an_image_content_block(self):
+        seen = {}
+        def caller(messages):
+            seen["user_content"] = messages[1]["content"]
+            return self._text_reply("Looks like milk and eggs.")
+        reply = llm_agent.run_agent(self.con, 1, "just got home", CFG, TODAY,
+                                    caller=caller, image_b64="ZmFrZQ==")
+        self.assertEqual(reply, "Looks like milk and eggs.")
+        blocks = seen["user_content"]
+        self.assertEqual(blocks[0], {"type": "text", "text": "just got home"})
+        self.assertEqual(blocks[1]["type"], "image_url")
+        self.assertIn("ZmFrZQ==", blocks[1]["image_url"]["url"])
+
+    def test_a_photo_with_no_caption_still_gets_a_default_prompt(self):
+        seen = {}
+        def caller(messages):
+            seen["user_content"] = messages[1]["content"]
+            return self._text_reply("...")
+        llm_agent.run_agent(self.con, 1, "", CFG, TODAY, caller=caller, image_b64="ZmFrZQ==")
+        self.assertEqual(seen["user_content"][0]["text"], "What's in this photo?")
+
+    def test_no_image_means_plain_string_content_as_before(self):
+        seen = {}
+        def caller(messages):
+            seen["user_content"] = messages[1]["content"]
+            return self._text_reply("ok")
+        llm_agent.run_agent(self.con, 1, "milk", CFG, TODAY, caller=caller)
+        self.assertEqual(seen["user_content"], "milk")
+
+
+class LLMProviderSelection(unittest.TestCase):
+    """_default_caller picks openrouter or ollama by config, with no network
+    call actually made here (just checking which function gets returned)."""
+
+    def test_ollama_provider_calls_the_local_endpoint(self):
+        cfg = dict(CFG, llm_provider="ollama")
+        seen = {}
+        def fake_ollama(base_url, model, messages, tools, timeout=30):
+            seen["base_url"] = base_url
+            seen["model"] = model
+            return {"choices": [{"message": {"content": "local reply"}}]}
+        original = llm_agent.call_ollama
+        llm_agent.call_ollama = fake_ollama
+        try:
+            con = fridge.connect(":memory:")
+            reply = llm_agent.run_agent(con, 1, "hi", cfg, TODAY)
+        finally:
+            llm_agent.call_ollama = original
+        self.assertEqual(reply, "local reply")
+        self.assertEqual(seen["base_url"], "http://localhost:11434/v1")
+        self.assertEqual(seen["model"], "llama3.2-vision")
+
+    def test_openrouter_is_the_default_provider(self):
+        seen = {}
+        def fake_openrouter(api_key, model, messages, tools, timeout=30):
+            seen["model"] = model
+            return {"choices": [{"message": {"content": "cloud reply"}}]}
+        original = llm_agent.call_openrouter
+        llm_agent.call_openrouter = fake_openrouter
+        try:
+            con = fridge.connect(":memory:")
+            reply = llm_agent.run_agent(con, 1, "hi", CFG, TODAY)
+        finally:
+            llm_agent.call_openrouter = original
+        self.assertEqual(reply, "cloud reply")
+        self.assertEqual(seen["model"], "anthropic/claude-haiku-4.5")
+
 
 class TokenSafety(unittest.TestCase):
     def test_the_token_is_redacted_from_error_text(self):
@@ -1401,6 +1475,37 @@ class BotHandlers(unittest.TestCase):
         self.assertEqual(self.tg.sent, ["fake agent reply"])
         # Never reached fridge.add_items via the regex path.
         self.assertEqual(fridge.open_items(self.con, 1), [])
+
+    def test_a_photo_is_refused_plainly_outside_llm_mode(self):
+        msg = {"chat": {"id": 1, "type": "private"}, "photo": [{"file_id": "abc"}]}
+        bot.handle_message(self.tg, self.con, msg, CFG)
+        self.assertIn("can't read photos", self.tg.sent[-1])
+
+    def test_a_photo_in_llm_mode_is_downloaded_and_sent_as_an_image(self):
+        cfg = dict(CFG, llm_mode=True)
+        seen = {}
+        def fake_run_agent(con, chat_id, text, cfg, image_b64=None, **kw):
+            seen["text"] = text
+            seen["image_b64"] = image_b64
+            return "looks like milk"
+        original = llm_agent.run_agent
+        llm_agent.run_agent = fake_run_agent
+        try:
+            msg = {"chat": {"id": 1, "type": "private"}, "photo": [{"file_id": "abc"}],
+                   "caption": "just got home"}
+            bot.handle_message(self.tg, self.con, msg, cfg)
+        finally:
+            llm_agent.run_agent = original
+        self.assertEqual(self.tg.sent, ["looks like milk"])
+        self.assertEqual(seen["text"], "just got home")
+        self.assertEqual(seen["image_b64"], base64.b64encode(b"fake-jpeg-bytes").decode())
+
+    def test_a_failed_photo_download_gets_a_plain_retry_message(self):
+        cfg = dict(CFG, llm_mode=True)
+        tg = FakeTG(photo_bytes=None)
+        msg = {"chat": {"id": 1, "type": "private"}, "photo": [{"file_id": "abc"}]}
+        bot.handle_message(tg, self.con, msg, cfg)
+        self.assertIn("try sending it again", tg.sent[-1].lower())
 
     def test_an_overlong_message_is_refused_not_processed(self):
         text = "milk, " * 400   # well over MAX_MESSAGE_LENGTH

@@ -276,6 +276,12 @@ TOOL_EXECUTORS = {
 
 
 # --- the model call ----------------------------------------------------------
+#
+# Two providers, same OpenAI-compatible wire format (Ollama's /v1 endpoint
+# mirrors OpenRouter's on purpose), so one function shape covers both: the
+# only real difference is the URL and whether an Authorization header is
+# needed at all. A local Ollama model costs nothing per message and never
+# leaves the machine, at the cost of needing real hardware to run it well.
 
 def call_openrouter(api_key, model, messages, tools, timeout=REQUEST_TIMEOUT):
     body = json.dumps({"model": model, "messages": messages, "tools": tools}).encode()
@@ -289,16 +295,45 @@ def call_openrouter(api_key, model, messages, tools, timeout=REQUEST_TIMEOUT):
         return json.loads(r.read().decode())
 
 
-def run_agent(con, chat_id, text, cfg, today=None, caller=None):
+def call_ollama(base_url, model, messages, tools, timeout=REQUEST_TIMEOUT):
+    body = json.dumps({"model": model, "messages": messages, "tools": tools}).encode()
+    req = urllib.request.Request(
+        base_url.rstrip("/") + "/chat/completions", data=body,
+        headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read().decode())
+
+
+def _default_caller(cfg):
+    if cfg.get("llm_provider") == "ollama":
+        base_url = cfg.get("ollama_base_url", "http://localhost:11434/v1")
+        return lambda messages: call_ollama(base_url, cfg["ollama_model"], messages, TOOLS)
+    return lambda messages: call_openrouter(
+        cfg["openrouter_api_key"], cfg["llm_model"], messages, TOOLS)
+
+
+def run_agent(con, chat_id, text, cfg, today=None, caller=None, image_b64=None):
     """caller lets tests substitute a fake model instead of the real API, the
-    same shape FakeTG substitutes for the real Telegram class."""
+    same shape FakeTG substitutes for the real Telegram class.
+
+    image_b64, when given, is a base64-encoded photo (a fridge, a receipt)
+    sent alongside the text as a vision content block. Whether anything
+    happens with it depends entirely on the chosen model actually being
+    vision-capable; a text-only model just never mentions it.
+    """
     today = today or date.today()
-    call = caller or (lambda messages: call_openrouter(
-        cfg["openrouter_api_key"], cfg["llm_model"], messages, TOOLS))
+    call = caller or _default_caller(cfg)
+
+    user_content = text
+    if image_b64:
+        user_content = [
+            {"type": "text", "text": text or "What's in this photo?"},
+            {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,%s" % image_b64}},
+        ]
 
     messages = [
         {"role": "system", "content": build_system_prompt(con, chat_id, today)},
-        {"role": "user", "content": text},
+        {"role": "user", "content": user_content},
     ]
 
     for _ in range(MAX_TOOL_ROUNDS):

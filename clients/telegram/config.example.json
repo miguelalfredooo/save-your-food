@@ -4,6 +4,9 @@
   "nudge_minute": 30,
   "allowed_chat_ids": [],
   "llm_mode": false,
+  "llm_provider": "openrouter",
   "openrouter_api_key": "PUT_YOUR_OPENROUTER_KEY_HERE",
-  "llm_model": "anthropic/claude-haiku-4.5"
+  "llm_model": "anthropic/claude-haiku-4.5",
+  "ollama_base_url": "http://localhost:11434/v1",
+  "ollama_model": "llama3.2-vision"
 }
