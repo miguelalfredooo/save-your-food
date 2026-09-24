@@ -228,6 +228,39 @@ def looks_like_sentence(text):
     return fn >= 2
 
 
+# "half and half" is the one perishable in shelf_life.SHELF_LIFE three words
+# or longer. Pantry and outside names of the same shape ("herbes de
+# provence", "bag of onions") are already caught generally, below, by
+# sl.not_tracked() — this is the single exception that needed listing by hand.
+_LOW_GLUE_PERISHABLE_NAMES = frozenset(("half and half",))
+
+
+def looks_like_an_unseparated_list(text):
+    """True for several foods typed with no separator at all: "milk eggs
+    bread". Without this, parse_list finds no comma to split on and the
+    whole string becomes one garbled tracked item.
+
+    The complement of looks_like_sentence: enough words to be more than one
+    thing, but too few function words to be prose. A real single pantry or
+    outside name of the same shape ("herbes de provence", "bag of onions")
+    is ruled out first — by better_outside(), which already requires every
+    word to be accounted for, and by an EXACT match against STABLE, not
+    shelf_stable()'s substring check: shelf_stable("chicken breast rice
+    beans") is true on "rice" alone, which is exactly the false negative
+    this function exists to avoid.
+    """
+    if "," in text or "\n" in text or ";" in text:
+        return False
+    n = text.lower().strip()
+    if n in _LOW_GLUE_PERISHABLE_NAMES or sl.better_outside(n) or n in sl.STABLE:
+        return False
+    words = _words(text)
+    if len(words) < 3:
+        return False
+    fn = sum(1 for w in words if w in FUNCTION_WORDS)
+    return fn <= 1
+
+
 def correction(text):
     """'pantry', 'fridge' or None — which way the user says I sorted it wrong."""
     n = text.lower()

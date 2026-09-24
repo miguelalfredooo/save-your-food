@@ -547,6 +547,37 @@ class SentencesAreNotFood(unittest.TestCase):
             self.assertFalse(fridge.looks_like_sentence(text), text)
 
 
+class UnseparatedLists(unittest.TestCase):
+    """"milk eggs bread" has no comma to split on, so before this existed the
+    whole string became one tracked item with a fake date on it."""
+
+    def test_several_foods_with_no_separator_are_caught(self):
+        for text in ("milk eggs bread",
+                     "chicken breast rice beans",
+                     "chicken thighs bell peppers cilantro limes",
+                     "oat milk and yogurt"):
+            self.assertTrue(fridge.looks_like_an_unseparated_list(text), text)
+
+    def test_a_real_single_name_is_not_mistaken_for_a_list(self):
+        for text in ("olive oil", "ground beef", "half and half",
+                     "herbes de provence", "stir fry sauce",
+                     "bag of onions", "a bag of onions", "sweet potatoes"):
+            self.assertFalse(fridge.looks_like_an_unseparated_list(text), text)
+
+    def test_a_real_list_with_commas_is_not_flagged(self):
+        self.assertFalse(fridge.looks_like_an_unseparated_list("milk, eggs, bread"))
+
+    def test_prose_is_left_to_looks_like_sentence(self):
+        # High function-word density is a sentence, not an unseparated list;
+        # the two checks are complementary, not overlapping.
+        self.assertFalse(fridge.looks_like_an_unseparated_list(
+            "these items are all from the pantry"))
+
+    def test_a_question_is_not_mistaken_for_a_list(self):
+        self.assertFalse(fridge.looks_like_an_unseparated_list(
+            "can you tell me what is in my fridge"))
+
+
 class Corrections(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
@@ -741,6 +772,22 @@ class Onboarding(unittest.TestCase):
         self.assertIn("cumin", reply)
         self.assertIn("stay quiet about these", reply)
         self.assertEqual(onb.step(self.con, 1), "3")
+
+    def test_step_one_rejects_an_unseparated_list_instead_of_mistracking_it(self):
+        onb.begin(self.con, 1)
+        reply, nxt = onb.handle_item(self.con, 1, "milk eggs bread", TODAY)
+        self.assertIn("more than one thing", reply)
+        self.assertEqual(onb.step(self.con, 1), "1")   # does not advance
+        self.assertEqual(fridge.open_items(self.con, 1), [])
+
+    def test_step_two_rejects_an_unseparated_list_instead_of_mistracking_it(self):
+        onb.begin(self.con, 1)
+        onb.handle_item(self.con, 1, "milk", TODAY)
+        reply, nxt = onb.handle_list(self.con, 1, "chicken breast rice beans", TODAY)
+        self.assertIn("commas", reply)
+        self.assertEqual(onb.step(self.con, 1), "2")   # does not advance
+        names = [i["name"] for i in fridge.open_items(self.con, 1)]
+        self.assertEqual(names, ["milk"])   # only the real step-1 item is tracked
 
     def test_step_two_says_so_when_nothing_went_to_the_pantry(self):
         onb.begin(self.con, 1)
@@ -1278,6 +1325,12 @@ class BotHandlers(unittest.TestCase):
     def test_capturing_a_list_does_not_crash(self):
         bot.handle_message(self.tg, self.con, {"chat": {"id": 1, "type": "private"}, "text": "milk, spinach"}, CFG)
         self.assertIn("First one to watch", self.tg.sent[-1])
+
+    def test_an_unseparated_list_is_asked_for_commas_not_mistracked(self):
+        bot.handle_message(self.tg, self.con, {"chat": {"id": 1, "type": "private"},
+                           "text": "milk eggs bread"}, CFG)
+        self.assertIn("commas", self.tg.sent[-1])
+        self.assertEqual(fridge.open_items(self.con, 1), [])
 
     def test_llm_mode_bypasses_the_regex_pipeline_entirely(self):
         cfg = dict(CFG, llm_mode=True)

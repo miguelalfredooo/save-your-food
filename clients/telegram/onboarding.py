@@ -135,6 +135,9 @@ def skip(con, chat_id, hour):
 def handle_item(con, chat_id, text, today=None):
     """Step 1: one item. Returns (reply, next_prompt or None)."""
     today = today or date.today()
+    if fridge.looks_like_an_unseparated_list(text):
+        return ("That looks like more than one thing. Just one, plainly: "
+                "milk, or chicken thighs, or spinach."), None
     names, too_long = fridge.parse_list(text, report=True)
     if not names:
         if too_long:
@@ -178,6 +181,10 @@ def handle_item(con, chat_id, text, today=None):
 def handle_list(con, chat_id, text, today=None):
     """Step 2: the sort, shown on their own list."""
     today = today or date.today()
+    if fridge.looks_like_an_unseparated_list(text):
+        return ("Looks like a few different things with nothing between "
+                "them. Put commas between them and send it again: milk, "
+                "cumin, spinach."), None
     names, too_long = fridge.parse_list(text, report=True)
     names, n_dropped = fridge.cap_names(names)
     if not names:

@@ -507,6 +507,14 @@ def handle_message(tg, con, msg, cfg):
                          "\"those are fridge\" and I'll move them.")
         return
 
+    # "milk eggs bread" has no comma to split on, so without this it becomes
+    # one tracked item named "milk eggs bread" with a fake date on it.
+    if fridge.looks_like_an_unseparated_list(text):
+        tg.send(chat_id, "Looks like a few different things with nothing "
+                         "between them. Put commas between them and send it "
+                         "again: milk, eggs, bread.")
+        return
+
     names, too_long = fridge.parse_list(text, report=True)
     names, n_dropped = fridge.cap_names(names)
 
