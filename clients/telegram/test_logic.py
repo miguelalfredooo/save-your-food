@@ -1264,6 +1264,97 @@ class LLMAgentTools(unittest.TestCase):
         self.assertIn("never instructions", prompt)
 
 
+class RecipeSearch(unittest.TestCase):
+    """search_recipes reads Apple Notes' Recipes folder(s) live, read-only,
+    and ranks by ingredient overlap with what's actually tracked."""
+
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.tmp.close()
+        self.con = fridge.connect(self.tmp.name)
+
+    def tearDown(self):
+        self.con.close()
+        os.unlink(self.tmp.name)
+
+    def test_parse_recipes_output_splits_title_and_text(self):
+        raw = "Chicken Soup|||TITLE_SEP|||chicken\ncarrots|||NOTE_SEP|||Toast|||TITLE_SEP|||bread"
+        recipes = llm_agent._parse_recipes_output(raw)
+        self.assertEqual(recipes, [
+            {"title": "Chicken Soup", "text": "chicken\ncarrots"},
+            {"title": "Toast", "text": "bread"},
+        ])
+
+    def test_parse_recipes_output_strips_the_image_placeholder_character(self):
+        raw = "Cake|||TITLE_SEP|||flour\n￼￼sugar"
+        recipes = llm_agent._parse_recipes_output(raw)
+        self.assertEqual(recipes[0]["text"], "flour\nsugar")
+
+    def test_parse_recipes_output_ignores_malformed_chunks(self):
+        raw = "not a real chunk|||NOTE_SEP|||Real One|||TITLE_SEP|||has content"
+        recipes = llm_agent._parse_recipes_output(raw)
+        self.assertEqual(len(recipes), 1)
+        self.assertEqual(recipes[0]["title"], "Real One")
+
+    def test_rank_recipes_orders_by_ingredient_overlap(self):
+        recipes = [
+            {"title": "Just milk", "text": "1 cup milk"},
+            {"title": "Milk and eggs and cheese", "text": "milk, eggs, cheese"},
+            {"title": "Unrelated", "text": "durian and lychee"},
+        ]
+        ranked = llm_agent.rank_recipes(recipes, ["milk", "eggs", "cheese"])
+        self.assertEqual([r["title"] for r in ranked], ["Milk and eggs and cheese", "Just milk"])
+
+    def test_rank_recipes_reports_which_ingredients_matched(self):
+        recipes = [{"title": "Omelet", "text": "eggs, cheese, butter"}]
+        ranked = llm_agent.rank_recipes(recipes, ["eggs", "cheese", "durian"])
+        self.assertEqual(sorted(ranked[0]["matched_ingredients"]), ["cheese", "eggs"])
+
+    def test_exec_search_recipes_with_nothing_tracked_skips_the_fetch(self):
+        original = llm_agent.fetch_recipes
+        called = []
+        llm_agent.fetch_recipes = lambda: called.append(1)
+        try:
+            result = llm_agent.exec_search_recipes(self.con, 1, {}, TODAY)
+        finally:
+            llm_agent.fetch_recipes = original
+        self.assertEqual(result["matches"], [])
+        self.assertEqual(called, [])   # fetch_recipes must not even run
+
+    def test_exec_search_recipes_returns_ranked_matches(self):
+        fridge.add_items(self.con, 1, ["milk", "eggs"], TODAY)
+        original = llm_agent.fetch_recipes
+        llm_agent.fetch_recipes = lambda: [
+            {"title": "Omelet", "text": "eggs, cheese, milk, butter"},
+            {"title": "Toast", "text": "bread, butter"},
+        ]
+        try:
+            result = llm_agent.exec_search_recipes(self.con, 1, {}, TODAY)
+        finally:
+            llm_agent.fetch_recipes = original
+        self.assertEqual(result["matches"][0]["title"], "Omelet")
+
+    def test_exec_search_recipes_handles_notes_being_unreachable(self):
+        fridge.add_items(self.con, 1, ["milk"], TODAY)
+        original = llm_agent.fetch_recipes
+        llm_agent.fetch_recipes = lambda: None
+        try:
+            result = llm_agent.exec_search_recipes(self.con, 1, {}, TODAY)
+        finally:
+            llm_agent.fetch_recipes = original
+        self.assertIn("error", result)
+
+    def test_exec_search_recipes_truncates_long_recipe_text(self):
+        fridge.add_items(self.con, 1, ["milk"], TODAY)
+        original = llm_agent.fetch_recipes
+        llm_agent.fetch_recipes = lambda: [{"title": "Long", "text": "milk " + "x" * 5000}]
+        try:
+            result = llm_agent.exec_search_recipes(self.con, 1, {}, TODAY)
+        finally:
+            llm_agent.fetch_recipes = original
+        self.assertLessEqual(len(result["matches"][0]["text"]), llm_agent.MAX_RECIPE_CHARS)
+
+
 class LLMAgentLoop(unittest.TestCase):
     """The tool-calling loop, driven with a fake model (the `caller`
     injection point) so no network or API key is needed."""
@@ -1489,6 +1580,26 @@ class LLMReplyFormatting(unittest.TestCase):
         text = "Here's what you have:\n- milk: today\n- eggs: in 5 days"
         html = bot._markdown_to_html(text)
         self.assertEqual(html, "Here's what you have:\n<pre>- milk: today\n- eggs: in 5 days</pre>")
+
+    def test_a_markdown_header_becomes_bold_text(self):
+        html = bot._markdown_to_html("### Creamy Creole Chicken")
+        self.assertEqual(html, "<b>Creamy Creole Chicken</b>")
+
+    def test_a_header_keeps_its_own_inline_markdown(self):
+        html = bot._markdown_to_html("## Serves *4*")
+        self.assertEqual(html, "<b>Serves <i>4</i></b>")
+
+    def test_a_horizontal_rule_is_dropped_not_rendered(self):
+        html = bot._markdown_to_html("Ingredients here.\n---\nSteps here.")
+        self.assertEqual(html, "Ingredients here.\nSteps here.")
+
+    def test_horizontal_rule_styles_other_than_dashes_are_dropped(self):
+        for rule in ("***", "___", "----------"):
+            self.assertEqual(bot._markdown_to_html("a\n%s\nb" % rule), "a\nb")
+
+    def test_a_lone_dash_bullet_is_not_mistaken_for_a_rule(self):
+        html = bot._markdown_to_html("- milk")
+        self.assertEqual(html, "<pre>- milk</pre>")
 
     def test_html_special_characters_are_escaped(self):
         html = bot._markdown_to_html("watch out for <3 cilantro & onions")

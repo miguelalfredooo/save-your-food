@@ -436,6 +436,8 @@ def send_sample_nudge(tg, con, chat_id, today=None):
 # scramble the alignment, and everything else gets ordinary inline markdown.
 
 _BULLET_RE = re.compile(r"^\s*[-*•]\s+")
+_HEADER_RE = re.compile(r"^\s*#{1,6}\s+(.*)$")
+_HR_RE = re.compile(r"^\s*([-*_])\1{2,}\s*$")
 
 
 def _inline_markdown(escaped_line):
@@ -451,7 +453,21 @@ def _markdown_to_html(text):
     blocks = []
     i = 0
     while i < len(lines):
-        if _BULLET_RE.match(lines[i]):
+        line = lines[i]
+        # Telegram has no heading or rule support at all: a "### Title" or a
+        # standalone "---" line would otherwise show up as literal hash
+        # marks or dashes rather than doing anything. A heading becomes
+        # bold text instead; a rule is dropped outright, since a blank line
+        # already does the separating job in a chat.
+        if _HR_RE.match(line):
+            i += 1
+            continue
+        header = _HEADER_RE.match(line)
+        if header:
+            blocks.append("<b>%s</b>" % _inline_markdown(art.esc(header.group(1))))
+            i += 1
+            continue
+        if _BULLET_RE.match(line):
             j = i
             list_lines = []
             while j < len(lines) and (_BULLET_RE.match(lines[j]) or not lines[j].strip()):
@@ -462,7 +478,7 @@ def _markdown_to_html(text):
             blocks.append("<pre>%s</pre>" % art.esc("\n".join(list_lines)))
             i = j
         else:
-            blocks.append(_inline_markdown(art.esc(lines[i])))
+            blocks.append(_inline_markdown(art.esc(line)))
             i += 1
     return "\n".join(blocks)
 
