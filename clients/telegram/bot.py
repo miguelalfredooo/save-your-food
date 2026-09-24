@@ -185,6 +185,30 @@ def send_nudge(tg, con, chat_id, today=None):
     return len(items)
 
 
+def compose_pantry_html(items):
+    """The pantry, with a can over the pantry and an onion over the counter.
+
+    This is where the evergreen glyphs earn their keep. "Pantry" and "counter"
+    are the distinction people get wrong, and two drawings make the split
+    visible instead of leaving it to be read. Same can every time, on purpose.
+    """
+    if not items:
+        return fridge.compose_pantry(items)
+
+    stable = [i["name"] for i in items if i["kind"] == "stable"]
+    outside = [i["name"] for i in items if i["kind"] == "outside"]
+    parts = []
+    if stable:
+        parts.append(art.render(art.glyph("pantry"),
+                                "Pantry (%d)\n%s" % (len(stable), ", ".join(stable))))
+    if outside:
+        parts.append(art.render(art.glyph("counter"),
+                                "On the counter (%d)\n%s"
+                                % (len(outside), ", ".join(outside))))
+    head = "Not tracked, but I remember you have it."
+    return art.esc(head) + "\n\n" + "\n\n".join(parts)
+
+
 def send_delight(tg, con, chat_id, moment, item=None, caption=None):
     """One place every drawing goes through, so the rules hold everywhere.
 
@@ -281,7 +305,9 @@ def handle_message(tg, con, msg):
         tg.send(chat_id, fridge.compose_inventory(fridge.open_items(con, chat_id)))
         return
     if low.startswith("/pantry"):
-        tg.send(chat_id, fridge.compose_pantry(fridge.pantry_items(con, chat_id)))
+        items = fridge.pantry_items(con, chat_id)
+        body = compose_pantry_html(items)
+        tg.send(chat_id, body, html=bool(items))
         return
     if low.startswith("/undo"):
         tg.send(chat_id, fridge.undo_last(con, chat_id))

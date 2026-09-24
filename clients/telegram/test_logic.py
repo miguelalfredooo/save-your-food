@@ -796,10 +796,14 @@ class Delight(unittest.TestCase):
         self.assertEqual(art.choose("used", item="milk"), art.CARTON)
         self.assertEqual(art.choose("used", item="oat milk"), art.CARTON)
         self.assertEqual(art.choose("used", item="baby spinach"), art.LEAF)
-        self.assertEqual(art.choose("used", item="chicken thighs"), art.PAN)
+        self.assertEqual(art.choose("used", item="chicken thighs"), art.HEN)
+        self.assertEqual(art.choose("used", item="ground beef"), art.CHOP)
+        self.assertEqual(art.choose("used", item="salmon"), art.FISH)
         self.assertEqual(art.choose("used", item="leftover guiso"), art.POT)
         self.assertEqual(art.choose("used", item="eggs"), art.EGG)
         self.assertEqual(art.choose("used", item="parmesan"), art.WEDGE)
+        self.assertEqual(art.choose("used", item="sourdough bread"), art.LOAF)
+        self.assertEqual(art.choose("used", item="strawberries"), art.APPLE)
 
     def test_an_unmatched_food_still_gets_something(self):
         frame = art.choose("used", item="dragonfruit curd")
@@ -813,22 +817,44 @@ class Delight(unittest.TestCase):
 
     # --- never twice running ---
 
-    def test_the_same_frame_never_lands_twice(self):
+    def test_a_rotating_frame_never_lands_twice(self):
+        # Applies to frames only: an unmatched food falls through to the
+        # moment's own frames, and those are meant to surprise.
         first = art.choose("used", item="dragonfruit curd")
         second = art.choose("used", item="dragonfruit curd", avoid=first)
         self.assertNotEqual(first, second)
 
-    def test_avoiding_a_matched_frame_falls_back(self):
-        # Two milks in a row: the carton is right both times, but showing it
-        # twice is not, so it falls through to the moment's own frames.
+    def test_a_glyph_repeats_on_purpose(self):
+        # This inverts the rule that applies to frames, and the inversion is the
+        # point. A glyph is a label: two cartons in a row means two dairy items,
+        # which is correct. If the carton dodged itself it would stop meaning
+        # dairy, and the vocabulary would be worth nothing.
         again = art.choose("used", item="milk", avoid=art.CARTON)
-        self.assertNotEqual(again, art.CARTON)
-        self.assertIsNotNone(again)
+        self.assertEqual(again, art.CARTON)
+
+    def test_a_glyph_is_the_same_every_time(self):
+        for _ in range(5):
+            self.assertEqual(art.glyph("pantry"), art.CAN)
+            self.assertEqual(art.for_item("chicken thighs"), art.HEN)
+
+    def test_every_category_has_exactly_one_glyph(self):
+        for key, frame in art.GLYPHS.items():
+            self.assertTrue(frame.strip(), key)
+        # No two categories share a drawing: a shared glyph means the
+        # vocabulary cannot distinguish the things it is meant to distinguish.
+        frames = list(art.GLYPHS.values())
+        self.assertEqual(len(frames), len(set(frames)))
+
+    def test_the_buckets_have_their_own_marks(self):
+        self.assertEqual(art.glyph("pantry"), art.CAN)
+        self.assertEqual(art.glyph("counter"), art.ONION)
+        self.assertEqual(art.glyph("fridge"), art.ICEBOX)
+        self.assertNotEqual(art.CAN, art.ONION)
 
     def test_a_single_frame_moment_repeats_rather_than_vanishing(self):
         # "welcome" has one frame. Better the same door twice than nothing:
         # onboarding only finishes once per person anyway.
-        self.assertEqual(art.choose("welcome", avoid=art.DOOR), art.DOOR)
+        self.assertEqual(art.choose("welcome", avoid=art.ICEBOX), art.ICEBOX)
 
     def test_the_last_frame_is_remembered_per_chat(self):
         fridge.note_art(self.con, 1, art.CARTON)
@@ -857,6 +883,18 @@ class Delight(unittest.TestCase):
     def test_a_caption_sits_under_the_drawing(self):
         out = art.render(art.CARTON, "That one did not go to waste.")
         self.assertTrue(out.index("</pre>") < out.index("That one"))
+
+    def test_a_food_name_cannot_break_an_html_message(self):
+        # "<3 cilantro" unescaped makes Telegram read the rest as a tag and
+        # silently drop it.
+        out = art.render(art.CAN, "cumin & <3 cilantro")
+        self.assertIn("&amp;", out)
+        self.assertIn("&lt;3", out)
+
+    def test_a_plain_message_is_not_escaped(self):
+        # No pre block means no HTML, so escaping here would show the user
+        # "&amp;" instead of "&".
+        self.assertEqual(art.render(None, "cumin & spice"), "cumin & spice")
 
     def test_no_frame_means_just_the_caption(self):
         self.assertEqual(art.render(None, "Noted."), "Noted.")

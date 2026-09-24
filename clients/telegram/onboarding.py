@@ -135,12 +135,8 @@ def skip(con, chat_id, hour):
 def handle_item(con, chat_id, text, today=None):
     """Step 1: one item. Returns (reply, next_prompt or None)."""
     today = today or date.today()
-    names, too_long = fridge.parse_list(text, report=True)
+    names = fridge.parse_list(text)
     if not names:
-        if too_long:
-            return ("That was too long to be an item name, so I left it out "
-                    "rather than guessing. Just one thing, plainly: milk, or "
-                    "chicken thighs, or spinach."), None
         return ("I couldn't read an item in that. Just one thing, plainly. "
                 "Like milk, or chicken thighs, or spinach."), None
 

@@ -18,6 +18,35 @@ model behind it, so it cannot draw anything on demand. Every frame ships in the
 library, vetted by you in advance. If someone asks for art "generated per
 message", explain that and offer a frame instead.
 
+## Two kinds of drawing, with opposite rules
+
+This is the thing to get right before touching anything.
+
+**GLYPHS are evergreen.** One drawing per category, the same one every time. A
+can always means pantry, a hen always means raw poultry, an onion always means
+the counter. **Repetition is the point.** Used consistently they stop being
+decoration and become a vocabulary, so someone can *see* which bucket a thing
+landed in rather than read that it did. That matters most for pantry versus
+fridge, which is the distinction people actually get wrong.
+
+**FRAMES rotate.** They mark a moment with no food behind it: an empty at-risk
+list, the end of setup, a milestone. Those are meant to feel like a small
+surprise, so the same one twice running makes it furniture.
+
+    a glyph MUST repeat     or it is not a vocabulary
+    a frame MUST NOT        or it is not a surprise
+
+So `avoid` is honoured for frames and deliberately ignored for glyphs. If you
+find yourself "fixing" two cartons in a row, stop: two cartons means two dairy
+items, and a carton that dodges itself no longer means dairy.
+
+Adding a glyph is therefore a **bigger** decision than adding a frame. It is a
+word in a language people will learn by repetition, so:
+
+- one drawing per category, never shared between two
+- never change an existing glyph once it has shipped; someone has learned it
+- a new category needs to be a category people would actually distinguish
+
 ## The rules, and why each exists
 
 These are not style preferences. Each one is a failure that was reasoned
@@ -28,7 +57,7 @@ calling it taste.
 |---|---|
 | Never in a nudge that needs a decision | The nudge has to scan on a lock screen in one glance. A drawing pushes the item name down and buys nothing. Same reasoning as keeping money out of a nudge. |
 | Never celebrating a toss | Food was wasted, and a toss is already when someone feels worst about using this. A picture over it reads as mockery. |
-| Never twice running | Delight is a surprise. The same drawing three times is furniture. |
+| Never twice running, for frames | Delight is a surprise. The same frame three times is furniture. Glyphs are the opposite: see above. |
 | Rare things stay rare | A crown every Tuesday is not a crown. Milestones are 10, 25, 50, 100, 250, 500. |
 | Art goes on outcomes, not questions | A drawing marks something that happened. A question is still open. |
 
@@ -54,8 +83,8 @@ all of them, so run it.
 
 ## Matching the food beats a generic tick
 
-A tick is acknowledgement. A little carton when someone finishes the milk is
-recognition, and it costs nothing: `ITEM_ART` reuses the same keyword
+A tick is acknowledgement. A carton when someone finishes the milk is
+recognition, and it costs nothing: `ITEM_CATEGORY` reuses the same keyword
 categories as the shelf-life table.
 
 When adding a category, **check it against the shelf-life keywords first** so a
@@ -63,6 +92,18 @@ name cannot match a drawing that contradicts its bucket. Specific goes before
 general, exactly as in `SHELF_LIFE` — `oat milk` must reach the carton, and
 `coconut milk` must never reach anything, because it is a pantry item and is
 never closed out at all.
+
+Glyphs also mark the **buckets** themselves, not just food: the can heads the
+pantry list and the onion heads the counter list in `/pantry`. That is the
+highest-value use of the whole set, because it makes the sort visible.
+
+## Captions go through `art.esc`
+
+Any caption in an HTML message carries food names, and food names come from
+users. One stray angle bracket in `<3 cilantro` and Telegram reads the rest of
+the message as a tag and silently drops it. `art.render` escapes captions for
+you; if you compose HTML by hand, call `art.esc` yourself. A message with **no**
+pre block must not be escaped, or the user sees `&amp;`.
 
 ## How to add a frame
 

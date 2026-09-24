@@ -127,24 +127,50 @@ squash` vs `peanut butter`) and the correction phrasings, including negation.
 
 ## Delight
 
-`art.py` holds small ASCII drawings shown at closing moments, matched to the
-food where there is a match: a carton for the milk, a leaf for the spinach, a
-pan for the chicken.
+`art.py` holds two kinds of drawing, with opposite rules.
 
-Where they appear: using something, freezing it, an empty at-risk list,
-finishing setup, and milestones (10, 25, 50, 100, 250, 500 uses).
+**Glyphs are evergreen.** One per category, the same one every time. A can means
+pantry, an onion means the counter, a hen means raw poultry, a carton means
+dairy. Repetition is the point: used consistently they become a vocabulary, so
+you can see which bucket something landed in rather than read that it did.
 
-Where they never appear, and why:
+    pantry      counter      poultry      dairy       greens
+    ,-----.       \|/          ,          ____         ,/|
+    |=====|      .-'-.        (o)        |\  /|        / /
+    | ### |     ( ( ) )      (   )>      | \/ |       / /
+    | ### |      '---'        ^ ^        |    |      (_/
+    '-----'                              |____|
+
+Full set: pantry, counter, fridge, poultry, meat, fish, greens, dairy, egg,
+cheese, leftovers, bread, fruit, frozen.
+
+The can heads the pantry list and the onion heads the counter list in `/pantry`,
+which is the most useful thing the set does: it makes the sort visible.
+
+**Frames rotate.** They mark a moment with no food behind it: an empty at-risk
+list, the end of setup, a milestone (10, 25, 50, 100, 250, 500 uses).
+
+| | |
+|---|---|
+| A glyph **must** repeat | or it is not a vocabulary |
+| A frame **must not** | or it is not a surprise |
+
+Two cartons in a row is correct: it means two dairy items.
+
+Where drawings never appear, and why:
 
 | Never | Why |
 |---|---|
 | A nudge needing a decision | It has to scan on a lock screen. A drawing pushes the item name down. |
 | A toss | Food was wasted. A picture over it reads as mockery. One quiet line instead. |
-| Twice running | Delight is a surprise; the same drawing three times is furniture. |
+| A question | Art marks an outcome; a disposal prompt is still open. |
 
 Limits: pure ASCII (a Cyrillic `o` renders as an empty box on some phones), 16
 characters wide, 6 lines tall, and a `<pre>` block with HTML parse mode, because
-Telegram's default font is proportional and destroys columns.
+Telegram's default font is proportional and destroys columns. Captions carry
+food names, so they go through `art.esc`.
 
-The `ascii-art-curator` agent in `.claude/agents/` authors and vets frames.
-Nothing is drawn at runtime: the bot is stdlib-only with no model behind it.
+The `ascii-art-curator` agent in `.claude/agents/` authors and vets the set.
+Nothing is drawn at runtime: the bot is stdlib-only with no model behind it, and
+evergreen art would not want it to. A can that came out slightly different each
+time would be worse than no can.
