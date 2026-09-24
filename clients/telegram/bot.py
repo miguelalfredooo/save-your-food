@@ -226,7 +226,7 @@ def send_delight(tg, con, chat_id, moment, item=None, caption=None):
     return True
 
 
-def run_onboarding(tg, con, chat_id, text):
+def run_onboarding(tg, con, chat_id, text, cfg):
     stage = onb.step(con, chat_id)
 
     if stage == "1":
@@ -246,7 +246,7 @@ def run_onboarding(tg, con, chat_id, text):
     # Step 3 is answered with a button and step 4 with a tap on the sample
     # nudge. A typed message at either point is a list, so take it as one.
     onb.set_step(con, chat_id, onb.DONE)
-    handle_message(tg, con, {"chat": {"id": chat_id}, "text": text})
+    handle_message(tg, con, {"chat": {"id": chat_id}, "text": text}, cfg)
 
 
 def send_sample_nudge(tg, con, chat_id, today=None):
@@ -269,7 +269,7 @@ def send_sample_nudge(tg, con, chat_id, today=None):
             buttons=item_buttons(soonest["id"]))
 
 
-def handle_message(tg, con, msg):
+def handle_message(tg, con, msg, cfg):
     chat_id = msg["chat"]["id"]
     text = (msg.get("text") or "").strip()
     if not text:
@@ -280,7 +280,7 @@ def handle_message(tg, con, msg):
     # While onboarding is running it owns plain text, because each step is a
     # question and the answer means something different at each one.
     if onb.active(con, chat_id) and not text.startswith("/"):
-        run_onboarding(tg, con, chat_id, text)
+        run_onboarding(tg, con, chat_id, text, cfg)
         return
 
     low = text.lower()
@@ -401,7 +401,7 @@ def handle_message(tg, con, msg):
                   "  " + ", ".join(outside)]
     if stable or outside:
         lines += ["", "/pantry any time to see that list."]
-    soonest = min((a[1] for a in added), default=None)
+    soonest = min((a[1] for a in tracked), default=None)
     if soonest:
         lines += ["", "First one to watch: %s." % sl.when(soonest)]
     tg.send(chat_id, "\n".join(lines))
@@ -547,7 +547,7 @@ def main():
                 for upd in res["result"]:
                     offset = upd["update_id"] + 1
                     if "message" in upd:
-                        handle_message(tg, con, upd["message"])
+                        handle_message(tg, con, upd["message"], cfg)
                     elif "callback_query" in upd:
                         handle_callback(tg, con, upd["callback_query"])
             sweep(tg, con, cfg)
