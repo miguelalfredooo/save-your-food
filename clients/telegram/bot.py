@@ -8,6 +8,7 @@ Standard library only. Nothing to install: if you can run python3, you can run t
 Reads config.json for the bot token. The token is never logged or echoed.
 """
 
+import fcntl
 import json
 import os
 import socket
@@ -44,6 +45,7 @@ import onboarding as onb  # noqa: E402
 import art  # noqa: E402
 
 CONFIG_PATH = os.path.join(HERE, "config.json")
+LOCK_PATH = os.path.join(HERE, ".bot.lock")
 API = "https://api.telegram.org/bot%s/%s"
 
 POLL_TIMEOUT = 50      # long-poll seconds
@@ -94,6 +96,22 @@ def milestone_line(n):
 
 
 # --- config ----------------------------------------------------------------
+
+def acquire_lock():
+    """Refuse to start if another copy is already running. Two copies polling
+    getUpdates at once get HTTP 409 errors from Telegram and lose messages.
+
+    Returns the open file handle. It has to stay referenced for the life of
+    the process: closing it, or letting it get garbage collected, releases
+    the lock.
+    """
+    lock_file = open(LOCK_PATH, "w")
+    try:
+        fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        sys.exit("Another copy of this bot is already running (%s is locked)." % LOCK_PATH)
+    return lock_file
+
 
 def load_config():
     if not os.path.exists(CONFIG_PATH):
@@ -655,6 +673,7 @@ def sweep(tg, con, cfg, now=None):
 # --- main ------------------------------------------------------------------
 
 def main():
+    _lock = acquire_lock()   # noqa: F841 (held for the life of the process)
     cfg = load_config()
     if not cfg["allowed_chat_ids"]:
         print("! No allowed_chat_ids set in config.json. This bot will "

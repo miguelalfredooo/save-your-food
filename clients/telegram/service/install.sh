@@ -31,6 +31,21 @@ echo "Logs:    $LOG_DIR"
 
 mkdir -p "$LOG_DIR"
 
+# Two copies polling getUpdates at once get HTTP 409 errors and lose
+# messages, so a hand-started bot.py has to go before the managed one starts.
+# Matched on a trailing "bot.py" preceded by a space or slash, not the full
+# absolute path: someone who ran it by hand almost certainly typed
+# "python3 bot.py" from inside this directory, which never puts the absolute
+# path on the command line at all. bot.py's own lock file (.bot.lock) is the
+# second line of defense if this ever misses one.
+PIDS="$(pgrep -f '[/ ]bot\.py$' || true)"
+if [ -n "$PIDS" ]; then
+    echo "Stopping bot.py started by hand (pid $PIDS)..."
+    kill $PIDS
+    sleep 1
+    kill -9 $PIDS 2>/dev/null || true
+fi
+
 # Idempotent: boot out any existing copy of the service before installing.
 launchctl bootout "gui/$UID_NUM/$LABEL" 2>/dev/null || true
 

@@ -1019,6 +1019,33 @@ class FakeTG:
 CFG = {"nudge_hour": 16, "nudge_minute": 30, "allowed_chat_ids": []}
 
 
+class SingleInstanceLock(unittest.TestCase):
+    """Two copies of the bot polling getUpdates at once get HTTP 409 errors
+    from Telegram and lose messages, so a second copy must refuse to start."""
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.orig_lock_path = bot.LOCK_PATH
+        bot.LOCK_PATH = os.path.join(self.tmp_dir, ".bot.lock")
+
+    def tearDown(self):
+        bot.LOCK_PATH = self.orig_lock_path
+
+    def test_a_second_lock_attempt_refuses_to_start(self):
+        first = bot.acquire_lock()
+        try:
+            with self.assertRaises(SystemExit):
+                bot.acquire_lock()
+        finally:
+            first.close()
+
+    def test_the_lock_is_free_again_once_released(self):
+        first = bot.acquire_lock()
+        first.close()
+        second = bot.acquire_lock()   # must not raise
+        second.close()
+
+
 class TokenSafety(unittest.TestCase):
     def test_the_token_is_redacted_from_error_text(self):
         tg = bot.Telegram("SECRET_TOKEN_VALUE")

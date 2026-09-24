@@ -9,6 +9,7 @@ Restock.md
 clients/telegram/config.json
 clients/telegram/fridge.db
 clients/telegram/seed.json
+clients/telegram/.bot.lock
 
 # Python
 __pycache__/
