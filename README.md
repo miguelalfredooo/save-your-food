@@ -71,6 +71,16 @@ Quantity tracking. A static dashboard. Unbounded reminders. Prices inside a nudg
 Budgets or targets. Cross-store price comparison. Each of those is explained in
 `docs/design-decisions.md`, because the reasons are more useful than the rules.
 
+## Keeping it in sync
+
+The skill is the thing that changes; everything else describes it. When it changes,
+`skill/SKILL.md` here needs re-templating from the installed version and committing.
+
+The weekly check-in does this automatically and says nothing unless something is off.
+If you're running this yourself, the discipline is worth copying: **one copy of the
+reasoning, and a scheduled job that checks it.** Two copies of the same argument in two
+documents is how both end up wrong, which is exactly what happened here before the split.
+
 ## Your data stays yours
 
 `Pantry.md`, `Patterns.md`, `CookLog.md` and `Restock.md` are your kitchen, your
