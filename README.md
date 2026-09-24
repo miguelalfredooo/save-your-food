@@ -1,5 +1,7 @@
 # Fridge Loop
 
+![Private](https://img.shields.io/badge/repo-private-red)
+
 A system for using food before it goes bad.
 
 It watches what's in your fridge, works out roughly when each thing turns, and
