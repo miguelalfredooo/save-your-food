@@ -1059,6 +1059,7 @@ class FakeTG:
 
     def send(self, chat_id, text, buttons=None, html=False):
         self.sent.append(text)
+        return {"ok": True}   # real Telegram.send() returns a dict on success, None on failure
 
     def answer(self, callback_id, text=None):
         self.answers.append(text)
@@ -1468,6 +1469,52 @@ class SeedClassification(unittest.TestCase):
         self._write_seed([{"name": "milk", "use_by": "2026-09-30", "risk": "yellow"}])
         bot.handle_seed(self.tg, self.con, 1)
         self.assertNotIn("pantry", self.tg.sent[-1])
+
+
+class LLMReplyFormatting(unittest.TestCase):
+    """The model writes plain markdown and, for a list, "- " bulleted
+    lines. Telegram needs HTML to render either, and a run of bulleted
+    lines needs a monospace <pre> block or a phone's proportional font
+    scrambles the alignment."""
+
+    def test_bold_and_italic_become_html_tags(self):
+        html = bot._markdown_to_html("**Got it.** Should be good till *Sunday*.")
+        self.assertEqual(html, "<b>Got it.</b> Should be good till <i>Sunday</i>.")
+
+    def test_code_spans_become_code_tags(self):
+        self.assertEqual(bot._markdown_to_html("use `/undo` any time"),
+                         "use <code>/undo</code> any time")
+
+    def test_a_bulleted_list_is_wrapped_in_a_pre_block(self):
+        text = "Here's what you have:\n- milk: today\n- eggs: in 5 days"
+        html = bot._markdown_to_html(text)
+        self.assertEqual(html, "Here's what you have:\n<pre>- milk: today\n- eggs: in 5 days</pre>")
+
+    def test_html_special_characters_are_escaped(self):
+        html = bot._markdown_to_html("watch out for <3 cilantro & onions")
+        self.assertNotIn("<3", html)
+        self.assertIn("&lt;3", html)
+        self.assertIn("&amp;", html)
+
+    def test_a_single_line_reply_needs_no_pre_block(self):
+        html = bot._markdown_to_html("Got it, milk's in.")
+        self.assertNotIn("<pre>", html)
+
+    def test_send_llm_reply_uses_html_first(self):
+        tg = FakeTG()
+        bot.send_llm_reply(tg, 1, "**Got it**")
+        self.assertEqual(tg.sent, ["<b>Got it</b>"])
+
+    def test_send_llm_reply_falls_back_to_plain_text_on_failure(self):
+        class FailOnHtmlTG(FakeTG):
+            def send(self, chat_id, text, buttons=None, html=False):
+                self.sent.append(text)
+                return None if html else {"ok": True}
+        tg = FailOnHtmlTG()
+        bot.send_llm_reply(tg, 1, "**Got it**")
+        # First attempt (HTML) failed and is still recorded; the fallback
+        # (plain, unformatted) is what actually reaches the user last.
+        self.assertEqual(tg.sent[-1], "**Got it**")
 
 
 class BotHandlers(unittest.TestCase):

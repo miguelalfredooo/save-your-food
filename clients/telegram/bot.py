@@ -12,6 +12,7 @@ import base64
 import fcntl
 import json
 import os
+import re
 import socket
 import sys
 import time
@@ -426,6 +427,54 @@ def send_sample_nudge(tg, con, chat_id, today=None):
             buttons=item_buttons(soonest["id"]))
 
 
+# --- rendering an LLM reply -------------------------------------------------
+#
+# The model writes plain markdown (**bold**, *italic*, `code`) and, when
+# asked to list more than one thing, "- " bulleted lines (the system prompt
+# asks for exactly this). Telegram needs HTML to render any of it: a run of
+# bulleted lines goes in a <pre> block so a phone's proportional font can't
+# scramble the alignment, and everything else gets ordinary inline markdown.
+
+_BULLET_RE = re.compile(r"^\s*[-*•]\s+")
+
+
+def _inline_markdown(escaped_line):
+    line = re.sub(r"(\*\*|__)(.+?)\1", r"<b>\2</b>", escaped_line)
+    line = re.sub(r"`([^`]+?)`", r"<code>\1</code>", line)
+    line = re.sub(r"(?<!\*)\*(?!\*)([^*\n]+?)\*(?!\*)", r"<i>\1</i>", line)
+    line = re.sub(r"(?<!_)_(?!_)([^_\n]+?)_(?!_)", r"<i>\1</i>", line)
+    return line
+
+
+def _markdown_to_html(text):
+    lines = text.split("\n")
+    blocks = []
+    i = 0
+    while i < len(lines):
+        if _BULLET_RE.match(lines[i]):
+            j = i
+            list_lines = []
+            while j < len(lines) and (_BULLET_RE.match(lines[j]) or not lines[j].strip()):
+                list_lines.append(lines[j])
+                j += 1
+            while list_lines and not list_lines[-1].strip():
+                list_lines.pop()
+            blocks.append("<pre>%s</pre>" % art.esc("\n".join(list_lines)))
+            i = j
+        else:
+            blocks.append(_inline_markdown(art.esc(lines[i])))
+            i += 1
+    return "\n".join(blocks)
+
+
+def send_llm_reply(tg, chat_id, text):
+    """Falls back to the original, unformatted plain text if the converted
+    HTML ever fails to send: a malformed tag from an imperfect conversion of
+    free-form model text must never mean the user gets nothing back."""
+    if tg.send(chat_id, _markdown_to_html(text), html=True) is None:
+        tg.send(chat_id, text)
+
+
 MAX_PHOTO_BYTES = 10 * 1024 * 1024
 
 
@@ -453,7 +502,7 @@ def handle_photo(tg, con, chat_id, msg, cfg):
         tg.send(chat_id, "Couldn't get that photo from Telegram. Try sending it again.")
         return
     image_b64 = base64.b64encode(photo_bytes).decode()
-    tg.send(chat_id, llm_agent.run_agent(con, chat_id, caption, cfg, image_b64=image_b64))
+    send_llm_reply(tg, chat_id, llm_agent.run_agent(con, chat_id, caption, cfg, image_b64=image_b64))
 
 
 def handle_message(tg, con, msg, cfg):
@@ -488,7 +537,7 @@ def handle_message(tg, con, msg, cfg):
     # daily nudge or the used/frozen/tossed buttons, which are unchanged in
     # both modes since they are not an understanding problem.
     if cfg["llm_mode"]:
-        tg.send(chat_id, llm_agent.run_agent(con, chat_id, text, cfg))
+        send_llm_reply(tg, chat_id, llm_agent.run_agent(con, chat_id, text, cfg))
         return
 
     # A reply to me or a genuine question can arrive at any point, onboarding
