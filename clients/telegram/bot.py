@@ -426,6 +426,18 @@ def send_sample_nudge(tg, con, chat_id, today=None):
             buttons=item_buttons(soonest["id"]))
 
 
+MAX_PHOTO_BYTES = 10 * 1024 * 1024
+
+
+def _pick_photo(sizes):
+    """Telegram sends several sizes of the same photo, smallest first. The
+    largest one at or under the cap, rather than always the biggest: a huge
+    photo still gets something sent instead of a flat refusal, and the model
+    doesn't need more resolution than that to read a fridge or a receipt."""
+    under_cap = [s for s in sizes if s.get("file_size", 0) <= MAX_PHOTO_BYTES]
+    return (under_cap[-1] if under_cap else sizes[0])["file_id"]
+
+
 def handle_photo(tg, con, chat_id, msg, cfg):
     """A photo only means something in llm_mode: there is no way for the
     regex pipeline to read an image, and pretending otherwise would be the
@@ -435,7 +447,7 @@ def handle_photo(tg, con, chat_id, msg, cfg):
                          "commas between things.")
         return
     caption = (msg.get("caption") or "").strip()
-    file_id = msg["photo"][-1]["file_id"]   # largest size Telegram sent
+    file_id = _pick_photo(msg["photo"])
     photo_bytes = tg.download_photo(file_id)
     if photo_bytes is None:
         tg.send(chat_id, "Couldn't get that photo from Telegram. Try sending it again.")

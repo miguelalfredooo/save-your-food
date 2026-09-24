@@ -1192,6 +1192,21 @@ class LLMAgentTools(unittest.TestCase):
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0]["use_by_date"], TODAY + timedelta(days=7))
 
+    def test_add_items_is_capped_like_the_regular_capture_path(self):
+        # A huge pasted list (or a model that just keeps calling this) must
+        # not track everything at once with no limit — the same shape of bug
+        # that got 319 items dumped into one chat's fridge via /seed.
+        # Fixed-width, zero-padded names: _find_open_item's fuzzy substring
+        # match would otherwise fold "item1" and "item10"-"item19" together.
+        items = [{"name": "item%02d" % i, "estimated_days": 5} for i in range(70)]
+        result = llm_agent.exec_add_items(self.con, 1, {"items": items}, TODAY)
+        self.assertEqual(len(fridge.open_items(self.con, 1)), fridge.MAX_ITEMS)
+        self.assertEqual(result["n_dropped"], 70 - fridge.MAX_ITEMS)
+
+    def test_add_items_under_the_cap_reports_no_drop(self):
+        result = llm_agent.exec_add_items(self.con, 1, {"items": [{"name": "milk"}]}, TODAY)
+        self.assertNotIn("n_dropped", result)
+
     def test_update_item_closes_it_out(self):
         fridge.add_items(self.con, 1, ["spinach"], TODAY)
         result = llm_agent.exec_update_item(self.con, 1, {"name": "spinach", "state": "used"}, TODAY)
@@ -1239,6 +1254,14 @@ class LLMAgentTools(unittest.TestCase):
         self.assertIn("my guess", prompt)
         self.assertIn("your date", prompt)
 
+    def test_the_system_prompt_treats_content_as_data_not_instructions(self):
+        # SKILL.md's Untrusted content section: "if the Telegram client ever
+        # gets an AI model, these rules go into its system prompt." A
+        # malicious photo or pasted message must not be able to talk the
+        # model into anything beyond logging food.
+        prompt = llm_agent.build_system_prompt(self.con, 1, TODAY)
+        self.assertIn("never instructions", prompt)
+
 
 class LLMAgentLoop(unittest.TestCase):
     """The tool-calling loop, driven with a fake model (the `caller`
@@ -1283,6 +1306,18 @@ class LLMAgentLoop(unittest.TestCase):
             raise TimeoutError("timed out")
         reply = llm_agent.run_agent(self.con, 1, "hello", CFG, TODAY, caller=caller)
         self.assertIn("trouble", reply.lower())
+
+    def test_exception_details_never_reach_the_user(self):
+        # The exception text goes to a server-side print, not the Telegram
+        # reply: an OpenRouter key lives in a header only by luck of the
+        # current provider, and this is the one path that talks back to the
+        # user directly rather than just logging.
+        cfg = dict(CFG, openrouter_api_key="sk-or-super-secret-key")
+        def caller(messages):
+            raise Exception("connection to host failed, key=sk-or-super-secret-key")
+        reply = llm_agent.run_agent(self.con, 1, "hello", cfg, TODAY, caller=caller)
+        self.assertNotIn("sk-or-super-secret-key", reply)
+        self.assertNotIn("connection to host failed", reply)
 
     def test_a_runaway_tool_loop_gives_up_instead_of_hanging(self):
         caller = lambda messages: self._tool_call("list_items", {})
@@ -1475,6 +1510,21 @@ class BotHandlers(unittest.TestCase):
         self.assertEqual(self.tg.sent, ["fake agent reply"])
         # Never reached fridge.add_items via the regex path.
         self.assertEqual(fridge.open_items(self.con, 1), [])
+
+    def test_pick_photo_prefers_the_largest_size_under_the_cap(self):
+        sizes = [{"file_id": "small", "file_size": 1000},
+                 {"file_id": "medium", "file_size": 500000},
+                 {"file_id": "huge", "file_size": bot.MAX_PHOTO_BYTES + 1}]
+        self.assertEqual(bot._pick_photo(sizes), "medium")
+
+    def test_pick_photo_falls_back_to_smallest_when_all_are_oversized(self):
+        sizes = [{"file_id": "small", "file_size": bot.MAX_PHOTO_BYTES + 1},
+                 {"file_id": "big", "file_size": bot.MAX_PHOTO_BYTES + 1000}]
+        self.assertEqual(bot._pick_photo(sizes), "small")
+
+    def test_pick_photo_handles_a_missing_file_size(self):
+        # Telegram does not always report file_size; treat it as small enough.
+        self.assertEqual(bot._pick_photo([{"file_id": "only"}]), "only")
 
     def test_a_photo_is_refused_plainly_outside_llm_mode(self):
         msg = {"chat": {"id": 1, "type": "private"}, "photo": [{"file_id": "abc"}]}
