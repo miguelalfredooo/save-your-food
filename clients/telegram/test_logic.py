@@ -1,5 +1,6 @@
 """Everything that can be checked without Telegram. Run: python3 test_logic.py"""
 
+import json
 import os
 import sys
 import sqlite3
@@ -13,6 +14,7 @@ import shelf_life as sl
 import onboarding as onb
 import art
 import bot
+import llm_agent
 
 TODAY = date(2026, 9, 23)   # a Wednesday, so weekday names are checkable
 
@@ -1016,7 +1018,8 @@ class FakeTG:
         self.edits.append(text)
 
 
-CFG = {"nudge_hour": 16, "nudge_minute": 30, "allowed_chat_ids": []}
+CFG = {"nudge_hour": 16, "nudge_minute": 30, "allowed_chat_ids": [],
+       "llm_mode": False, "openrouter_api_key": "", "llm_model": "anthropic/claude-haiku-4.5"}
 
 
 class CrashLoopMessages(unittest.TestCase):
@@ -1078,6 +1081,170 @@ class SingleInstanceLock(unittest.TestCase):
         second.close()
 
 
+class LLMAgentTools(unittest.TestCase):
+    """The tool-execution functions, fully offline: no network, no API key.
+    These write to the same items/pantry tables fridge.py defines."""
+
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.tmp.close()
+        self.con = fridge.connect(self.tmp.name)
+
+    def tearDown(self):
+        self.con.close()
+        os.unlink(self.tmp.name)
+
+    def test_add_items_uses_the_models_own_estimate(self):
+        result = llm_agent.exec_add_items(
+            self.con, 1,
+            {"items": [{"name": "butter chicken (leftovers)", "estimated_days": 4}]},
+            TODAY)
+        self.assertEqual(len(result["added"]), 1)
+        item = fridge.open_items(self.con, 1)[0]
+        self.assertEqual(item["name"], "butter chicken (leftovers)")
+        self.assertEqual(item["use_by_date"], TODAY + timedelta(days=4))
+        self.assertTrue(item["estimated"])   # the model guessed, didn't state a date
+
+    def test_add_items_falls_back_to_the_shelf_life_table_with_no_estimate(self):
+        llm_agent.exec_add_items(self.con, 1, {"items": [{"name": "milk"}]}, TODAY)
+        item = fridge.open_items(self.con, 1)[0]
+        self.assertEqual(item["use_by_date"], sl.use_by("milk", TODAY)[0])
+
+    def test_a_stated_date_is_not_marked_as_a_guess(self):
+        llm_agent.exec_add_items(
+            self.con, 1, {"items": [{"name": "milk", "estimated_days": 10,
+                                     "stated_date": True}]}, TODAY)
+        item = fridge.open_items(self.con, 1)[0]
+        self.assertFalse(item["estimated"])
+
+    def test_pantry_flag_routes_to_the_pantry_not_the_fridge(self):
+        result = llm_agent.exec_add_items(
+            self.con, 1, {"items": [{"name": "dry lentils", "pantry": True}]}, TODAY)
+        self.assertEqual(result["pantry"], ["dry lentils"])
+        self.assertEqual(fridge.open_items(self.con, 1), [])
+        self.assertEqual(fridge.pantry_items(self.con, 1)[0]["name"], "dry lentils")
+
+    def test_a_known_shelf_stable_keyword_goes_to_pantry_even_unflagged(self):
+        # "cumin" is in shelf_life.STABLE; the model does not have to know
+        # that or set pantry=True itself.
+        llm_agent.exec_add_items(self.con, 1, {"items": [{"name": "cumin"}]}, TODAY)
+        self.assertEqual(fridge.open_items(self.con, 1), [])
+        self.assertEqual(fridge.pantry_items(self.con, 1)[0]["name"], "cumin")
+
+    def test_adding_an_already_tracked_name_updates_it_not_duplicates(self):
+        llm_agent.exec_add_items(self.con, 1, {"items": [{"name": "milk", "estimated_days": 3}]}, TODAY)
+        llm_agent.exec_add_items(self.con, 1, {"items": [{"name": "milk", "estimated_days": 7}]}, TODAY)
+        items = fridge.open_items(self.con, 1)
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["use_by_date"], TODAY + timedelta(days=7))
+
+    def test_update_item_closes_it_out(self):
+        fridge.add_items(self.con, 1, ["spinach"], TODAY)
+        result = llm_agent.exec_update_item(self.con, 1, {"name": "spinach", "state": "used"}, TODAY)
+        self.assertEqual(result["ok"], True)
+        self.assertEqual(fridge.open_items(self.con, 1), [])
+
+    def test_update_item_matches_a_forgiving_name(self):
+        fridge.add_items(self.con, 1, ["spinach"], TODAY)
+        result = llm_agent.exec_update_item(self.con, 1, {"name": "the spinach", "state": "tossed"}, TODAY)
+        self.assertEqual(result["name"], "spinach")
+
+    def test_update_item_corrects_the_date_without_closing_it(self):
+        fridge.add_items(self.con, 1, ["milk"], TODAY)
+        llm_agent.exec_update_item(self.con, 1, {"name": "milk", "estimated_days": 2}, TODAY)
+        item = fridge.open_items(self.con, 1)[0]
+        self.assertEqual(item["use_by_date"], TODAY + timedelta(days=2))
+
+    def test_update_item_reports_an_error_for_an_unknown_name(self):
+        result = llm_agent.exec_update_item(self.con, 1, {"name": "durian"}, TODAY)
+        self.assertIn("error", result)
+
+    def test_remove_item_deletes_outright(self):
+        fridge.add_items(self.con, 1, ["milk"], TODAY)
+        result = llm_agent.exec_remove_item(self.con, 1, {"name": "milk"})
+        self.assertEqual(result["ok"], True)
+        self.assertEqual(fridge.open_items(self.con, 1), [])
+
+    def test_list_items_reports_both_piles(self):
+        fridge.add_items(self.con, 1, ["milk", "cumin"], TODAY)
+        result = llm_agent.exec_list_items(self.con, 1, TODAY)
+        self.assertEqual([i["name"] for i in result["fridge"]], ["milk"])
+        self.assertEqual(result["pantry"], ["cumin"])
+
+    def test_prompt_names_empty_fridge_and_pantry_plainly(self):
+        prompt = llm_agent.build_system_prompt(self.con, 1, TODAY)
+        self.assertIn("Fridge: empty", prompt)
+        self.assertIn("Pantry: empty", prompt)
+
+    def test_prompt_marks_guesses_and_stated_dates_differently(self):
+        # "dragonfruit curd" isn't in shelf_life's table, so it's a real guess.
+        fridge.add_items(self.con, 1, ["dragonfruit curd"], TODAY)
+        llm_agent.exec_add_items(self.con, 1, {"items": [{"name": "yogurt", "estimated_days": 5,
+                                                          "stated_date": True}]}, TODAY)
+        prompt = llm_agent.build_system_prompt(self.con, 1, TODAY)
+        self.assertIn("my guess", prompt)
+        self.assertIn("your date", prompt)
+
+
+class LLMAgentLoop(unittest.TestCase):
+    """The tool-calling loop, driven with a fake model (the `caller`
+    injection point) so no network or API key is needed."""
+
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.tmp.close()
+        self.con = fridge.connect(self.tmp.name)
+
+    def tearDown(self):
+        self.con.close()
+        os.unlink(self.tmp.name)
+
+    @staticmethod
+    def _text_reply(text):
+        return {"choices": [{"message": {"content": text}}]}
+
+    @staticmethod
+    def _tool_call(name, arguments, call_id="call1"):
+        return {"choices": [{"message": {
+            "tool_calls": [{"id": call_id, "function": {
+                "name": name, "arguments": json.dumps(arguments)}}]}}]}
+
+    def test_a_plain_reply_needs_no_tool(self):
+        caller = lambda messages: self._text_reply("Just chatting back.")
+        reply = llm_agent.run_agent(self.con, 1, "how's it going", CFG, TODAY, caller=caller)
+        self.assertEqual(reply, "Just chatting back.")
+
+    def test_a_tool_call_executes_then_the_model_confirms(self):
+        calls = [
+            self._tool_call("add_items", {"items": [{"name": "milk", "estimated_days": 7}]}),
+            self._text_reply("Got it, milk's in."),
+        ]
+        caller = lambda messages: calls.pop(0)
+        reply = llm_agent.run_agent(self.con, 1, "put milk in the fridge", CFG, TODAY, caller=caller)
+        self.assertEqual(reply, "Got it, milk's in.")
+        self.assertEqual(fridge.open_items(self.con, 1)[0]["name"], "milk")
+
+    def test_a_network_error_replies_instead_of_crashing(self):
+        def caller(messages):
+            raise TimeoutError("timed out")
+        reply = llm_agent.run_agent(self.con, 1, "hello", CFG, TODAY, caller=caller)
+        self.assertIn("trouble", reply.lower())
+
+    def test_a_runaway_tool_loop_gives_up_instead_of_hanging(self):
+        caller = lambda messages: self._tool_call("list_items", {})
+        reply = llm_agent.run_agent(self.con, 1, "what's in my fridge", CFG, TODAY, caller=caller)
+        self.assertIn("tangled", reply.lower())
+
+    def test_an_unknown_tool_name_does_not_crash_the_loop(self):
+        calls = [
+            self._tool_call("delete_everything", {}),
+            self._text_reply("Can't do that, but I can remove one item at a time."),
+        ]
+        caller = lambda messages: calls.pop(0)
+        reply = llm_agent.run_agent(self.con, 1, "wipe it all", CFG, TODAY, caller=caller)
+        self.assertIn("remove one item", reply)
+
+
 class TokenSafety(unittest.TestCase):
     def test_the_token_is_redacted_from_error_text(self):
         tg = bot.Telegram("SECRET_TOKEN_VALUE")
@@ -1111,6 +1278,19 @@ class BotHandlers(unittest.TestCase):
     def test_capturing_a_list_does_not_crash(self):
         bot.handle_message(self.tg, self.con, {"chat": {"id": 1, "type": "private"}, "text": "milk, spinach"}, CFG)
         self.assertIn("First one to watch", self.tg.sent[-1])
+
+    def test_llm_mode_bypasses_the_regex_pipeline_entirely(self):
+        cfg = dict(CFG, llm_mode=True)
+        original = llm_agent.run_agent
+        llm_agent.run_agent = lambda con, chat_id, text, cfg: "fake agent reply"
+        try:
+            bot.handle_message(self.tg, self.con, {"chat": {"id": 1, "type": "private"},
+                               "text": "milk, spinach"}, cfg)
+        finally:
+            llm_agent.run_agent = original
+        self.assertEqual(self.tg.sent, ["fake agent reply"])
+        # Never reached fridge.add_items via the regex path.
+        self.assertEqual(fridge.open_items(self.con, 1), [])
 
     def test_an_overlong_message_is_refused_not_processed(self):
         text = "milk, " * 400   # well over MAX_MESSAGE_LENGTH

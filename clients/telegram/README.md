@@ -92,6 +92,35 @@ are ignored quietly until the minute rolls over.
 in `allowed_chat_ids`. Anyone else gets the normal help text instead, and if
 the list is empty, `/seed` refuses everyone.
 
+## Conversational mode (opt-in, costs money)
+
+The default bot understands commands and typed lists via regex and a
+keyword table: fast, free, and exact, but it can't read "put butter chicken
+in the fridge as leftovers" as an add. `llm_agent.py` is a separate,
+self-contained mode that hands every typed message to a model via
+[OpenRouter](https://openrouter.ai) instead, so it can read natural phrasing
+and correct itself in conversation. Off by default.
+
+To turn it on, add an OpenRouter API key to `config.json`:
+
+    "llm_mode": true,
+    "openrouter_api_key": "sk-or-...",
+    "llm_model": "anthropic/claude-haiku-4.5"
+
+Every message sent to the model costs money on your OpenRouter account. The
+bot refuses to start with `llm_mode` on and no key set, rather than silently
+falling back to the free path.
+
+This mode is a genuinely different front end, not a layer over the regular
+one: a message never reaches onboarding, the sentence/correction logic, or
+`parse_list` while it's on. It shares the same `items`/`pantry` tables, so
+`/fridge` and the rest still show what it captured, but it does not read
+slash commands as commands — the model itself decides what a message like
+`/start` means, and its four tools (`add_items`, `update_item`, `remove_item`,
+`list_items`) are how it reads and writes your fridge. The daily nudge and
+the used/frozen/tossed buttons are unchanged in both modes: they're not an
+understanding problem, so the model never touches them.
+
 ## What it does
 
 | You send | It does |

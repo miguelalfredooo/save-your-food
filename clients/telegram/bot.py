@@ -43,6 +43,7 @@ import fridge          # noqa: E402
 import shelf_life as sl  # noqa: E402
 import onboarding as onb  # noqa: E402
 import art  # noqa: E402
+import llm_agent  # noqa: E402
 
 CONFIG_PATH = os.path.join(HERE, "config.json")
 LOCK_PATH = os.path.join(HERE, ".bot.lock")
@@ -129,6 +130,12 @@ def load_config():
     cfg.setdefault("nudge_hour", 16)
     cfg.setdefault("nudge_minute", 30)
     cfg.setdefault("allowed_chat_ids", [])
+    cfg.setdefault("llm_mode", False)
+    cfg.setdefault("openrouter_api_key", "")
+    cfg.setdefault("llm_model", "anthropic/claude-haiku-4.5")
+    if cfg["llm_mode"] and (not cfg["openrouter_api_key"]
+                            or "PUT_YOUR" in cfg["openrouter_api_key"]):
+        sys.exit("! llm_mode is on but openrouter_api_key is not set in config.json.")
     return cfg
 
 
@@ -396,6 +403,15 @@ def handle_message(tg, con, msg, cfg):
     if len(text) > MAX_MESSAGE_LENGTH:
         tg.send(chat_id, "That is too long for me to read in one go. Send it "
                          "in a few smaller messages.")
+        return
+
+    # llm_mode is a separate, self-contained conversational front end: a
+    # message here never reaches onboarding, is_chatter, correction or
+    # parse_list. It replaces how a typed message is understood, not the
+    # daily nudge or the used/frozen/tossed buttons, which are unchanged in
+    # both modes since they are not an understanding problem.
+    if cfg["llm_mode"]:
+        tg.send(chat_id, llm_agent.run_agent(con, chat_id, text, cfg))
         return
 
     # A reply to me or a genuine question can arrive at any point, onboarding
