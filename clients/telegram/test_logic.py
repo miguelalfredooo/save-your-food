@@ -1019,6 +1019,18 @@ class FakeTG:
 CFG = {"nudge_hour": 16, "nudge_minute": 30, "allowed_chat_ids": []}
 
 
+class TokenSafety(unittest.TestCase):
+    def test_the_token_is_redacted_from_error_text(self):
+        tg = bot.Telegram("SECRET_TOKEN_VALUE")
+        text = "urlopen error at https://api.telegram.org/botSECRET_TOKEN_VALUE/getMe"
+        self.assertNotIn("SECRET_TOKEN_VALUE", tg._redact(text))
+        self.assertIn("<token>", tg._redact(text))
+
+    def test_redact_is_a_no_op_when_the_token_is_not_present(self):
+        tg = bot.Telegram("SECRET_TOKEN_VALUE")
+        self.assertEqual(tg._redact("timed out"), "timed out")
+
+
 class BotHandlers(unittest.TestCase):
     """Drives bot.py's handlers directly. This is the one place the crash
     bugs and the mistracked-question bugs actually lived, and pure fridge.py/

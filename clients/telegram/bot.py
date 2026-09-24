@@ -118,6 +118,11 @@ class Telegram:
     def __init__(self, token):
         self._token = token
 
+    def _redact(self, text):
+        """The token is never logged. Some urllib exceptions embed the
+        request URL in their own message, and the URL carries the token."""
+        return text.replace(self._token, "<token>") if self._token in text else text
+
     def call(self, method, **params):
         url = API % (self._token, method)
         data = json.dumps(params).encode()
@@ -128,9 +133,9 @@ class Telegram:
                 return json.loads(r.read().decode())
         except urllib.error.HTTPError as e:
             body = e.read().decode(errors="replace")[:300]
-            print("! telegram %s failed: %s %s" % (method, e.code, body))
+            print("! telegram %s failed: %s %s" % (method, e.code, self._redact(body)))
         except Exception as e:                     # network blips are expected
-            print("! telegram %s failed: %s" % (method, e))
+            print("! telegram %s failed: %s" % (method, self._redact(str(e))))
         return None
 
     def send(self, chat_id, text, buttons=None, html=False):
