@@ -1304,6 +1304,63 @@ class TokenSafety(unittest.TestCase):
         self.assertEqual(tg._redact("timed out"), "timed out")
 
 
+class SeedClassification(unittest.TestCase):
+    """handle_seed used to insert every entry straight into the tracked
+    table with no pantry/outside check at all, so a real seed file (salt,
+    spices, canned soup, bouillon) tracked all of it with a fake fridge date
+    and put it in the daily nudge."""
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.orig_here = bot.HERE
+        bot.HERE = self.tmp_dir
+        self.con = fridge.connect(os.path.join(self.tmp_dir, "fridge.db"))
+        self.tg = FakeTG()
+
+    def tearDown(self):
+        bot.HERE = self.orig_here
+        self.con.close()
+
+    def _write_seed(self, items):
+        with open(os.path.join(self.tmp_dir, "seed.json"), "w") as f:
+            json.dump({"items": items}, f)
+
+    def test_pantry_stable_entries_go_to_the_pantry_not_the_fridge(self):
+        self._write_seed([
+            {"name": "black pepper", "use_by": "2026-09-30", "risk": "green"},
+            {"name": "chicken bouillon", "use_by": "2026-09-24", "risk": "red"},
+            {"name": "milk", "use_by": "2026-09-30", "risk": "yellow"},
+        ])
+        bot.handle_seed(self.tg, self.con, 1)
+        tracked = [i["name"] for i in fridge.open_items(self.con, 1)]
+        pantry = [i["name"] for i in fridge.pantry_items(self.con, 1)]
+        self.assertEqual(tracked, ["milk"])
+        self.assertEqual(sorted(pantry), ["black pepper", "chicken bouillon"])
+
+    def test_a_stray_question_mark_is_stripped_from_the_name(self):
+        self._write_seed([
+            {"name": "apple cider vinegar ?", "use_by": "2026-10-14", "risk": "green"},
+        ])
+        bot.handle_seed(self.tg, self.con, 1)
+        # apple cider vinegar is a STABLE entry ("vinegar"), so it lands in
+        # the pantry, but the point under test is the name, not the bucket.
+        pantry = [i["name"] for i in fridge.pantry_items(self.con, 1)]
+        self.assertEqual(pantry, ["apple cider vinegar"])
+
+    def test_reply_mentions_the_pantry_count_when_relevant(self):
+        self._write_seed([
+            {"name": "salt", "use_by": "2026-09-30", "risk": "green"},
+            {"name": "milk", "use_by": "2026-09-30", "risk": "yellow"},
+        ])
+        bot.handle_seed(self.tg, self.con, 1)
+        self.assertIn("1 went straight to your pantry", self.tg.sent[-1])
+
+    def test_no_pantry_mention_when_nothing_went_there(self):
+        self._write_seed([{"name": "milk", "use_by": "2026-09-30", "risk": "yellow"}])
+        bot.handle_seed(self.tg, self.con, 1)
+        self.assertNotIn("pantry", self.tg.sent[-1])
+
+
 class BotHandlers(unittest.TestCase):
     """Drives bot.py's handlers directly. This is the one place the crash
     bugs and the mistracked-question bugs actually lived, and pure fridge.py/

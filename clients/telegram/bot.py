@@ -226,7 +226,15 @@ def item_buttons(item_id):
 
 def handle_seed(tg, con, chat_id):
     """Load seed.json into this chat. Refuses if the chat already has anything,
-    so a stray /seed can't quietly duplicate a real fridge."""
+    so a stray /seed can't quietly duplicate a real fridge.
+
+    Sorted the same way a typed capture is: this used to insert every entry
+    straight into the tracked table with no pantry or outside check at all,
+    so a seed file full of real pantry contents (salt, spices, canned soup,
+    bouillon) tracked all of it with a fake fridge date and put it in the
+    daily nudge. A trailing "?" some import left on an uncertain name is
+    stripped too, rather than shown to the user as-is.
+    """
     path = os.path.join(HERE, "seed.json")
     if not os.path.exists(path):
         tg.send(chat_id, "No seed.json here.")
@@ -237,14 +245,25 @@ def handle_seed(tg, con, chat_id):
     with open(path) as f:
         data = json.load(f)
     today = date.today().isoformat()
+    n_pantry = 0
     for it in data.get("items", []):
+        name = it["name"].strip().rstrip(" ?").strip()
+        if not name:
+            continue
+        skip, reason = sl.not_tracked(name)
+        if skip:
+            fridge.remember(con, chat_id, name, reason, date.today())
+            n_pantry += 1
+            continue
         con.execute(
             "INSERT INTO items (chat_id,name,use_by,risk,estimated,added,state)"
             " VALUES (?,?,?,?,0,?, 'open')",
-            (chat_id, it["name"], it["use_by"], it["risk"], today))
+            (chat_id, name, it["use_by"], it["risk"], today))
     con.commit()
+    tail = ("\n\n%d went straight to your pantry, no dates: /pantry to see "
+            "them." % n_pantry) if n_pantry else ""
     tg.send(chat_id, "Loaded your current fridge.\n\n"
-            + fridge.compose_inventory(fridge.open_items(con, chat_id)))
+            + fridge.compose_inventory(fridge.open_items(con, chat_id)) + tail)
 
 
 def send_nudge(tg, con, chat_id, today=None):
