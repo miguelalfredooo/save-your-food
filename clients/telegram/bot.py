@@ -321,6 +321,10 @@ def send_sample_nudge(tg, con, chat_id, today=None):
 
 def handle_message(tg, con, msg, cfg):
     chat_id = msg["chat"]["id"]
+    # In a group, anyone in it could /clear the shared fridge, and the daily
+    # nudge would go out to everyone in the group.
+    if msg["chat"].get("type") != "private":
+        return
     # A reply confirms the bot exists, so a chat that isn't on the allow
     # list gets nothing at all, not even an error.
     if cfg["allowed_chat_ids"] and chat_id not in cfg["allowed_chat_ids"]:
@@ -479,6 +483,8 @@ def handle_callback(tg, con, cb, cfg):
     chat_id = msg.get("chat", {}).get("id")
     if ":" not in data or chat_id is None:
         tg.answer(cb["id"])
+        return
+    if msg.get("chat", {}).get("type") != "private":
         return
     if cfg["allowed_chat_ids"] and chat_id not in cfg["allowed_chat_ids"]:
         return

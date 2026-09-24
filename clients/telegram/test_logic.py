@@ -1024,23 +1024,34 @@ class BotHandlers(unittest.TestCase):
         os.unlink(self.tmp.name)
 
     def test_capturing_a_list_does_not_crash(self):
-        bot.handle_message(self.tg, self.con, {"chat": {"id": 1}, "text": "milk, spinach"}, CFG)
+        bot.handle_message(self.tg, self.con, {"chat": {"id": 1, "type": "private"}, "text": "milk, spinach"}, CFG)
         self.assertIn("First one to watch", self.tg.sent[-1])
 
     def test_an_empty_allow_list_lets_everyone_through(self):
         cfg = dict(CFG, allowed_chat_ids=[])
-        bot.handle_message(self.tg, self.con, {"chat": {"id": 999}, "text": "milk"}, cfg)
+        bot.handle_message(self.tg, self.con, {"chat": {"id": 999, "type": "private"}, "text": "milk"}, cfg)
         self.assertTrue(self.tg.sent)
+
+    def test_a_group_chat_gets_no_reply(self):
+        # In a group, anyone in it could /clear the shared fridge, and the
+        # daily nudge would go out to the whole group.
+        cfg = dict(CFG, allowed_chat_ids=[])
+        for chat_type in ("group", "supergroup", "channel"):
+            self.tg.sent.clear()
+            bot.handle_message(self.tg, self.con, {"chat": {"id": 1, "type": chat_type},
+                               "text": "milk"}, cfg)
+            self.assertEqual(self.tg.sent, [], chat_type)
+        self.assertEqual(fridge.open_items(self.con, 1), [])
 
     def test_a_chat_not_on_the_allow_list_gets_nothing(self):
         cfg = dict(CFG, allowed_chat_ids=[1])
-        bot.handle_message(self.tg, self.con, {"chat": {"id": 999}, "text": "milk"}, cfg)
+        bot.handle_message(self.tg, self.con, {"chat": {"id": 999, "type": "private"}, "text": "milk"}, cfg)
         self.assertEqual(self.tg.sent, [])
         self.assertEqual(fridge.open_items(self.con, 999), [])
 
     def test_an_allowed_chat_still_works(self):
         cfg = dict(CFG, allowed_chat_ids=[1])
-        bot.handle_message(self.tg, self.con, {"chat": {"id": 1}, "text": "milk"}, cfg)
+        bot.handle_message(self.tg, self.con, {"chat": {"id": 1, "type": "private"}, "text": "milk"}, cfg)
         self.assertTrue(self.tg.sent)
 
     def test_seed_is_owner_only(self):
@@ -1048,17 +1059,17 @@ class BotHandlers(unittest.TestCase):
         # family member let onto the bot) is not the owner and must not be
         # able to load it just because nothing is logged there yet.
         cfg = dict(CFG, allowed_chat_ids=[1, 2])
-        bot.handle_message(self.tg, self.con, {"chat": {"id": 2}, "text": "/seed"}, cfg)
+        bot.handle_message(self.tg, self.con, {"chat": {"id": 2, "type": "private"}, "text": "/seed"}, cfg)
         self.assertEqual(self.tg.sent[-1], bot.HELP)
 
     def test_seed_works_for_the_owner(self):
         cfg = dict(CFG, allowed_chat_ids=[1, 2])
-        bot.handle_message(self.tg, self.con, {"chat": {"id": 1}, "text": "/seed"}, cfg)
+        bot.handle_message(self.tg, self.con, {"chat": {"id": 1, "type": "private"}, "text": "/seed"}, cfg)
         self.assertNotEqual(self.tg.sent[-1], bot.HELP)
 
     def test_seed_refuses_everyone_when_no_owner_is_set(self):
         cfg = dict(CFG, allowed_chat_ids=[])
-        bot.handle_message(self.tg, self.con, {"chat": {"id": 1}, "text": "/seed"}, cfg)
+        bot.handle_message(self.tg, self.con, {"chat": {"id": 1, "type": "private"}, "text": "/seed"}, cfg)
         self.assertEqual(self.tg.sent[-1], bot.HELP)
 
     def test_a_callback_from_a_disallowed_chat_is_ignored(self):
@@ -1066,7 +1077,18 @@ class BotHandlers(unittest.TestCase):
         fridge.add_items(self.con, 999, ["milk"], TODAY)
         item_id = fridge.open_items(self.con, 999)[0]["id"]
         cb = {"id": "cb", "data": "used:%d" % item_id,
-              "message": {"chat": {"id": 999}, "message_id": 1}}
+              "message": {"chat": {"id": 999, "type": "private"}, "message_id": 1}}
+        bot.handle_callback(self.tg, self.con, cb, cfg)
+        self.assertEqual(self.tg.answers, [])
+        row = self.con.execute("SELECT state FROM items WHERE id=?", (item_id,)).fetchone()
+        self.assertEqual(row["state"], "open")
+
+    def test_a_callback_from_a_group_is_ignored(self):
+        cfg = dict(CFG, allowed_chat_ids=[])
+        fridge.add_items(self.con, 1, ["milk"], TODAY)
+        item_id = fridge.open_items(self.con, 1)[0]["id"]
+        cb = {"id": "cb", "data": "used:%d" % item_id,
+              "message": {"chat": {"id": 1, "type": "group"}, "message_id": 1}}
         bot.handle_callback(self.tg, self.con, cb, cfg)
         self.assertEqual(self.tg.answers, [])
         row = self.con.execute("SELECT state FROM items WHERE id=?", (item_id,)).fetchone()
@@ -1074,21 +1096,21 @@ class BotHandlers(unittest.TestCase):
 
     def test_skip_does_not_crash(self):
         onb.begin(self.con, 1)
-        bot.handle_message(self.tg, self.con, {"chat": {"id": 1}, "text": "/skip"}, CFG)
+        bot.handle_message(self.tg, self.con, {"chat": {"id": 1, "type": "private"}, "text": "/skip"}, CFG)
         self.assertIn("Skipped", self.tg.sent[-1])
 
     def test_retapping_a_closed_item_says_already_handled(self):
         fridge.add_items(self.con, 1, ["milk"], TODAY)
         item_id = fridge.open_items(self.con, 1)[0]["id"]
         cb = {"id": "cb", "data": "used:%d" % item_id,
-              "message": {"chat": {"id": 1}, "message_id": 1}}
+              "message": {"chat": {"id": 1, "type": "private"}, "message_id": 1}}
         bot.handle_callback(self.tg, self.con, cb, CFG)
         self.assertEqual(self.tg.answers[-1], "Used it")
 
         # Tapping a DIFFERENT button on the same, now-closed item must not
         # silently flip its final state or double-count a milestone.
         cb2 = {"id": "cb2", "data": "tossed:%d" % item_id,
-               "message": {"chat": {"id": 1}, "message_id": 1}}
+               "message": {"chat": {"id": 1, "type": "private"}, "message_id": 1}}
         bot.handle_callback(self.tg, self.con, cb2, CFG)
         self.assertEqual(self.tg.answers[-1], "Already handled.")
         row = self.con.execute("SELECT state FROM items WHERE id=?", (item_id,)).fetchone()
@@ -1099,7 +1121,7 @@ class BotHandlers(unittest.TestCase):
         onb.handle_item(self.con, 1, "milk", TODAY)
         onb.handle_list(self.con, 1, "cumin, spinach", TODAY)
         self.assertEqual(onb.step(self.con, 1), "3")
-        bot.handle_message(self.tg, self.con, {"chat": {"id": 1}, "text": "ignored, buttons only"}, CFG)
+        bot.handle_message(self.tg, self.con, {"chat": {"id": 1, "type": "private"}, "text": "ignored, buttons only"}, CFG)
         self.assertEqual(onb.step(self.con, 1), "3")   # still waiting on a button
         names = [i["name"] for i in fridge.open_items(self.con, 1)]
         self.assertNotIn("ignored", names)
@@ -1107,13 +1129,13 @@ class BotHandlers(unittest.TestCase):
 
     def test_a_question_never_mutates_data(self):
         fridge.add_items(self.con, 1, ["milk"], TODAY)
-        bot.handle_message(self.tg, self.con, {"chat": {"id": 1},
+        bot.handle_message(self.tg, self.con, {"chat": {"id": 1, "type": "private"},
                            "text": "do I have anything in my pantry"}, CFG)
         self.assertTrue(any(i["name"] == "milk" for i in fridge.open_items(self.con, 1)))
 
     def test_a_fridge_question_gets_the_real_listing(self):
         fridge.add_items(self.con, 1, ["milk"], TODAY)
-        bot.handle_message(self.tg, self.con, {"chat": {"id": 1},
+        bot.handle_message(self.tg, self.con, {"chat": {"id": 1, "type": "private"},
                            "text": "is there anything in my fridge"}, CFG)
         self.assertIn("milk", self.tg.sent[-1])
 
