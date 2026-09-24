@@ -38,3 +38,12 @@ in `config.json` on their machine.
 
 **Photo capture needs a vision call and an API key.** Until that exists it is typed
 lists only — don't imply otherwise in the bot's own copy.
+
+## Running as a service
+
+For a Mac mini that stays on, `clients/telegram/service/` has a launchd
+LaunchAgent (`install.sh`, `uninstall.sh`, `status.sh`) instead of a Terminal
+window left open. It enforces single-instance itself (bot.py's own
+`.bot.lock`) since two copies polling `getUpdates` at once get HTTP 409s and
+lose messages. Full instructions are in `clients/telegram/README.md` under
+"Run it on startup".

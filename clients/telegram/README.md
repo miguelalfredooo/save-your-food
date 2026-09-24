@@ -30,6 +30,38 @@ Leave that Terminal window open. It prints one line and then waits. Ctrl-C stops
 **4. Message your bot** in Telegram. Send `/start`, then `/seed` to load the
 fridge contents as of Sep 23.
 
+## Run it on startup
+
+Running it by hand (above) is fine for trying it out, but a Terminal window
+you have to leave open does not survive a reboot or a closed laptop lid. For
+a Mac mini that stays on, install it as a per-user launchd service instead:
+it starts at login and restarts itself if it ever crashes.
+
+    cd clients/telegram/service
+    ./install.sh
+
+Safe to run more than once — it stops any `bot.py` you started by hand first,
+and boots out any earlier copy of the service before installing fresh.
+
+    ./status.sh      # running or not, pid, last exit code, and the last
+                      # 20 lines of each log
+    ./uninstall.sh    # stops it and removes the plist; config.json and
+                      # fridge.db are untouched
+
+Logs live in `~/Library/Logs/fridge-loop/bot.log` and `bot.err.log`, rotated
+to `.old` by `install.sh` once either passes 5 MB.
+
+**Two Mac settings launchd can't handle, both needed for this to survive a
+power cut:**
+
+- **Automatic login.** A LaunchAgent only starts once someone is logged in.
+  Turn on automatic login for this user (System Settings > Users & Groups >
+  Login Options), or the bot stays off after a restart until someone logs in
+  by hand.
+- **Don't let the Mac sleep.** System Settings > Energy: turn on "Prevent
+  automatic sleeping when the display is off" and "Start up automatically
+  after a power failure".
+
 ## Who can use it
 
 By default the bot answers anyone who finds it. Lock it to yourself by adding
