@@ -460,12 +460,38 @@ _HEADER_RE = re.compile(r"^\s*#{1,6}\s+(.*)$")
 _HR_RE = re.compile(r"^\s*([-*_])\1{2,}\s*$")
 
 
+_TAG_RE = re.compile(r"</?(b|i|code)>")
+
+
+def _tags_are_balanced(html):
+    """Whether every open tag this line introduced closes in the right order.
+
+    Bold and italic are converted independently, so markdown that crosses
+    its own boundaries ("**bold *italic** more*") can produce tags that
+    interleave instead of nest: <b>bold <i>italic</b> more</i>. Telegram's
+    parser rejects that outright and fails the whole message, not just the
+    one line, so this has to be caught before it ever reaches send().
+    """
+    stack = []
+    for m in _TAG_RE.finditer(html):
+        tag = m.group(1)
+        if m.group(0)[1] == "/":
+            if not stack or stack.pop() != tag:
+                return False
+        else:
+            stack.append(tag)
+    return not stack
+
+
 def _inline_markdown(escaped_line):
     line = re.sub(r"(\*\*|__)(.+?)\1", r"<b>\2</b>", escaped_line)
     line = re.sub(r"`([^`]+?)`", r"<code>\1</code>", line)
     line = re.sub(r"(?<!\*)\*(?!\*)([^*\n]+?)\*(?!\*)", r"<i>\1</i>", line)
     line = re.sub(r"(?<!_)_(?!_)([^_\n]+?)_(?!_)", r"<i>\1</i>", line)
-    return line
+    # Overlapping emphasis markers can produce cross-nested tags (see
+    # _tags_are_balanced). A line that can't be formatted safely is still
+    # better sent plain, asterisks and all, than not sent at all.
+    return line if _tags_are_balanced(line) else escaped_line
 
 
 def _markdown_to_html(text):

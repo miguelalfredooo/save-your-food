@@ -1689,6 +1689,18 @@ class LLMReplyFormatting(unittest.TestCase):
         html = bot._markdown_to_html(text)
         self.assertEqual(html, "Here's what you have:\n<pre>- milk: today\n- eggs: in 5 days</pre>")
 
+    def test_overlapping_bold_and_italic_fall_back_to_plain_rather_than_break(self):
+        # "**bold *italic** more*" crosses its own boundaries: bold and
+        # italic are converted independently, so this produces interleaved
+        # tags (<b>bold <i>italic</b> more</i>) that Telegram's parser
+        # rejects outright, failing the whole message - not just this line.
+        # A real reply hit exactly this and had to fall back to a plain-text
+        # resend. The line must come back usable rather than malformed.
+        html = bot._markdown_to_html("**bold *italic** more italic*")
+        self.assertTrue(bot._tags_are_balanced(html))
+        self.assertNotIn("<b>", html)
+        self.assertNotIn("<i>", html)
+
     def test_a_markdown_header_becomes_bold_text(self):
         html = bot._markdown_to_html("### Creamy Creole Chicken")
         self.assertEqual(html, "<b>Creamy Creole Chicken</b>")
