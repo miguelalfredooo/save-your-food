@@ -5,6 +5,7 @@ import json
 import os
 import sys
 import sqlite3
+import subprocess
 import tempfile
 import unittest
 from datetime import date, timedelta
@@ -1403,6 +1404,76 @@ class RecipeSearch(unittest.TestCase):
         recipes = llm_agent._parse_recipes_output(raw)
         self.assertEqual(len(recipes), 1)
         self.assertEqual(recipes[0]["title"], "Real One")
+
+    def test_recipe_cache_round_trips_title_and_text(self):
+        cache = tempfile.NamedTemporaryFile(suffix=".md", delete=False)
+        cache.close()
+        try:
+            recipes = [
+                {"title": "Chicken Soup", "text": "chicken\ncarrots\n\nSimmer for an hour."},
+                {"title": "Toast", "text": "bread"},
+            ]
+            llm_agent._write_recipe_cache(recipes, path=cache.name)
+            self.assertEqual(llm_agent._read_recipe_cache(path=cache.name), recipes)
+        finally:
+            os.unlink(cache.name)
+
+    def test_recipe_cache_missing_file_reads_as_none(self):
+        self.assertIsNone(llm_agent._read_recipe_cache(path="/nonexistent/path/recipes.md"))
+
+    def test_fetch_recipes_refreshes_the_cache_on_a_successful_live_read(self):
+        cache = tempfile.NamedTemporaryFile(suffix=".md", delete=False)
+        cache.close()
+        original_path = llm_agent.RECIPE_CACHE_PATH
+        original_run = subprocess.run
+        llm_agent.RECIPE_CACHE_PATH = cache.name
+
+        class FakeResult:
+            returncode = 0
+            stdout = "Soup|||TITLE_SEP|||broth"
+
+        subprocess.run = lambda *a, **k: FakeResult()
+        try:
+            recipes = llm_agent.fetch_recipes()
+            self.assertEqual(recipes, [{"title": "Soup", "text": "broth"}])
+            self.assertEqual(llm_agent._read_recipe_cache(path=cache.name), recipes)
+        finally:
+            subprocess.run = original_run
+            llm_agent.RECIPE_CACHE_PATH = original_path
+            os.unlink(cache.name)
+
+    def test_fetch_recipes_falls_back_to_the_cache_when_the_live_read_fails(self):
+        # Apple Events can hang or fail for reasons that have nothing to do
+        # with this code - Notes frozen, a stuck permission dialog, an
+        # iCloud sync. A failed live read should not mean nothing to offer.
+        cache = tempfile.NamedTemporaryFile(suffix=".md", delete=False)
+        cache.close()
+        original_path = llm_agent.RECIPE_CACHE_PATH
+        original_run = subprocess.run
+        llm_agent.RECIPE_CACHE_PATH = cache.name
+        llm_agent._write_recipe_cache([{"title": "Soup", "text": "broth"}], path=cache.name)
+
+        def fails(*a, **k):
+            raise subprocess.TimeoutExpired(cmd="osascript", timeout=30)
+        subprocess.run = fails
+        try:
+            self.assertEqual(llm_agent.fetch_recipes(),
+                             [{"title": "Soup", "text": "broth"}])
+        finally:
+            subprocess.run = original_run
+            llm_agent.RECIPE_CACHE_PATH = original_path
+            os.unlink(cache.name)
+
+    def test_fetch_recipes_returns_none_when_live_fails_and_there_is_no_cache(self):
+        original_path = llm_agent.RECIPE_CACHE_PATH
+        original_run = subprocess.run
+        llm_agent.RECIPE_CACHE_PATH = "/nonexistent/path/recipes.md"
+        subprocess.run = lambda *a, **k: (_ for _ in ()).throw(OSError("no notes"))
+        try:
+            self.assertIsNone(llm_agent.fetch_recipes())
+        finally:
+            subprocess.run = original_run
+            llm_agent.RECIPE_CACHE_PATH = original_path
 
     def test_rank_recipes_orders_by_ingredient_overlap(self):
         recipes = [

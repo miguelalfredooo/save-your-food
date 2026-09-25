@@ -15,6 +15,7 @@ money per message, which is why it defaults to off.
 """
 
 import json
+import os
 import subprocess
 import urllib.error
 import urllib.request
@@ -343,6 +344,14 @@ RECIPE_FETCH_TIMEOUT = 30
 MAX_RECIPE_MATCHES = 8
 MAX_RECIPE_CHARS = 800   # per matched recipe, to keep the tool result a sane size
 
+# Apple Events can hang or fail outright - Notes frozen, a stuck permission
+# dialog, an iCloud sync - independent of anything this code does wrong. A
+# successful live read refreshes this snapshot; a failed one falls back to
+# it, so a bad moment for Notes doesn't mean the tool has nothing to say.
+RECIPE_CACHE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                 "recipes_cache.md")
+_RECIPE_BLOCK_SEP = "\n---\n\n"
+
 _FETCH_RECIPES_APPLESCRIPT = '''
 tell application "Notes"
     set outLines to {}
@@ -376,19 +385,61 @@ def _parse_recipes_output(stdout):
     return recipes
 
 
+def _write_recipe_cache(recipes, path=None):
+    """Best-effort snapshot of the last successful live read. A write that
+    can't complete must never take down a request that otherwise
+    succeeded."""
+    try:
+        with open(path or RECIPE_CACHE_PATH, "w") as f:
+            f.write(_RECIPE_BLOCK_SEP.join(
+                "# %s\n\n%s" % (r["title"], r["text"]) for r in recipes))
+    except OSError:
+        pass
+
+
+def _read_recipe_cache(path=None):
+    """The last snapshot _write_recipe_cache saved, or None if there has
+    never been one (or it can't be read)."""
+    try:
+        with open(path or RECIPE_CACHE_PATH) as f:
+            raw = f.read()
+    except OSError:
+        return None
+    recipes = []
+    for block in raw.split(_RECIPE_BLOCK_SEP):
+        block = block.strip()
+        if not block.startswith("# "):
+            continue
+        title, _, text = block[2:].partition("\n\n")
+        recipes.append({"title": title.strip(), "text": text.strip()})
+    return recipes or None
+
+
 def fetch_recipes(timeout=RECIPE_FETCH_TIMEOUT):
     """[{"title": ..., "text": ...}, ...] for every note in a Recipes-named
-    folder, or None if Notes can't be reached (not running, no such folder,
-    AppleScript disabled). Never raises: a search tool failing outright is
-    worse than it just coming back empty for this one call."""
+    folder. Apple Notes is the live source of truth, and a successful read
+    always refreshes the local snapshot - but Apple Events can hang or fail
+    outright for reasons that have nothing to do with this code (Notes
+    frozen, a stuck permission dialog, an iCloud sync), and a failed one
+    falls back to that snapshot rather than coming back with nothing. Only
+    returns None when there has never been a successful read to fall back
+    on. Never raises."""
     try:
         result = subprocess.run(["osascript", "-e", _FETCH_RECIPES_APPLESCRIPT],
                                 capture_output=True, text=True, timeout=timeout)
+        recipes = (_parse_recipes_output(result.stdout)
+                  if result.returncode == 0 else None)
     except Exception:
-        return None
-    if result.returncode != 0:
-        return None
-    return _parse_recipes_output(result.stdout)
+        recipes = None
+
+    if recipes is not None:
+        _write_recipe_cache(recipes)
+        return recipes
+
+    cached = _read_recipe_cache()
+    if cached is not None:
+        print("! recipes: live Notes read failed, serving last saved copy")
+    return cached
 
 
 def rank_recipes(recipes, available):
@@ -413,7 +464,8 @@ def exec_search_recipes(con, chat_id, args, today):
         return {"matches": [], "note": "Nothing tracked yet to match a recipe against."}
     recipes = fetch_recipes()
     if recipes is None:
-        return {"error": "Could not reach Apple Notes right now."}
+        return {"error": "Could not reach Apple Notes right now, and there's "
+                         "no saved copy yet to fall back on."}
     top = rank_recipes(recipes, available)[:MAX_RECIPE_MATCHES]
     return {
         "available_ingredients": available,

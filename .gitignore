@@ -10,6 +10,7 @@ clients/telegram/config.json
 clients/telegram/fridge.db
 clients/telegram/seed.json
 clients/telegram/.bot.lock
+clients/telegram/recipes_cache.md
 
 # Python
 __pycache__/
