@@ -58,6 +58,7 @@ STATE_LABELS = {"used": "Used it", "frozen": "Froze it", "tossed": "Tossed it"}
 
 MAX_MESSAGE_LENGTH = 2000
 MAX_ITEMS_PER_CAPTURE = 50
+MAX_CAPTION_LIST_CHARS = 1500
 RATE_LIMIT_PER_MINUTE = 20
 RATE_LIMIT_WINDOW = 60   # seconds
 
@@ -311,6 +312,25 @@ def send_nudge(tg, con, chat_id, today=None):
     return len(items)
 
 
+def _capped_item_list(names, max_chars=MAX_CAPTION_LIST_CHARS):
+    """A comma-joined list, capped so a pantry can't grow a caption past
+    Telegram's hard message length limit. Truncating the finished HTML at
+    send time would risk cutting a message off mid-tag; capping the list
+    itself, while it is still plain names, can't ever produce a broken
+    <pre> block."""
+    joined = ", ".join(names)
+    if len(joined) <= max_chars:
+        return joined
+    kept, total = [], 0
+    for name in names:
+        add = len(name) + (2 if kept else 0)  # ", " between items
+        if total + add > max_chars:
+            break
+        kept.append(name)
+        total += add
+    return "%s, and %d more" % (", ".join(kept), len(names) - len(kept))
+
+
 def compose_pantry_html(items):
     """The pantry, with a can over the pantry and an onion over the counter.
 
@@ -326,11 +346,11 @@ def compose_pantry_html(items):
     parts = []
     if stable:
         parts.append(art.render(art.glyph("pantry"),
-                                "Pantry (%d)\n%s" % (len(stable), ", ".join(stable))))
+                                "Pantry (%d)\n%s" % (len(stable), _capped_item_list(stable))))
     if outside:
         parts.append(art.render(art.glyph("counter"),
                                 "On the counter (%d)\n%s"
-                                % (len(outside), ", ".join(outside))))
+                                % (len(outside), _capped_item_list(outside))))
     head = "Not tracked, but I remember you have it."
     return art.esc(head) + "\n\n" + "\n\n".join(parts)
 

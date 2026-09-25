@@ -1049,9 +1049,18 @@ class Delight(unittest.TestCase):
         self.assertIn("&amp;", out)
         self.assertNotIn("<&", out)
 
-    def test_a_caption_sits_under_the_drawing(self):
+    def test_a_caption_sits_inside_the_same_pre_block_as_the_drawing(self):
+        # The frame and its caption are one container, the same way a fridge
+        # or pantry list is one block rather than a box with a stray line of
+        # plain text bolted on after it.
         out = art.render(art.CARTON, "That one did not go to waste.")
-        self.assertTrue(out.index("</pre>") < out.index("That one"))
+        self.assertEqual(out.count("<pre>"), 1)
+        self.assertEqual(out.count("</pre>"), 1)
+        self.assertTrue(out.startswith("<pre>"))
+        self.assertTrue(out.endswith("</pre>"))
+        body = out[len("<pre>"):-len("</pre>")]
+        self.assertLess(body.index(art.CARTON.splitlines()[0]),
+                        body.index("That one"))
 
     def test_a_food_name_cannot_break_an_html_message(self):
         # "<3 cilantro" unescaped makes Telegram read the rest as a tag and
@@ -1059,6 +1068,57 @@ class Delight(unittest.TestCase):
         out = art.render(art.CAN, "cumin & <3 cilantro")
         self.assertIn("&amp;", out)
         self.assertIn("&lt;3", out)
+
+    def test_a_long_caption_is_wrapped_to_the_phone_safe_width(self):
+        # A milestone line is a full sentence, well past MAX_WIDTH as one
+        # line. Sharing the frame's pre block must not reintroduce the
+        # sideways-scroll failure MAX_WIDTH exists to prevent.
+        caption = "10 things used before they turned. That is the whole idea."
+        out = art.render(art.STARS, caption)
+        body = out[len("<pre>"):-len("</pre>")]
+        for line in body.split("\n"):
+            self.assertLessEqual(len(line), art.MAX_WIDTH, repr(line))
+        # Nothing about the words themselves was lost or reordered.
+        wrapped = art._wrap_caption(caption)
+        self.assertEqual(" ".join(wrapped), caption)
+
+    def test_a_long_comma_list_caption_is_wrapped_too(self):
+        # compose_pantry_html's caption is a comma-joined list of whatever
+        # is actually in the pantry, so it is realistically long and has no
+        # natural line breaks of its own to fall back on.
+        items = ["black pepper", "chicken bouillon", "olive oil",
+                 "canned tomatoes", "basmati rice", "dried oregano",
+                 "apple cider vinegar", "honey"]
+        caption = "Pantry (%d)\n%s" % (len(items), ", ".join(items))
+        out = art.render(art.glyph("pantry"), caption)
+        body = out[len("<pre>"):-len("</pre>")]
+        for line in body.split("\n"):
+            self.assertLessEqual(len(line), art.MAX_WIDTH, repr(line))
+
+    def test_wrapping_keeps_a_header_line_separate_from_the_text_under_it(self):
+        # "Pantry (8)" must not bleed into the item list it introduces.
+        out = art._wrap_caption("Pantry (8)\n" + ", ".join(["thing"] * 10))
+        self.assertEqual(out[0], "Pantry (8)")
+
+    def test_a_huge_pantry_does_not_grow_the_message_past_telegrams_hard_cap(self):
+        # A pantry only grows over time. Telegram 400s a message over 4096
+        # characters rather than truncating it, so nothing here may ever be
+        # allowed to reach that, let alone the message actually failing to
+        # send with no visible sign why.
+        names = ["ingredient number %d" % i for i in range(600)]
+        joined = bot._capped_item_list(names)
+        self.assertLessEqual(len(joined), bot.MAX_CAPTION_LIST_CHARS + 40)
+        self.assertIn("more", joined)
+
+    def test_a_short_pantry_list_is_not_touched_by_the_cap(self):
+        names = ["milk", "eggs", "butter"]
+        self.assertEqual(bot._capped_item_list(names), "milk, eggs, butter")
+
+    def test_a_capped_list_still_names_the_items_it_kept(self):
+        names = ["a" * 100] * 20
+        out = bot._capped_item_list(names, max_chars=250)
+        self.assertTrue(out.startswith("a" * 100))
+        self.assertIn("more", out)
 
     def test_a_plain_message_is_not_escaped(self):
         # No pre block means no HTML, so escaping here would show the user

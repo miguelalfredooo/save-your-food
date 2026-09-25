@@ -39,6 +39,7 @@ opposite of delight.
 """
 
 import re
+import textwrap
 
 # 24x8 is the largest canvas that still holds still on a phone. Telegram's
 # <pre> block keeps the monospace column width, but the bubble itself is
@@ -394,21 +395,53 @@ def esc(text):
                      .replace(">", "&gt;"))
 
 
-def render(frame, caption=None):
-    """A drawing as a Telegram HTML pre block, with an optional line under it.
+def _wrap_caption(caption, width=MAX_WIDTH):
+    """A caption's lines, word-wrapped to `width` so it can share the frame's
+    <pre> block without forcing a phone to scroll sideways.
 
-    Telegram sets a proportional font by default, which turns every drawing into
-    rubble. A pre block is the only thing that holds the columns, and inside one
-    the three HTML entities have to be escaped by hand.
+    A caption is prose, not a drawing, so it has none of a frame's width
+    discipline baked in: a milestone line or a comma-joined pantry list can
+    run well past MAX_WIDTH as a single line. `<pre>` does not wrap on its
+    own, so without this a long caption inside the box would hit the exact
+    failure MAX_WIDTH exists to prevent, just moved into the caption instead
+    of the frame.
+
+    Existing newlines are kept as hard breaks, since a caption sometimes
+    carries its own short header ("Pantry (3)") over a longer line, and each
+    of those is wrapped on its own so the header does not bleed into the
+    text under it.
+    """
+    lines = []
+    for para in caption.split("\n"):
+        if not para.strip():
+            lines.append(para)
+            continue
+        lines.extend(textwrap.wrap(para, width=width, break_long_words=True,
+                                    break_on_hyphens=False) or [para])
+    return lines
+
+
+def render(frame, caption=None):
+    """A drawing and its caption as one Telegram HTML pre block.
+
+    Telegram sets a proportional font by default, which turns every drawing
+    into rubble. A pre block is the only thing that holds the columns, and
+    inside one the three HTML entities have to be escaped by hand.
+
+    The caption lives inside the same pre block as the frame, the way a
+    fridge or pantry list is one block rather than a box with a stray line
+    of plain text bolted on after it. Wrapping happens on the raw caption
+    before escaping, so the wrap width matches what actually shows on
+    screen: an escaped "&amp;" is five characters in the string but one on
+    the phone, and wrapping after escaping would cut lines short for no
+    visible reason.
     """
     if not frame:
         # No pre block means no HTML, so the caption goes out as plain text and
         # must NOT be escaped. Escaping here would show "&amp;" to the user.
         return caption or ""
-    body = (frame.replace("&", "&amp;")
-                 .replace("<", "&lt;")
-                 .replace(">", "&gt;"))
-    out = "<pre>" + body + "</pre>"
+    body = esc(frame)
     if caption:
-        out += "\n" + esc(caption)
-    return out
+        wrapped = "\n".join(esc(line) for line in _wrap_caption(caption))
+        body += "\n\n" + wrapped
+    return "<pre>" + body + "</pre>"
