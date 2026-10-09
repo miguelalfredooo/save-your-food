@@ -183,7 +183,12 @@ it follows. Photos are remembered by their caption, never the image. Older
 than that is forgotten, and `/deleteme` clears it.
 
 A message that looks like a recipe and asks for nothing else is drafted
-straight away, with Save and Cancel buttons. Lists in AI replies are plain
+straight away, with Save and Cancel buttons. A message that is just a recipe link
+(or a link and a few words) is drafted by the bot itself, without the
+model: most recipe sites carry the recipe as structured data, so this is
+fast, free and doesn't depend on the model choosing to fetch. A page without
+that data goes to the model with its text. Owner only, and it works with AI
+mode off too. Lists in AI replies are plain
 `•` lines rather than a monospace block, which Telegram draws as code.
 
 **What it costs.** Every model call is logged per person and day, with the
@@ -274,7 +279,7 @@ gets answered more often than a Reminders alert. Everything else is in the
 | `fridge.py` | Storage, list parsing, composing messages |
 | `card.py` | The fixed-width card the nudge, `/fridge` and `/freezer` are drawn as |
 | `shelf_life.py` | The use-by table and risk classes, ported from the skill |
-| `test_logic.py` | 455 tests. `python3 test_logic.py` |
+| `test_logic.py` | 462 tests. `python3 test_logic.py` |
 | `preview.py` | Renders the messages for any date, no token needed. `python3 preview.py 2026-09-26` |
 | `try_chat.py` | Chat with the real handlers in a terminal, no token. `tap 2 used` presses a card button. `python3 try_chat.py -i` |
 | `seed.json` | Real fridge contents as of Sep 23, so the test runs against real food |
@@ -332,7 +337,7 @@ The bot registers these with Telegram on startup, so they show in the `/` menu.
 
     python3 test_logic.py
 
-455 tests, no network needed. The interesting ones are the bucket collisions
+462 tests, no network needed. The interesting ones are the bucket collisions
 (`ground beef` vs `ground ginger`, `coconut milk` vs `oat milk`, `butternut
 squash` vs `peanut butter`) and the correction phrasings, including negation.
 
