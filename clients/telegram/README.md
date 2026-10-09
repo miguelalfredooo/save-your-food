@@ -56,6 +56,9 @@ and boots out any earlier copy of the service before installing fresh.
 Logs live in `~/Library/Logs/fridge-loop/bot.log` and `bot.err.log`, rotated
 to `.old` by `install.sh` once either passes 5 MB.
 
+The service runs the bot under `caffeinate -i`, so the Mac doesn't idle-sleep
+while it's up and the daily nudge still goes out. The display can still sleep.
+
 **Two Mac settings launchd can't handle, both needed for this to survive a
 power cut:**
 
@@ -63,9 +66,9 @@ power cut:**
   Turn on automatic login for this user (System Settings > Users & Groups >
   Login Options), or the bot stays off after a restart until someone logs in
   by hand.
-- **Don't let the Mac sleep.** System Settings > Energy: turn on "Prevent
-  automatic sleeping when the display is off" and "Start up automatically
-  after a power failure".
+- **Start up after a power failure.** System Settings > Energy: turn on
+  "Start up automatically after a power failure". `caffeinate` keeps a
+  running Mac awake, but it can't turn a Mac back on.
 
 ## Who can use it
 

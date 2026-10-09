@@ -5,8 +5,13 @@
     <key>Label</key>
     <string>com.fridgeloop.bot</string>
 
+    <!-- Run under caffeinate -i so the Mac can't idle-sleep while the bot is
+         up, and the daily nudge still goes out. The display can still sleep.
+         Exits with bot.py, so launchd's KeepAlive still sees the bot die. -->
     <key>ProgramArguments</key>
     <array>
+        <string>/usr/bin/caffeinate</string>
+        <string>-i</string>
         <string>__PYTHON3__</string>
         <string>__BOT_PY__</string>
     </array>
