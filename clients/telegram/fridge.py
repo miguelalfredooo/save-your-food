@@ -4,6 +4,7 @@ No Telegram in here either. Everything in this file can be run and checked
 without a network, which matters because the transport can't be tested offline.
 """
 
+import json
 import os
 import re
 import sqlite3
@@ -583,6 +584,32 @@ def open_items(con, chat_id):
     return [dict(r, use_by_date=date.fromisoformat(r["use_by"])) for r in rows]
 
 
+def items_by_ids(con, chat_id, ids):
+    """These items in this order, open or closed. A card keeps showing a
+    closed item as its outcome, so it needs rows open_items would drop."""
+    if not ids:
+        return []
+    rows = con.execute(
+        "SELECT * FROM items WHERE chat_id=? AND id IN (%s)" % ",".join("?" * len(ids)),
+        [chat_id] + list(ids)).fetchall()
+    by_id = {r["id"]: dict(r, use_by_date=date.fromisoformat(r["use_by"])) for r in rows}
+    return [by_id[i] for i in ids if i in by_id]
+
+
+# --- cards -----------------------------------------------------------------
+#
+# What a sent card holds, keyed by its Telegram message id, so a tap can
+# redraw the same message. Lives in meta: one small JSON blob per card.
+
+def save_card(con, chat_id, message_id, spec):
+    set_pref(con, chat_id, "card:%d" % message_id, json.dumps(spec))
+
+
+def load_card(con, chat_id, message_id):
+    raw = get_pref(con, chat_id, "card:%d" % message_id)
+    return json.loads(raw) if raw else None
+
+
 def close_item(con, chat_id, item_id, state):
     con.execute(
         "UPDATE items SET state=?, closed=? WHERE id=? AND chat_id=?",
@@ -612,6 +639,23 @@ def expired_past_budget(con, chat_id, today=None):
     ]
 
 
+def nudge_head(items, today=None):
+    """The title line. It has to work on a lock screen by itself."""
+    today = today or date.today()
+    t0 = [i for i in items if sl.tier(i["use_by_date"], today) == 0]
+    t1 = [i for i in items if sl.tier(i["use_by_date"], today) == 1]
+    if t1 and not t0:
+        hero = t1[0]["name"]
+        return ("Use the %s tonight, or freeze it" % hero if len(t1) == 1
+                else "%s and %d more to use tonight or freeze" % (hero, len(t1) - 1))
+    if t0 and not t1:
+        return ("1 thing past its best: check before eating" if len(t0) == 1
+                else "%d things past their best: check before eating" % len(t0))
+    if t0 and t1:
+        return "%d to use tonight, %d to check" % (len(t1), len(t0))
+    return "Coming up: %s" % _join([i["name"] for i in items])
+
+
 def compose_nudge(items, today=None):
     """The message body. The title line has to work on a lock screen by itself."""
     today = today or date.today()
@@ -621,17 +665,7 @@ def compose_nudge(items, today=None):
     t0 = [i for i in items if sl.tier(i["use_by_date"], today) == 0]
     t1 = [i for i in items if sl.tier(i["use_by_date"], today) == 1]
 
-    if t1 and not t0:
-        hero = t1[0]["name"]
-        head = ("Use the %s tonight, or freeze it" % hero if len(t1) == 1
-                else "%s and %d more to use tonight or freeze" % (hero, len(t1) - 1))
-    elif t0 and not t1:
-        head = ("1 thing past its best: check before eating" if len(t0) == 1
-                else "%d things past their best: check before eating" % len(t0))
-    else:
-        head = "%d to use tonight, %d to check" % (len(t1), len(t0))
-
-    lines = [head, ""]
+    lines = [nudge_head(items, today), ""]
     if t1:
         lines.append(sl.TIERS[1])
         for i in t1:
