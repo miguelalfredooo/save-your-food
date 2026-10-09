@@ -203,7 +203,7 @@ understanding problem, so the model never touches them.
 Once a day at 16:30 (change `nudge_hour` in `config.json`) it sends **one**
 message, a card, with a numbered line per item and a row of buttons for each:
 
-    1 TO USE TONIGHT, 1 TO CHECK
+    1 TONIGHT, 1 TO CHECK
     ────────────────────────
     CHECK BEFORE EATING
     1 cilantro       1d past
@@ -223,6 +223,11 @@ The card body is a monospace block padded to exactly 24 columns, the same
 canvas the drawings use, so every card is the same width on a phone instead of
 each bubble sizing itself to its longest line. A long list shows the soonest
 15 and says how many it left out. `card.py` has the reasoning.
+
+The bold heading sits outside the block, so it is kept short enough never to
+widen the card: a nudge whose items share one urgency is headed with that
+urgency ("Check before eating"), and a mixed one with a count ("1 tonight, 1
+to check").
 
 `/freezer` is a card too, with two buttons per item: ✅ when it is finished,
 🗑 if it ended up in the bin. Binning something that had counted as used in
@@ -256,7 +261,7 @@ typed lists only for now.
 | `fridge.py` | Storage, list parsing, composing messages |
 | `card.py` | The fixed-width card the nudge, `/fridge` and `/freezer` are drawn as |
 | `shelf_life.py` | The use-by table and risk classes, ported from the skill |
-| `test_logic.py` | 376 tests. `python3 test_logic.py` |
+| `test_logic.py` | 380 tests. `python3 test_logic.py` |
 | `preview.py` | Renders the messages for any date, no token needed. `python3 preview.py 2026-09-26` |
 | `try_chat.py` | Chat with the real handlers in a terminal, no token. `tap 2 used` presses a card button. `python3 try_chat.py -i` |
 | `seed.json` | Real fridge contents as of Sep 23, so the test runs against real food |
@@ -314,7 +319,7 @@ The bot registers these with Telegram on startup, so they show in the `/` menu.
 
     python3 test_logic.py
 
-376 tests, no network needed. The interesting ones are the bucket collisions
+380 tests, no network needed. The interesting ones are the bucket collisions
 (`ground beef` vs `ground ginger`, `coconut milk` vs `oat milk`, `butternut
 squash` vs `peanut butter`) and the correction phrasings, including negation.
 
