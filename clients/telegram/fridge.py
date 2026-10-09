@@ -24,7 +24,11 @@ CREATE TABLE IF NOT EXISTS items (
     added     TEXT    NOT NULL,
     batch     TEXT,                     -- one capture's stamp, for /undo
     state     TEXT    NOT NULL DEFAULT 'open',  -- open | used | frozen | tossed
-    closed    TEXT
+    closed    TEXT,
+    tier      INTEGER,                  -- urgency tier at the moment it closed
+    tier_source TEXT,                   -- recorded | reconstructed
+    freezer_outcome TEXT,               -- used | tossed, once it leaves the freezer
+    freezer_at TEXT                     -- when that happened
 );
 CREATE TABLE IF NOT EXISTS pantry (
     id        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -48,14 +52,48 @@ def connect(path=None):
     con = sqlite3.connect(path or DB_PATH)
     con.row_factory = sqlite3.Row
     con.executescript(SCHEMA)
-    # A db made before /undo existed has no batch column. Add it rather than
-    # asking anyone to delete their fridge to get an upgrade.
-    for table in ("items", "pantry"):
+    # A db made before a feature existed is missing its columns. Add them
+    # rather than asking anyone to delete their fridge to get an upgrade.
+    for table, column, decl in (
+        ("items", "batch", "TEXT"),
+        ("pantry", "batch", "TEXT"),
+        ("items", "tier", "INTEGER"),
+        ("items", "tier_source", "TEXT"),
+        ("items", "freezer_outcome", "TEXT"),
+        ("items", "freezer_at", "TEXT"),
+    ):
         cols = [r[1] for r in con.execute("PRAGMA table_info(%s)" % table)]
-        if "batch" not in cols:
-            con.execute("ALTER TABLE %s ADD COLUMN batch TEXT" % table)
+        if column not in cols:
+            con.execute("ALTER TABLE %s ADD COLUMN %s %s" % (table, column, decl))
     con.commit()
+    backfill_tiers(con)
     return con
+
+
+def backfill_tiers(con):
+    """Reconstruct the tier for closes that happened before the column existed.
+
+    Exact, not a guess. A closed row keeps the use_by it had, the dedupe in
+    add_items only touches open rows, and sl.tier's thresholds have never
+    changed since they were written, so sl.tier(use_by, close date) returns
+    what it would have returned on the day. The date part of the timestamp is
+    what counts, so an item closed just after midnight gets that day's tier.
+
+    Marked `reconstructed` all the same, because a report that mixes the two
+    silently is claiming more than it knows. Idempotent: only NULL tiers.
+    """
+    rows = con.execute(
+        "SELECT id, use_by, closed FROM items"
+        " WHERE state != 'open' AND tier IS NULL AND closed IS NOT NULL"
+    ).fetchall()
+    for r in rows:
+        closed_day = date.fromisoformat(r["closed"][:10])
+        t = sl.tier(date.fromisoformat(r["use_by"]), closed_day)
+        con.execute("UPDATE items SET tier=?, tier_source='reconstructed'"
+                    " WHERE id=?", (t, r["id"]))
+    if rows:
+        con.commit()
+    return len(rows)
 
 
 # --- capture ---------------------------------------------------------------
@@ -583,12 +621,106 @@ def open_items(con, chat_id):
     return [dict(r, use_by_date=date.fromisoformat(r["use_by"])) for r in rows]
 
 
-def close_item(con, chat_id, item_id, state):
+def close_item(con, chat_id, item_id, state, today=None):
+    """Close an item out, recording the tier it was in at that moment.
+
+    Tiers are computed and never stored (SKILL §1, §5), so this row is the only
+    place that moment survives, and it is what makes a rescue countable later.
+
+    Every close goes through here, including the LLM's update_item, so there is
+    one place the tier can be missed and it is this one.
+    """
+    now = datetime.now()
+    row = con.execute("SELECT use_by FROM items WHERE id=? AND chat_id=?",
+                      (item_id, chat_id)).fetchone()
+    t = None
+    if row:
+        t = sl.tier(date.fromisoformat(row["use_by"]), today or now.date())
     con.execute(
-        "UPDATE items SET state=?, closed=? WHERE id=? AND chat_id=?",
-        (state, datetime.now().isoformat(timespec="seconds"), item_id, chat_id),
+        "UPDATE items SET state=?, closed=?, tier=?, tier_source='recorded'"
+        " WHERE id=? AND chat_id=?",
+        (state, now.isoformat(timespec="seconds"), t, item_id, chat_id),
     )
     con.commit()
+
+
+RESCUE_TIERS = (0, 1)
+
+
+def is_rescue(state, tier):
+    """A rescue is a used or frozen close at t0 or t1 (SKILL §15).
+
+    Nothing earlier counts. Milk drunk on day 2 of 8 was never at risk, so
+    counting it would credit the system for breakfast.
+    """
+    return state in ("used", "frozen") and tier in RESCUE_TIERS
+
+
+def tier_counts(con, chat_id):
+    """How many closed rows carry a recorded tier versus a reconstructed one.
+
+    A report built from these has to be able to say "N reconstructed".
+    """
+    out = {"recorded": 0, "reconstructed": 0, "none": 0}
+    for r in con.execute(
+            "SELECT tier_source, COUNT(*) n FROM items"
+            " WHERE chat_id=? AND state != 'open' GROUP BY tier_source",
+            (chat_id,)):
+        out[r["tier_source"] or "none"] = r["n"]
+    return out
+
+
+# --- the freezer -----------------------------------------------------------
+#
+# Freezing used to be a dead end: the item left open_items and had no buttons
+# ever again, so a frozen rescue could never be reversed and the rescued figure
+# could only ever drift upward. These two columns give it somewhere to go.
+#
+# A frozen item keeps state='frozen' and its original close date and tier. That
+# close really happened and the rescue was really earned, so it stays attributed
+# to the month it happened in. What comes later is a separate event with its own
+# date, which is what lets a reversal land in the month of the toss (SKILL §15)
+# rather than silently rewriting an earlier month.
+
+def frozen_items(con, chat_id):
+    """What is in the freezer and still undecided."""
+    rows = con.execute(
+        "SELECT * FROM items WHERE chat_id=? AND state='frozen'"
+        " AND freezer_outcome IS NULL ORDER BY closed DESC",
+        (chat_id,),
+    ).fetchall()
+    return [dict(r, use_by_date=date.fromisoformat(r["use_by"])) for r in rows]
+
+
+def settle_freezer_item(con, chat_id, item_id, outcome):
+    """Record what finally happened to something frozen: used or tossed.
+
+    'tossed' is the reversal. Freezing only to delay the bin is not a save, so
+    the rescue comes back off in the month the bin happened.
+    """
+    if outcome not in ("used", "tossed"):
+        raise ValueError("outcome must be used or tossed")
+    # First answer wins. Telegram keeps inline buttons tappable forever, so a
+    # stale message could otherwise overwrite "used" with "tossed" and reverse
+    # a rescue that was never reversed. The bot checks this too; the guard
+    # belongs here as well, because the button is the untrusted side.
+    con.execute(
+        "UPDATE items SET freezer_outcome=?, freezer_at=?"
+        " WHERE id=? AND chat_id=? AND state='frozen'"
+        " AND freezer_outcome IS NULL",
+        (outcome, datetime.now().isoformat(timespec="seconds"), item_id, chat_id),
+    )
+    con.commit()
+
+
+def reversed_rescues(con, chat_id):
+    """Frozen rescues that later went in the bin, with the date they did."""
+    rows = con.execute(
+        "SELECT * FROM items WHERE chat_id=? AND state='frozen'"
+        " AND freezer_outcome='tossed' ORDER BY freezer_at DESC",
+        (chat_id,),
+    ).fetchall()
+    return [dict(r) for r in rows if is_rescue("frozen", r["tier"])]
 
 
 # --- the nudge -------------------------------------------------------------

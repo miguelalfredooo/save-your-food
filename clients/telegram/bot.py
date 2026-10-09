@@ -233,6 +233,7 @@ HELP = (
     "/fridge: what's tracked, soonest first\n"
     "/pantry: what I remember but don't track\n"
     "/nudge: what's at risk right now\n"
+    "/freezer: what you froze, and how it ended up\n"
     "/undo: take back the last list I added\n"
     "\"those are pantry\": move the last list out of tracking\n"
     "/clear: wipe everything and start over\n"
@@ -329,6 +330,42 @@ def _capped_item_list(names, max_chars=MAX_CAPTION_LIST_CHARS):
         kept.append(name)
         total += add
     return "%s, and %d more" % (", ".join(kept), len(names) - len(kept))
+
+
+def freezer_buttons(item_id):
+    """Only two outcomes. There is no "froze it" for something already frozen,
+    and tossing from here is what reverses the rescue."""
+    return [[
+        {"text": "\u2705 Used it", "callback_data": "frz:used:%d" % item_id},
+        {"text": "\U0001f5d1 Tossed it", "callback_data": "frz:tossed:%d" % item_id},
+    ]]
+
+
+def send_freezer(tg, con, chat_id, today=None):
+    """What is in the freezer, one buttoned line each.
+
+    This exists because freezing was a dead end: the item left every view and
+    could never be answered for again, so a frozen rescue could never be
+    reversed and the rescued figure could only drift upward.
+    """
+    today = today or date.today()
+    items = fridge.frozen_items(con, chat_id)
+    if not items:
+        tg.send(chat_id, "Nothing in the freezer that I know about. Freezing "
+                         "something from a nudge puts it here.")
+        return 0
+    tg.send(chat_id, "In the freezer (%d). Tell me when one of these is "
+                     "finished, or if it ended up in the bin." % len(items))
+    for i in items:
+        froze_on = (i["closed"] or "")[:10]
+        label = i["name"]
+        if froze_on:
+            d = date.fromisoformat(froze_on)
+            # Not strftime("%-d"): that is a glibc extension and this runs on
+            # macOS, where BSD strftime leaves it as a literal.
+            label += " (frozen %s %d)" % (d.strftime("%b"), d.day)
+        tg.send(chat_id, label, buttons=freezer_buttons(i["id"]))
+    return len(items)
 
 
 def compose_pantry_html(items):
@@ -642,6 +679,9 @@ def handle_message(tg, con, msg, cfg):
     if low.startswith("/fridge"):
         tg.send(chat_id, fridge.compose_inventory(fridge.open_items(con, chat_id)))
         return
+    if low.startswith("/freezer"):
+        send_freezer(tg, con, chat_id)
+        return
     if low.startswith("/pantry"):
         items = fridge.pantry_items(con, chat_id)
         body = compose_pantry_html(items)
@@ -770,6 +810,40 @@ def handle_callback(tg, con, cb, cfg):
     if cfg["allowed_chat_ids"] and chat_id not in cfg["allowed_chat_ids"]:
         return
     state, _, raw_id = data.partition(":")
+
+    if state == "frz":
+        outcome, _, raw = raw_id.partition(":")
+        if outcome not in ("used", "tossed"):
+            tg.answer(cb["id"])
+            return
+        try:
+            item_id = int(raw)
+        except ValueError:
+            tg.answer(cb["id"])
+            return
+        row = con.execute("SELECT name, tier FROM items WHERE id=? AND chat_id=?"
+                          " AND state='frozen' AND freezer_outcome IS NULL",
+                          (item_id, chat_id)).fetchone()
+        if not row:
+            tg.answer(cb["id"], "Already handled.")
+            return
+        fridge.settle_freezer_item(con, chat_id, item_id, outcome)
+        tg.answer(cb["id"], "Used it" if outcome == "used" else "Tossed it")
+        if outcome == "used":
+            tg.edit(chat_id, msg["message_id"],
+                    "%s: used out of the freezer." % row["name"])
+            return
+        # A reversal. No drawing and no cheer: the food was wasted in the end,
+        # and the saying-so is the point (SKILL §19, art.FORBIDDEN).
+        tg.edit(chat_id, msg["message_id"],
+                "%s: tossed out of the freezer." % row["name"])
+        if fridge.is_rescue("frozen", row["tier"]):
+            tg.send(chat_id, "Noted. That one had counted as used in time, so "
+                             "it comes back off this month's figure. Freezing "
+                             "only to bin it later is not a save.")
+        else:
+            tg.send(chat_id, "Noted. Logged so the monthly count is honest.")
+        return
 
     if state == "onb":
         kind, _, val = raw_id.partition(":")

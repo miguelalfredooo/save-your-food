@@ -2080,5 +2080,298 @@ class BotHandlers(unittest.TestCase):
         self.assertIn("milk", self.tg.sent[-1])
 
 
+
+class TierAtClose(unittest.TestCase):
+    """The tier an item was in when it closed is the only record of that
+    moment, because tiers are computed and never stored."""
+
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.tmp.close()
+        self.con = fridge.connect(self.tmp.name)
+
+    def tearDown(self):
+        self.con.close()
+        os.unlink(self.tmp.name)
+
+    def _close(self, name, use_by_offset, state, day_offset=0):
+        fridge.add_items(self.con, 1, [name], TODAY)
+        item = [i for i in fridge.open_items(self.con, 1)
+                if i["name"] == name][0]
+        self.con.execute("UPDATE items SET use_by=? WHERE id=?",
+                         ((TODAY + timedelta(days=use_by_offset)).isoformat(),
+                          item["id"]))
+        self.con.commit()
+        fridge.close_item(self.con, 1, item["id"], state,
+                          today=TODAY + timedelta(days=day_offset))
+        return self.con.execute("SELECT * FROM items WHERE id=?",
+                                (item["id"],)).fetchone()
+
+    def test_a_close_records_its_tier(self):
+        row = self._close("milk", 5, "used")
+        self.assertEqual(row["tier"], 3)
+        self.assertEqual(row["tier_source"], "recorded")
+
+    def test_each_tier_is_recorded_correctly(self):
+        self.assertEqual(self._close("a", -1, "used")["tier"], 0)
+        self.assertEqual(self._close("b", 0, "used")["tier"], 1)
+        self.assertEqual(self._close("c", 1, "used")["tier"], 1)
+        self.assertEqual(self._close("d", 2, "used")["tier"], 2)
+        self.assertEqual(self._close("e", 4, "used")["tier"], 2)
+        self.assertEqual(self._close("f", 5, "used")["tier"], 3)
+
+    def test_a_toss_keeps_its_tier_too(self):
+        # "tossed at t3" means the use-by estimate was too short, which is
+        # worth knowing (SKILL §15).
+        row = self._close("spinach", 6, "tossed")
+        self.assertEqual(row["tier"], 3)
+
+    def test_the_tier_is_taken_at_the_close_not_today(self):
+        # Closed two days later than it was logged: the tier has to be the one
+        # on the day it closed.
+        row = self._close("yogurt", 3, "used", day_offset=2)
+        self.assertEqual(row["tier"], 1)
+
+    def test_a_rescue_is_used_or_frozen_at_t0_or_t1(self):
+        self.assertTrue(fridge.is_rescue("used", 0))
+        self.assertTrue(fridge.is_rescue("used", 1))
+        self.assertTrue(fridge.is_rescue("frozen", 0))
+        self.assertTrue(fridge.is_rescue("frozen", 1))
+
+    def test_nothing_earlier_counts_as_a_rescue(self):
+        # Milk drunk on day 2 of 8 was never at risk. Counting it would credit
+        # the system for breakfast.
+        self.assertFalse(fridge.is_rescue("used", 2))
+        self.assertFalse(fridge.is_rescue("used", 3))
+        self.assertFalse(fridge.is_rescue("frozen", 3))
+
+    def test_a_toss_is_never_a_rescue_at_any_tier(self):
+        for t in (0, 1, 2, 3):
+            self.assertFalse(fridge.is_rescue("tossed", t))
+
+    def test_an_unknown_tier_is_not_a_rescue(self):
+        # A row whose tier could not be reconstructed must not be counted.
+        self.assertFalse(fridge.is_rescue("used", None))
+
+
+class BackfilledTiers(unittest.TestCase):
+    def test_old_closes_are_reconstructed_and_marked(self):
+        # A db written before the column existed. The reconstruction is exact:
+        # the stored use_by has not moved and sl.tier's thresholds never
+        # changed. It is still marked, because a report that mixes recorded and
+        # reconstructed tiers silently is claiming more than it knows.
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        tmp.close()
+        old = sqlite3.connect(tmp.name)
+        old.executescript("""
+            CREATE TABLE items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER NOT NULL,
+                name TEXT NOT NULL, use_by TEXT NOT NULL, risk TEXT NOT NULL,
+                estimated INTEGER NOT NULL, added TEXT NOT NULL,
+                state TEXT NOT NULL DEFAULT 'open', closed TEXT);
+        """)
+        rows = [
+            ("chicken", "2026-09-24", "2026-09-25T13:06:33", "used"),    # t0
+            ("olives",  "2026-09-28", "2026-09-27T12:31:02", "used"),    # t1
+            ("ginger",  "2026-09-28", "2026-09-27T12:30:57", "used"),    # t1
+            ("naan",    "2026-09-28", "2026-09-27T12:30:47", "used"),    # t1
+            ("basil",   "2026-09-26", "2026-09-25T13:06:37", "tossed"),  # t1
+            ("milk",    "2026-09-30", "2026-10-08T18:50:45", "tossed"),  # t0
+        ]
+        for name, use_by, closed, state in rows:
+            old.execute("INSERT INTO items (chat_id,name,use_by,risk,estimated,"
+                        "added,state,closed) VALUES (1,?,?,'yellow',1,?,?,?)",
+                        (name, use_by, use_by, state, closed))
+        old.execute("INSERT INTO items (chat_id,name,use_by,risk,estimated,added,state)"
+                    " VALUES (1,'open thing','2026-10-20','yellow',1,'2026-10-08','open')")
+        old.commit()
+        old.close()
+
+        con = fridge.connect(tmp.name)
+        got = dict((r["name"], (r["tier"], r["tier_source"])) for r in
+                   con.execute("SELECT name, tier, tier_source FROM items"))
+        self.assertEqual(got["chicken"], (0, "reconstructed"))
+        self.assertEqual(got["olives"], (1, "reconstructed"))
+        self.assertEqual(got["ginger"], (1, "reconstructed"))
+        self.assertEqual(got["naan"], (1, "reconstructed"))
+        self.assertEqual(got["basil"], (1, "reconstructed"))
+        self.assertEqual(got["milk"], (0, "reconstructed"))
+        # An open item has no close, so it has no tier.
+        self.assertEqual(got["open thing"], (None, None))
+
+        counts = fridge.tier_counts(con, 1)
+        self.assertEqual(counts["reconstructed"], 6)
+        self.assertEqual(counts["recorded"], 0)
+
+        # Four of the six were rescues: used at t0 or t1.
+        rescues = [r["name"] for r in
+                   con.execute("SELECT name, state, tier FROM items WHERE state!='open'")
+                   if fridge.is_rescue(r["state"], r["tier"])]
+        self.assertEqual(sorted(rescues), ["chicken", "ginger", "naan", "olives"])
+        con.close()
+        os.unlink(tmp.name)
+
+    def test_backfill_does_not_touch_recorded_tiers(self):
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        tmp.close()
+        con = fridge.connect(tmp.name)
+        fridge.add_items(con, 1, ["milk"], TODAY)
+        item = fridge.open_items(con, 1)[0]
+        fridge.close_item(con, 1, item["id"], "used", today=TODAY)
+        self.assertEqual(fridge.backfill_tiers(con), 0)
+        row = con.execute("SELECT tier_source FROM items WHERE id=?",
+                          (item["id"],)).fetchone()
+        self.assertEqual(row["tier_source"], "recorded")
+        con.close()
+        os.unlink(tmp.name)
+
+    def test_backfill_is_idempotent(self):
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        tmp.close()
+        con = fridge.connect(tmp.name)
+        con.execute("INSERT INTO items (chat_id,name,use_by,risk,estimated,added,"
+                    "state,closed) VALUES (1,'x','2026-09-28','yellow',1,"
+                    "'2026-09-20','used','2026-09-27T10:00:00')")
+        con.commit()
+        self.assertEqual(fridge.backfill_tiers(con), 1)
+        self.assertEqual(fridge.backfill_tiers(con), 0)
+        con.close()
+        os.unlink(tmp.name)
+
+
+class Freezer(unittest.TestCase):
+    """Freezing used to be a dead end: the item left every view and could never
+    be answered for again, so a frozen rescue could never be reversed."""
+
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.tmp.close()
+        self.con = fridge.connect(self.tmp.name)
+        fridge.add_items(self.con, 1, ["chicken thighs"], TODAY)
+        self.item = fridge.open_items(self.con, 1)[0]
+
+    def tearDown(self):
+        self.con.close()
+        os.unlink(self.tmp.name)
+
+    def _freeze(self, day_offset=1):
+        fridge.close_item(self.con, 1, self.item["id"], "frozen",
+                          today=TODAY + timedelta(days=day_offset))
+
+    def test_a_frozen_item_is_reachable_afterwards(self):
+        self._freeze()
+        self.assertEqual(fridge.open_items(self.con, 1), [])      # not in the fridge
+        names = [i["name"] for i in fridge.frozen_items(self.con, 1)]
+        self.assertEqual(names, ["chicken thighs"])               # but not gone
+
+    def test_freezing_at_t1_is_a_rescue(self):
+        self._freeze()
+        row = fridge.frozen_items(self.con, 1)[0]
+        self.assertEqual(row["tier"], 1)
+        self.assertTrue(fridge.is_rescue("frozen", row["tier"]))
+
+    def test_using_it_out_of_the_freezer_settles_it(self):
+        self._freeze()
+        fridge.settle_freezer_item(self.con, 1, self.item["id"], "used")
+        self.assertEqual(fridge.frozen_items(self.con, 1), [])
+        self.assertEqual(fridge.reversed_rescues(self.con, 1), [])
+
+    def test_tossing_it_out_of_the_freezer_reverses_the_rescue(self):
+        self._freeze()
+        fridge.settle_freezer_item(self.con, 1, self.item["id"], "tossed")
+        self.assertEqual(fridge.frozen_items(self.con, 1), [])
+        rev = fridge.reversed_rescues(self.con, 1)
+        self.assertEqual([r["name"] for r in rev], ["chicken thighs"])
+
+    def test_the_reversal_carries_its_own_date(self):
+        # The rescue stays attributed to the month it was earned; the reversal
+        # lands in the month of the toss, rather than rewriting an earlier one.
+        self._freeze()
+        fridge.settle_freezer_item(self.con, 1, self.item["id"], "tossed")
+        row = fridge.reversed_rescues(self.con, 1)[0]
+        self.assertTrue(row["closed"])
+        self.assertTrue(row["freezer_at"])
+        self.assertEqual(row["tier"], 1)          # the freeze tier survives
+        self.assertEqual(row["state"], "frozen")  # the close is not rewritten
+
+    def test_freezing_something_that_was_never_at_risk_is_not_a_rescue(self):
+        self._freeze(day_offset=-3)   # frozen while still t3
+        fridge.settle_freezer_item(self.con, 1, self.item["id"], "tossed")
+        self.assertEqual(fridge.reversed_rescues(self.con, 1), [])
+
+    def test_a_settled_item_cannot_be_settled_twice(self):
+        self._freeze()
+        fridge.settle_freezer_item(self.con, 1, self.item["id"], "used")
+        fridge.settle_freezer_item(self.con, 1, self.item["id"], "tossed")
+        row = self.con.execute("SELECT freezer_outcome FROM items WHERE id=?",
+                               (self.item["id"],)).fetchone()
+        self.assertEqual(row["freezer_outcome"], "used")
+
+    def test_a_bad_outcome_is_refused(self):
+        self._freeze()
+        with self.assertRaises(ValueError):
+            fridge.settle_freezer_item(self.con, 1, self.item["id"], "frozen")
+
+
+class TossInChatIsNotADelete(unittest.TestCase):
+    """The LLM has both update_item and remove_item. remove_item DELETEs, so a
+    toss routed there drops silently out of the monthly figures."""
+
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.tmp.close()
+        self.con = fridge.connect(self.tmp.name)
+
+    def tearDown(self):
+        self.con.close()
+        os.unlink(self.tmp.name)
+
+    def test_a_toss_through_the_llm_closes_the_item_and_keeps_it(self):
+        fridge.add_items(self.con, 1, ["cilantro"], TODAY)
+        res = llm_agent.exec_update_item(
+            self.con, 1, {"name": "cilantro", "state": "tossed"}, TODAY)
+        self.assertTrue(res.get("ok"))
+        row = self.con.execute("SELECT state, tier, tier_source FROM items"
+                               " WHERE name='cilantro'").fetchone()
+        self.assertEqual(row["state"], "tossed")
+        self.assertIsNotNone(row["tier"])
+        self.assertEqual(row["tier_source"], "recorded")
+
+    def test_a_use_through_the_llm_records_a_rescue(self):
+        fridge.add_items(self.con, 1, ["spinach"], TODAY)
+        item = fridge.open_items(self.con, 1)[0]
+        self.con.execute("UPDATE items SET use_by=? WHERE id=?",
+                         (TODAY.isoformat(), item["id"]))
+        self.con.commit()
+        llm_agent.exec_update_item(self.con, 1, {"name": "spinach", "state": "used"}, TODAY)
+        row = self.con.execute("SELECT state, tier FROM items WHERE name='spinach'").fetchone()
+        self.assertTrue(fridge.is_rescue(row["state"], row["tier"]))
+
+    def test_remove_item_still_deletes_for_a_mistaken_entry(self):
+        fridge.add_items(self.con, 1, ["mlik"], TODAY)
+        llm_agent.exec_remove_item(self.con, 1, {"name": "mlik"})
+        self.assertEqual(
+            self.con.execute("SELECT COUNT(*) FROM items WHERE name='mlik'").fetchone()[0], 0)
+
+    def test_the_tools_tell_the_model_which_is_which(self):
+        # The only thing stopping a toss being deleted is how these read.
+        tools = dict((t["function"]["name"], t["function"]["description"])
+                     for t in llm_agent.TOOLS)
+        update, remove = tools["update_item"], tools["remove_item"]
+        for word in ("threw out", "binned", "wasted", "froze"):
+            self.assertIn(word, update.lower(), word)
+        self.assertIn("never", remove.lower())
+        self.assertIn("mistake", remove.lower())
+        self.assertIn("update_item", remove)
+
+    def test_the_prompt_routes_outcomes_to_update_item(self):
+        p = llm_agent.SYSTEM_PROMPT.lower()
+        self.assertIn("outcomes", p)
+        for word in ("threw it out", "binned it", "froze"):
+            self.assertIn(word, p, word)
+        self.assertIn("never remove_item", p)
+
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
