@@ -1616,6 +1616,93 @@ class RecipeSearch(unittest.TestCase):
         self.assertLessEqual(len(result["matches"][0]["text"]), llm_agent.MAX_RECIPE_CHARS)
 
 
+class RecipeNoteWrite(unittest.TestCase):
+    """The one write this client makes to Notes: a new note, created by a
+    single osascript that checks for a same-titled note first. Title and
+    body travel as arguments, never as script source."""
+
+    DRAFT = {"id": "abc123", "title": "Arroz con Pollo",
+             "ingredients": ["2 lb chicken thighs", "2 cups rice"],
+             "steps": ["Brown the chicken.", "Add rice & broth, simmer 20 min."],
+             "source_url": "https://example.com/arroz"}
+
+    def _fake_run(self, stdout="CREATED\n", returncode=0, raises=None):
+        calls = []
+
+        class Result:
+            pass
+
+        def run(cmd, **kw):
+            calls.append((cmd, kw))
+            if raises:
+                raise raises
+            r = Result()
+            r.stdout, r.returncode, r.stderr = stdout, returncode, ""
+            return r
+        return run, calls
+
+    def _with_run(self, run, fn):
+        original = subprocess.run
+        subprocess.run = run
+        try:
+            return fn()
+        finally:
+            subprocess.run = original
+
+    def test_note_text_has_title_ingredients_steps_and_source(self):
+        self.assertEqual(
+            llm_agent.recipe_note_text(self.DRAFT),
+            "Arroz con Pollo\n\n- 2 lb chicken thighs\n- 2 cups rice\n\n"
+            "1. Brown the chicken.\n2. Add rice & broth, simmer 20 min.\n\n"
+            "Source: https://example.com/arroz")
+
+    def test_note_text_leaves_out_empty_parts(self):
+        d = dict(self.DRAFT, steps=[], source_url="")
+        self.assertEqual(llm_agent.recipe_note_text(d),
+                         "Arroz con Pollo\n\n- 2 lb chicken thighs\n- 2 cups rice")
+
+    def test_note_html_puts_the_title_first_and_escapes(self):
+        h = llm_agent.recipe_note_html(dict(self.DRAFT, title="Mac & <Cheese>"))
+        self.assertTrue(h.startswith("<h1>Mac &amp; &lt;Cheese&gt;</h1>"))
+        self.assertIn("<div>2. Add rice &amp; broth, simmer 20 min.</div>", h)
+        self.assertIn("<div><br></div>", h)
+
+    def test_create_passes_title_and_body_as_arguments_not_script_text(self):
+        run, calls = self._fake_run()
+        d = dict(self.DRAFT, title='-5 Minute "Salsa" \\ & <Co>')
+        self.assertEqual(self._with_run(run, lambda: llm_agent.create_recipe_note(d)),
+                         "created")
+        cmd, kw = calls[0]
+        self.assertEqual(cmd[:2], ["osascript", "-"])
+        self.assertEqual(cmd[2], '-5 Minute "Salsa" \\ & <Co>')
+        self.assertEqual(cmd[3], llm_agent.recipe_note_html(d))
+        self.assertEqual(kw["input"], llm_agent._CREATE_RECIPE_APPLESCRIPT)
+        self.assertNotIn("Salsa", kw["input"])
+
+    def test_duplicate_and_missing_folder_are_reported(self):
+        for out, expected in (("DUPLICATE\n", "duplicate"),
+                              ("NO_FOLDER\n", "no_folder"),
+                              ("something else\n", "failed")):
+            run, _ = self._fake_run(stdout=out)
+            self.assertEqual(
+                self._with_run(run, lambda: llm_agent.create_recipe_note(self.DRAFT)),
+                expected, out)
+
+    def test_failures_never_raise(self):
+        run, _ = self._fake_run(stdout="", returncode=1)
+        self.assertEqual(self._with_run(run, lambda: llm_agent.create_recipe_note(self.DRAFT)),
+                         "failed")
+        run, _ = self._fake_run(raises=subprocess.TimeoutExpired("osascript", 30))
+        self.assertEqual(self._with_run(run, lambda: llm_agent.create_recipe_note(self.DRAFT)),
+                         "failed")
+
+    def test_the_script_only_ever_creates(self):
+        s = llm_agent._CREATE_RECIPE_APPLESCRIPT
+        self.assertIn("make new note", s)
+        for forbidden in ("set body", "set name", "delete", "move"):
+            self.assertNotIn(forbidden, s)
+
+
 class LLMAgentLoop(unittest.TestCase):
     """The tool-calling loop, driven with a fake model (the `caller`
     injection point) so no network or API key is needed."""

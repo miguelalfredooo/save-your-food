@@ -20,6 +20,7 @@ import subprocess
 import urllib.error
 import urllib.request
 from datetime import date, timedelta
+from html import escape as _escape
 
 import fridge
 import shelf_life as sl
@@ -533,6 +534,81 @@ def exec_search_recipes(con, chat_id, args, today):
         "matches": [{"title": m["title"], "matched_ingredients": m["matched_ingredients"],
                      "text": m["text"][:MAX_RECIPE_CHARS]} for m in top],
     }
+
+
+# --- recipes: create-only writes to Apple Notes -----------------------------
+#
+# The one write this client makes to Notes. It is never a model tool: only
+# bot.py's Save button reaches create_recipe_note, so a recipe page that
+# talks the model into "saving" can at most produce a draft the user sees
+# (spec: docs/superpowers/specs/2026-10-08-add-recipes-to-notes-design.md).
+#
+# One osascript does the duplicate check and the create together. Title and
+# body arrive as argv, and the script itself goes in on stdin ("osascript -")
+# so a title starting with "-" can't be taken for an option. Nothing in it
+# edits, moves or deletes a note.
+
+RECIPE_SAVE_TIMEOUT = 30
+
+_CREATE_RECIPE_APPLESCRIPT = '''
+on run argv
+    set theTitle to item 1 of argv
+    set theBody to item 2 of argv
+    tell application "Notes"
+        repeat with acc in accounts
+            repeat with f in folders of acc
+                if (name of f) starts with "Recipes" then
+                    repeat with n in notes of f
+                        if (name of n) is theTitle then return "DUPLICATE"
+                    end repeat
+                end if
+            end repeat
+        end repeat
+        if not (exists folder "Recipes" of default account) then return "NO_FOLDER"
+        make new note at folder "Recipes" of default account with properties {body:theBody}
+        return "CREATED"
+    end tell
+end run
+'''
+
+
+def recipe_note_text(draft):
+    """The recipe as plain text, in the shape the bot already shows recipes
+    in: title, "- " ingredients, numbered steps. What the preview shows is
+    what Notes gets."""
+    lines = [draft["title"]]
+    if draft["ingredients"]:
+        lines += [""] + ["- %s" % i for i in draft["ingredients"]]
+    if draft["steps"]:
+        lines += [""] + ["%d. %s" % (n, s) for n, s in enumerate(draft["steps"], 1)]
+    if draft.get("source_url"):
+        lines += ["", "Source: %s" % draft["source_url"]]
+    return "\n".join(lines)
+
+
+def recipe_note_html(draft):
+    """Notes stores HTML and takes a note's title from its first line, so
+    the title leads as a heading and every other line is its own div."""
+    lines = recipe_note_text(draft).split("\n")
+    return "<h1>%s</h1>" % _escape(lines[0]) + "".join(
+        "<div>%s</div>" % (_escape(line) if line else "<br>") for line in lines[1:])
+
+
+def create_recipe_note(draft, timeout=RECIPE_SAVE_TIMEOUT):
+    """'created', 'duplicate', 'no_folder' or 'failed'. Never raises.
+    AppleScript's `is` ignores case, so "arroz con pollo" counts as a
+    duplicate of "Arroz con Pollo"."""
+    try:
+        result = subprocess.run(
+            ["osascript", "-", draft["title"], recipe_note_html(draft)],
+            input=_CREATE_RECIPE_APPLESCRIPT,
+            capture_output=True, text=True, timeout=timeout)
+    except Exception:
+        return "failed"
+    if result.returncode != 0:
+        return "failed"
+    return {"CREATED": "created", "DUPLICATE": "duplicate",
+            "NO_FOLDER": "no_folder"}.get(result.stdout.strip(), "failed")
 
 
 TOOL_EXECUTORS = {
