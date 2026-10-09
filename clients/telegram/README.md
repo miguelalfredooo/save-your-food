@@ -258,7 +258,8 @@ what it acts on: Save to Recipes, Wipe fridge and pantry, Delete my data.
 
 **Buttons only where there is a decision.** The nudge and `/freezer` give
 every item buttons. `/fridge` only gives them to what is past its date or
-due tonight or tomorrow, plus **Something else ›** for the rest. The card
+due tonight or tomorrow, plus **Mark another item ›** for the rest
+(**Mark an item ›** when nothing is at risk). The card
 after adding food has none: you bought it a moment ago. Past four items with
 buttons, a card shows one row of numbers instead of a row of three buttons
 per item: tap a number, then ✅ Used / ❄️ Froze / 🗑 Tossed, or ‹ Back. A

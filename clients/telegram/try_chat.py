@@ -14,7 +14,7 @@ Cards show their buttons. Press one by typing, for the most recent card:
     tap 2 used          (or frozen, tossed)
 
 On a long card that shows numbers first, this presses the number and then
-the choice, and it goes through "Something else" for items without buttons.
+the choice, and it goes through "Mark another item" for items without buttons.
 
 Ported from claude/pull-latest-reo66c, where it drove llm.py; on main the
 conversational mode is llm_agent.py, switched on by llm_mode.
@@ -104,7 +104,7 @@ def tap(tg, con, cfg, n, state):
         return None
 
     # A long card shows numbers first: press the number, then the choice.
-    # Items with no buttons of their own sit behind "Something else".
+    # Items with no buttons of their own sit behind "Mark another item".
     for step in ("direct", "number", "something else"):
         if step == "number" and find(True):
             press(find(True)["callback_data"])

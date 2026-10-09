@@ -4728,7 +4728,7 @@ class CorrectionCards(unittest.TestCase):
         self._say("cumin, olive oil")
         self._say("those are fridge")
         self.assertTrue(self.tg.sent[-1].startswith("<b>Moved to your fridge</b>\n<pre>"))
-        self.assertTrue(self.tg.buttons[-1])        # nothing at risk: "Something else"
+        self.assertTrue(self.tg.buttons[-1])        # nothing at risk: "Mark an item"
 
     def test_undo_names_what_it_took_back(self):
         self._say("milk, cumin")
@@ -4894,7 +4894,7 @@ class FewerButtons(unittest.TestCase):
         labels = self._labels(self.tg.buttons[0])
         self.assertTrue(any(l.startswith("1 ") for l in labels))
         self.assertFalse(any(l.startswith("2 ") for l in labels))
-        self.assertIn("Something else \u203a", labels)
+        self.assertIn("Mark another item \u203a", labels)
 
     def test_something_else_reaches_every_item(self):
         fridge.add_items(self.con, 1, ["milk"], TODAY)
@@ -4910,7 +4910,7 @@ class FewerButtons(unittest.TestCase):
     def test_nothing_at_risk_still_has_something_else(self):
         fridge.add_items(self.con, 1, ["cheddar"], self.day)
         bot.send_fridge(self.tg, self.con, 1, self.day)
-        self.assertEqual(self._labels(self.tg.buttons[0]), ["Something else \u203a"])
+        self.assertEqual(self._labels(self.tg.buttons[0]), ["Mark an item \u203a"])
 
     def test_the_added_card_has_no_buttons(self):
         bot.handle_message(self.tg, self.con, {"chat": {"id": 1, "type": "private"},

@@ -64,7 +64,7 @@ def keyboard(numbered, freezer=False, others=False, pick=None):
     """Buttons for these (n, item) pairs, or None.
 
     Up to DIRECT_MAX get a direct row each, one tap to answer. More get a
-    single row of numbers. `others` adds "Something else" for items on the
+    single row of numbers. `others` adds "Mark another item" for items on the
     card that have no buttons of their own, so nothing is out of reach.
     `pick` fixes the layout: a card keeps the one it was sent with, or it
     would switch from numbers to rows under someone's thumb as they answer.
@@ -82,12 +82,15 @@ def keyboard(numbered, freezer=False, others=False, pick=None):
                 for n, item in numbered]
         rows = [nums[i:i + PICKER_ROW] for i in range(0, len(nums), PICKER_ROW)]
     if others:
-        rows.append([{"text": "Something else \u203a", "callback_data": "pickall:0"}])
+        # Says what it does and which items: "another" when some already
+        # have buttons above it, "an" when it is the only way in.
+        label = "Mark another item" if numbered else "Mark an item"
+        rows.append([{"text": label + " \u203a", "callback_data": "pickall:0"}])
     return rows
 
 
 def picker(numbered):
-    """A row of numbers for every one of these, for "Something else"."""
+    """A row of numbers for every one of these, for "Mark another item"."""
     nums = [{"text": str(n), "callback_data": "pick:%d" % item["id"]}
             for n, item in numbered]
     rows = [nums[i:i + PICKER_ROW] for i in range(0, len(nums), PICKER_ROW)]
@@ -201,7 +204,7 @@ def render(head, items, today, footer, closing=None, label_one_tier=True,
     `top` is a drawing for the head of the card, inside the same block: the
     drawings are drawn to the card's width, so it costs no extra message.
     `actionable` picks which open items get buttons (all, by default); the
-    rest are reachable through "Something else".
+    rest are reachable through "Mark another item".
 
     A nudge's heading already names its tier when there is only one ("2
     things past their best: check before eating"), so label_one_tier=False
