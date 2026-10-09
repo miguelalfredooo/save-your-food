@@ -241,10 +241,11 @@ A tap edits the same card: the line becomes `✓ cilantro  used`, its buttons
 go, the footer counts up. When every line is handled the card closes with one
 drawing (none if everything was tossed). No extra messages arrive.
 
-The card body is a monospace block padded to exactly 32 columns, so every
+The card body is a monospace block padded to exactly 36 columns, so every
 card is the same width on a phone instead of each bubble sizing itself to its
-longest line. 32 fits a current phone at the default text size with room to
-spare; the drawings stay 24 wide and sit inside it. A long list shows the soonest
+longest line. 36 fits a current phone at the default text size with a small
+margin (about 38 fit); the drawings stay 24 wide and sit inside it. On a very
+small phone or with very large text, lines can wrap: lower `card.WIDTH` then. A long list shows the soonest
 15 and says how many it left out. `card.py` has the reasoning.
 
 **Everything that lists food is a card**: the nudge, `/fridge`, `/freezer`,
