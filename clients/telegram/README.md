@@ -21,6 +21,11 @@ including a chat with Claude.
 
 Replace `PUT_YOUR_BOTFATHER_TOKEN_HERE` with the token. Save and close.
 
+Where there is no file to edit, such as a cloud session holding the token as
+a secret, set `TELEGRAM_BOT_TOKEN` instead. A real token in `config.json`
+still wins over it. The launchd service below doesn't see your shell's
+environment, so it still needs `config.json`.
+
 **3. Start it.**
 
     python3 bot.py

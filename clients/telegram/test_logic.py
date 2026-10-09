@@ -1201,9 +1201,14 @@ class CrashLoopMessages(unittest.TestCase):
     def setUp(self):
         self.tmp_dir = tempfile.mkdtemp()
         self.orig_config_path = bot.CONFIG_PATH
+        # A token in the shell running the tests must not change what they see.
+        self.orig_env_token = os.environ.pop("TELEGRAM_BOT_TOKEN", None)
 
     def tearDown(self):
         bot.CONFIG_PATH = self.orig_config_path
+        os.environ.pop("TELEGRAM_BOT_TOKEN", None)
+        if self.orig_env_token is not None:
+            os.environ["TELEGRAM_BOT_TOKEN"] = self.orig_env_token
 
     def _fatal_message(self):
         with self.assertRaises(SystemExit) as ctx:
@@ -1223,6 +1228,34 @@ class CrashLoopMessages(unittest.TestCase):
         msg = self._fatal_message()
         self.assertTrue(msg.startswith("!"))
         self.assertNotIn("\n", msg)
+
+    def test_the_env_token_stands_in_for_a_missing_config(self):
+        bot.CONFIG_PATH = os.path.join(self.tmp_dir, "does-not-exist.json")
+        os.environ["TELEGRAM_BOT_TOKEN"] = "123:env"
+        cfg = bot.load_config()
+        self.assertEqual(cfg["token"], "123:env")
+        self.assertEqual(cfg["nudge_hour"], 16)        # defaults still applied
+
+    def test_the_env_token_fills_a_placeholder(self):
+        bot.CONFIG_PATH = os.path.join(self.tmp_dir, "config.json")
+        with open(bot.CONFIG_PATH, "w") as f:
+            f.write('{"token": "PUT_YOUR_BOTFATHER_TOKEN_HERE", "nudge_hour": 9}')
+        os.environ["TELEGRAM_BOT_TOKEN"] = "123:env"
+        cfg = bot.load_config()
+        self.assertEqual(cfg["token"], "123:env")
+        self.assertEqual(cfg["nudge_hour"], 9)          # the file still counts
+
+    def test_a_real_config_token_wins_over_the_env(self):
+        bot.CONFIG_PATH = os.path.join(self.tmp_dir, "config.json")
+        with open(bot.CONFIG_PATH, "w") as f:
+            f.write('{"token": "456:file"}')
+        os.environ["TELEGRAM_BOT_TOKEN"] = "123:env"
+        self.assertEqual(bot.load_config()["token"], "456:file")
+
+    def test_defaults_need_no_token(self):
+        cfg = bot.with_defaults({})
+        self.assertFalse(cfg["llm_mode"])
+        self.assertEqual(cfg["allowed_chat_ids"], [])
 
 
 class SingleInstanceLock(unittest.TestCase):

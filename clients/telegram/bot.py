@@ -120,19 +120,9 @@ def acquire_lock():
     return lock_file
 
 
-def load_config():
-    # A single, clearly marked line, not a paragraph: under a launchd
-    # crash loop this repeats every ThrottleInterval seconds, and status.sh
-    # only shows the tail of the log, so the reason it keeps restarting has
-    # to be readable in one line, not buried mid-paragraph.
-    if not os.path.exists(CONFIG_PATH):
-        sys.exit("! No config.json found. Copy config.example.json to "
-                 "config.json and put your bot token in it (from @BotFather "
-                 "in Telegram: /newbot).")
-    with open(CONFIG_PATH) as f:
-        cfg = json.load(f)
-    if not cfg.get("token") or "PUT_YOUR" in cfg["token"]:
-        sys.exit("! config.json has no real token in it yet.")
+def with_defaults(cfg):
+    """Fill in every setting a config can leave out. No token needed, so
+    try_chat.py can build a working config without one."""
     cfg.setdefault("nudge_hour", 16)
     cfg.setdefault("nudge_minute", 30)
     cfg.setdefault("allowed_chat_ids", [])
@@ -142,6 +132,36 @@ def load_config():
     cfg.setdefault("llm_model", "anthropic/claude-haiku-4.5")
     cfg.setdefault("ollama_base_url", "http://localhost:11434/v1")
     cfg.setdefault("ollama_model", "llama3.2-vision")
+    return cfg
+
+
+def _placeholder(token):
+    return not token or "PUT_YOUR" in token
+
+
+def load_config():
+    # A single, clearly marked line, not a paragraph: under a launchd
+    # crash loop this repeats every ThrottleInterval seconds, and status.sh
+    # only shows the tail of the log, so the reason it keeps restarting has
+    # to be readable in one line, not buried mid-paragraph.
+    #
+    # TELEGRAM_BOT_TOKEN stands in for the token where there is no file to
+    # edit, such as a cloud session with the token stored as a secret. A real
+    # token in config.json still wins.
+    env_token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    cfg = {}
+    if os.path.exists(CONFIG_PATH):
+        with open(CONFIG_PATH) as f:
+            cfg = json.load(f)
+    elif not env_token:
+        sys.exit("! No config.json found. Copy config.example.json to "
+                 "config.json and put your bot token in it (from @BotFather "
+                 "in Telegram: /newbot), or set TELEGRAM_BOT_TOKEN.")
+    if env_token and _placeholder(cfg.get("token")):
+        cfg["token"] = env_token
+    if _placeholder(cfg.get("token")):
+        sys.exit("! config.json has no real token in it yet.")
+    with_defaults(cfg)
     if cfg["llm_mode"] and cfg["llm_provider"] == "openrouter" and (
             not cfg["openrouter_api_key"] or "PUT_YOUR" in cfg["openrouter_api_key"]):
         sys.exit("! llm_mode is on with llm_provider openrouter, but "
