@@ -186,6 +186,12 @@ each bubble sizing itself to its longest line. A long list shows the soonest
 🗑 if it ended up in the bin. Binning something that had counted as used in
 time marks its line `off this month's count`.
 
+`/month` is a card with no buttons: what was used before it went off, then
+what was thrown away, each with how much of it could be priced and from
+where. Never a net figure between the two, and no dollar amount on a side
+where nothing was priced. A month with nothing closed yet stays a plain
+line.
+
 Items that sit past their date longer than their risk class allows — 1 day for
 raw meat, 3 for dairy and greens, 7 for hard cheese and root veg — are marked
 `long gone, toss it?` on their line. They used to get a separate message too.
@@ -245,7 +251,7 @@ The bot registers these with Telegram on startup, so they show in the `/` menu.
 | `/fridge` | what is tracked, soonest first |
 | `/pantry` | what is remembered but never nudged |
 | `/freezer` | what you froze, as a card: finished or binned |
-| `/month` | what you used in time, and what went in the bin |
+| `/month` | what you used in time, and what went in the bin, as a card |
 | `/nudge` | what is at risk right now |
 | `/undo` | take back the last captured list, whole |
 | `/clear` | wipe everything, with a confirmation |
