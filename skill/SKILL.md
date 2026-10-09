@@ -1,6 +1,6 @@
 ---
 name: "fridge-loop"
-description: "Log fridge, freezer and pantry items into Apple Reminders and drive timed nudges that persist until you tick them off as used, frozen or tossed, with recipe matches from your Apple Notes recipes. Learns what you re-buy, flags what you already have, prices what you waste, and answers questions about your own kitchen."
+description: "Log fridge, freezer and pantry items into Apple Reminders and drive timed nudges that persist until you tick them off as used, frozen or tossed, with recipe matches from your Apple Notes recipes. Learns what you re-buy, flags what you already have, prices what you waste and what you rescue, and answers questions about your own kitchen."
 ---
 
 # Fridge Loop
@@ -13,6 +13,7 @@ This file is doctrine — what to do and why. Operational detail lives beside th
 |---|---|
 | any `computer_app_*` work | `FOLDER/_ops/reminders-ui.md` |
 | touching the Telegram client | `FOLDER/_ops/telegram-client.md` |
+| pricing a toss or a rescue | `FOLDER/_ops/reference-prices-west.md` |
 
 ## 0. Config
 
@@ -308,10 +309,12 @@ A purchase, plus the next purchase of the same thing, is one cycle; three is a c
 
     2026-09-28 | milk     | bought | 4.99 | Safeway
     2026-09-28 | cilantro | bought | 2.49 | Safeway
-    2026-10-05 | milk     | used   |      |
-    2026-10-02 | cilantro | tossed |      |
+    2026-10-05 | milk     | used   |      |    | t3
+    2026-10-02 | cilantro | tossed |      |    | t0
 
-`bought` lines come from the receipt (§3). `used` / `frozen` / `tossed` come from a tick. **Price rides the `bought` line only** — a toss gets its cost by joining back to the most recent `bought` of that item. When there is no match, the item still counts toward the toss count but not the dollar figure, and any report says how many were priced.
+`bought` lines come from the receipt (§3). `used` / `frozen` / `tossed` come from a tick, and **carry the tier the item was in when it closed** (`t0`–`t3`, §5). Tiers are computed and never stored (§1), so the close line is the only place that moment survives, and it is what makes a rescue countable. Close lines written before 2026-10-08 have no tier field and are never backfilled.
+
+**Price rides the `bought` line only.** A toss or a rescue gets its cost by joining back to the most recent `bought` of that item. When there's no match, it falls through `FOLDER/_ops/reference-prices-west.md` in that file's source order: your receipt median for the item, then BLS West, then BLS US. If none of those has a price, the item still counts in the tally but not in the dollar figure, and any report says how many items were priced and from which source.
 
 This cannot be reconstructed afterwards — Reminders doesn't keep completed items indefinitely and the sweep only looks back 7 days. Append only; never rewrite history.
 
@@ -320,6 +323,7 @@ This cannot be reconstructed afterwards — Reminders doesn't keep completed ite
 | **Cadence** — how often it returns | "milk, ~8 days, 3 cycles" | A restock suggestion |
 | **Outcome** — how it ended | "cilantro, tossed 3 of 4" | Buy smaller, or stop buying |
 | **Cost** — what the tossed ones cost | "~$20 binned last month" | The toss count with teeth |
+| **Rescue** — what got used at the edge | "~$34 used before it went off" | Whether the system is earning its place |
 
 **Only `used` counts toward cadence. `tossed` is an anti-signal.** A detector counting every reappearance will help him re-buy the cilantro he bins every time — the system working against its own purpose.
 
@@ -362,7 +366,21 @@ The inverse failure is worse than the duplicate it prevents: a wrong "you alread
 
 **Rejected: cross-store price comparison as a nudge.** Noisy across different sizes, promos and products, and it turns a waste system into a shopping optimizer. If he asks directly, answer with the caveat; never volunteer it.
 
-**Backfill is impossible.** Prices start accumulating from the next receipt. Say so rather than showing a low first month as progress.
+**Backfill is impossible.** Your own receipt prices start building from the next receipt. BLS reference prices can cost items before that, but they're regional averages, so a month priced mostly from BLS is rougher than one priced from receipts, and the report has to say which it was. Say so rather than presenting a low first month as progress.
+
+**Every receipt grows the reference table.** After a receipt capture, rebuild the `Your receipts` section of `reference-prices-west.md` from the `bought` lines. That section is derived from `Restock.md`, never a second store. If they disagree, `Restock.md` wins. This is how the items BLS doesn't track get a price: cilantro, yogurt, butter, tofu and most produce.
+
+### Rescued — the other side of the ledger
+
+**A tossed figure alone tells him what he lost. A rescued figure next to it tells him whether the system is earning its place.** Without it, a good month and a month he barely bought anything look the same.
+
+**An item is rescued when it closes as `used` or `frozen` at `t0` or `t1`** ("Check before eating" or "Tonight or freeze it", §5). Nothing earlier counts. Milk drunk on day 2 of 8 was never at risk, so counting it would credit the system for breakfast. A `tossed` close keeps its tier too, because "tossed at t3" means the use-by estimate (§4) was too short.
+
+**Rescues and tosses are priced the same way:** the exact `bought` join first, then the reference table's source order. Using the same rules keeps the two figures comparable.
+
+**`frozen` counts at full value, with one caveat.** If that item later leaves `FREEZER_LIST` as `tossed`, the rescue reverses in the month it's tossed. Freezing only to delay the bin isn't a save.
+
+**Never claim the counterfactual.** "Rescued" means it reached the edge and got used. It doesn't mean he would have thrown it away otherwise. Say "used before it went off", never "saved you $X". The first is a fact and the second is a guess.
 
 ### Volume
 
@@ -387,9 +405,14 @@ Use `create_trigger`. Never the local cron tools.
 
 ## 17. Monthly scorecard
 
-Count: items logged, items ticked, **items that reached a toss prompt and roughly what they cost**, recipes suggested vs cooked, own-notes matches vs fallbacks, restock suggestions vs bought, duplicates flagged vs bought anyway.
+Count: items logged, items ticked, **items rescued and roughly what they were worth**, **items that reached a toss prompt and roughly what they cost**, recipes suggested vs cooked, own-notes matches vs fallbacks, restock suggestions vs bought, duplicates flagged vs bought anyway.
 
-The toss figure is the number that matters. Lead with it, in dollars when enough lines are priced, and say how many were — *"about $20 across 9 items, 6 of them priced"*. One table, one sentence, nothing more.
+The two figures that matter, side by side, rescued first because it's the one the system affects:
+
+> **Used before it went off:** about $34 across 11 items (8 priced: 3 from your receipts, 5 BLS)
+> **Thrown away:** about $12 across 5 items (3 priced)
+
+Round to the dollar and say "about". Every priced count is split by source. **Never show a net figure (rescued minus tossed).** The two aren't the same kind of number, and a subtraction would present a ledger as a verdict. One table, these two lines, nothing more.
 
 If ticks fall or tosses climb, name the likeliest cause: wrong reminder time, notifications not landing, reconciliation skipped. Restock suggestions that go unbought mean the cadence is wrong. Duplicate flags he buys through mean the inventory is stale, and the flag should go quiet rather than louder.
 
@@ -533,6 +556,8 @@ A month of waste is information, not a failing, and that holds double once it ha
 - *"What do I throw away most?"* — `tossed` by frequency, with rough cost. **The most important question in the system**, answerable on demand rather than only monthly.
 - *"What did I waste this month?"* — approximate dollars, with how many lines were priced.
 - *"Is X getting more expensive?"* — same item, earliest vs latest `bought` price, with dates and a caveat about sizes and promos.
+- *"How much has this saved me?"* — rescued and tossed dollars side by side, in the scorecard wording (§17). Name the date the tier field started, and say how many items were priced and from which source. Never "saved you $X" (§15).
+- *"What do I usually rescue?"* — rescued closes by frequency. The positive version of "what do I throw away most".
 
 **Answer honestly, or not at all**
 
