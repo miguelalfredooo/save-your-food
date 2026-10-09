@@ -36,6 +36,7 @@ and every claim carrying its age.
 | Arrive and exit must name the same branch | A geofence pair pointing at two addresses means one never fires, and silently |
 | **An unanswered question gets its own reminder** | Sealed vs opened tofu is a 5x difference. Guessing and burying it hides the guess; a reminder whose title *is* the question gets answered |
 | **Cook history outranks file count** | Sixty recipes on file is not sixty in rotation |
+| **Recipes go into Notes create-only, on the user's yes** | Notes stays the one home for recipes, so adding one has to write there — but never edit, move or delete, because an edit can destroy the original and nothing here can undo it. In the bot the yes is a Save button handled in code, not the model, so a recipe page can't talk its way into a write |
 | **Only `used` counts toward cadence** | Counting every reappearance helps you re-buy what you throw away — the system working against its own purpose |
 | **Report a state, never a failure** | "You've been out of milk since Tuesday" has no timing dependency and nothing to argue with. "You forgot the milk" works for thirty seconds and is an accusation |
 | **Recency beats inventory** | A purchase log is a fact; an inventory is an inference that decays the moment you eat something without ticking it |

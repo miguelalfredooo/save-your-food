@@ -245,7 +245,7 @@ raw meat, 3 for dairy and greens, 7 for hard cheese and root veg — are marked
 
 ## What it deliberately doesn't do
 
-No recipe matching, no pantry, no cook log, no scorecard, no geofences. This is
+Recipe search and recipe adding (text or link, after a Save tap, create-only) exist, and so does the pantry. No cook log, no scorecard, no geofences. This is
 the thinnest loop that can prove whether a Telegram nudge gets answered more
 often than a Reminders alert. Everything else is in the `fridge-loop` skill and
 can come across once that question is settled.
