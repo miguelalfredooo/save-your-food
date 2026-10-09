@@ -312,7 +312,7 @@ A purchase, plus the next purchase of the same thing, is one cycle; three is a c
     2026-10-05 | milk     | used   |      |    | t3
     2026-10-02 | cilantro | tossed |      |    | t0
 
-`bought` lines come from the receipt (§3). `used` / `frozen` / `tossed` come from a tick, and **carry the tier the item was in when it closed** (`t0`–`t3`, §5). Tiers are computed and never stored (§1), so the close line is the only place that moment survives, and it is what makes a rescue countable. Close lines written before 2026-10-08 have no tier field and are never backfilled.
+`bought` lines come from the receipt (§3). `used` / `frozen` / `tossed` come from a tick, and **carry the tier the item was in when it closed** (`t0`–`t3`, §5). Tiers are computed and never stored (§1), so the close line is the only place that moment survives, and it is what makes a rescue countable. Close lines written before 2026-10-08 have no tier field and are never backfilled: `Restock.md` doesn't keep the use-by date, so the tier can't be recovered. A client that does keep it may reconstruct old tiers, but has to mark them as reconstructed and say how many in any report.
 
 **Price rides the `bought` line only.** A toss or a rescue gets its cost by joining back to the most recent `bought` of that item. When there's no match, it falls through `FOLDER/_ops/reference-prices-west.md` in that file's source order: your receipt median for the item, then BLS West, then BLS US. If none of those has a price, the item still counts in the tally but not in the dollar figure, and any report says how many items were priced and from which source.
 
