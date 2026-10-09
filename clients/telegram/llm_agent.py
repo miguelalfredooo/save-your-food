@@ -1050,6 +1050,10 @@ def run_agent(con, chat_id, text, cfg, today=None, caller=None, image_b64=None,
                 args = json.loads(tc["function"]["arguments"])
             except (ValueError, TypeError):
                 args = {}
+            # JSON can parse to null, a list or a number. Executors read
+            # args.get(), and an exception here would end the whole turn.
+            if not isinstance(args, dict):
+                args = {}
             executor = TOOL_EXECUTORS.get(name)
             if not recipes and name == "search_recipes":
                 result = {"error": "recipes are not available in this chat"}

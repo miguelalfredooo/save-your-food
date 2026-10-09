@@ -1985,6 +1985,25 @@ class RecipeDraft(unittest.TestCase):
         self.assertEqual(created, [])
         self.assertIsNotNone(llm_agent.pending_recipe(self.con, 1))
 
+    def test_non_dict_tool_arguments_do_not_end_the_turn(self):
+        fetched = []
+        original = llm_agent.fetch_recipe_page
+        llm_agent.fetch_recipe_page = lambda url: fetched.append(url) or {"error": "stub"}
+        turns = iter([
+            {"choices": [{"message": {"role": "assistant", "tool_calls": [
+                {"id": "t1", "type": "function", "function": {
+                    "name": "fetch_recipe_page", "arguments": "null"}}]}}]},
+            {"choices": [{"message": {"role": "assistant",
+                                      "content": "That link didn't work."}}]},
+        ])
+        try:
+            reply = llm_agent.run_agent(self.con, 1, "add this link", CFG,
+                                        today=TODAY, caller=lambda m: next(turns))
+        finally:
+            llm_agent.fetch_recipe_page = original
+        self.assertEqual(reply, "That link didn't work.")
+        self.assertEqual(fetched, [None])
+
 
 class LLMAgentLoop(unittest.TestCase):
     """The tool-calling loop, driven with a fake model (the `caller`
