@@ -153,6 +153,18 @@ any text you typed — provided the model you picked actually supports vision
 OpenRouter model). A text-only model just never mentions the photo. Outside
 this mode, a photo gets a plain "I can't read photos yet."
 
+**Who gets it.** `llm_mode` turns the AI on for the chats in
+`allowed_chat_ids` (or everyone, if that list is empty). Friends who joined
+with an invite link start without it, since every message they send would
+go to the model on your key: turn it on for one person from `/members`.
+Without it they get the regular bot, which reads commands and typed lists.
+
+**Recipes stay yours.** `search_recipes` reads the Recipes folder in the
+owner's Apple Notes, so only the owner's chat (the first id in
+`allowed_chat_ids`) is offered it. Anyone else's model never sees the tool,
+and a call to it is refused. On an open bot, with no owner, nobody gets it.
+`/invite` and `/members` still work for the owner with AI mode on.
+
 This mode is a genuinely different front end, not a layer over the regular
 one: a message never reaches onboarding, the sentence/correction logic, or
 `parse_list` while it's on. It shares the same `items`/`pantry` tables, so
@@ -229,7 +241,7 @@ typed lists only for now.
 | `fridge.py` | Storage, list parsing, composing messages |
 | `card.py` | The fixed-width card the nudge, `/fridge` and `/freezer` are drawn as |
 | `shelf_life.py` | The use-by table and risk classes, ported from the skill |
-| `test_logic.py` | 354 tests. `python3 test_logic.py` |
+| `test_logic.py` | 364 tests. `python3 test_logic.py` |
 | `preview.py` | Renders the messages for any date, no token needed. `python3 preview.py 2026-09-26` |
 | `try_chat.py` | Chat with the real handlers in a terminal, no token. `tap 2 used` presses a card button. `python3 try_chat.py -i` |
 | `seed.json` | Real fridge contents as of Sep 23, so the test runs against real food |
@@ -287,7 +299,7 @@ The bot registers these with Telegram on startup, so they show in the `/` menu.
 
     python3 test_logic.py
 
-354 tests, no network needed. The interesting ones are the bucket collisions
+364 tests, no network needed. The interesting ones are the bucket collisions
 (`ground beef` vs `ground ginger`, `coconut milk` vs `oat milk`, `butternut
 squash` vs `peanut butter`) and the correction phrasings, including negation.
 
