@@ -201,11 +201,14 @@ read.
 This mode is a genuinely different front end, not a layer over the regular
 one: a message never reaches onboarding, the sentence/correction logic, or
 `parse_list` while it's on. It shares the same `items`/`pantry` tables, so
-`/fridge` and the rest still show what it captured, but it does not read
-slash commands as commands — the model itself decides what a message like
-`/start` means, and its four tools (`add_items`, `update_item`, `remove_item`,
-`list_items`) are how it reads and writes your fridge. The daily nudge and
-the used/frozen/tossed buttons are unchanged in both modes: they're not an
+`/fridge` and the rest still show what it captured. Slash commands are always
+the bot's, never the model's, so a command looks and works the same with AI
+on or off: `/fridge` is always the card. Setup is the bot's too. So is a
+recipe, pasted or linked, which goes straight to the same Save and Cancel
+preview. The model gets the rest of the free text, and its tools
+(`add_items`, `update_item`, `remove_item`, `list_items` and the recipe
+tools) are how it reads and writes your fridge. The daily nudge and the
+used/frozen/tossed buttons are unchanged in both modes: they're not an
 understanding problem, so the model never touches them.
 
 ## What it does
@@ -279,7 +282,7 @@ gets answered more often than a Reminders alert. Everything else is in the
 | `fridge.py` | Storage, list parsing, composing messages |
 | `card.py` | The fixed-width card the nudge, `/fridge` and `/freezer` are drawn as |
 | `shelf_life.py` | The use-by table and risk classes, ported from the skill |
-| `test_logic.py` | 462 tests. `python3 test_logic.py` |
+| `test_logic.py` | 476 tests. `python3 test_logic.py` |
 | `preview.py` | Renders the messages for any date, no token needed. `python3 preview.py 2026-09-26` |
 | `try_chat.py` | Chat with the real handlers in a terminal, no token. `tap 2 used` presses a card button. `python3 try_chat.py -i` |
 | `seed.json` | Real fridge contents as of Sep 23, so the test runs against real food |
@@ -337,7 +340,7 @@ The bot registers these with Telegram on startup, so they show in the `/` menu.
 
     python3 test_logic.py
 
-462 tests, no network needed. The interesting ones are the bucket collisions
+476 tests, no network needed. The interesting ones are the bucket collisions
 (`ground beef` vs `ground ginger`, `coconut milk` vs `oat milk`, `butternut
 squash` vs `peanut butter`) and the correction phrasings, including negation.
 
