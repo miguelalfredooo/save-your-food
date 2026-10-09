@@ -1886,6 +1886,106 @@ class RecipePageFetch(unittest.TestCase):
         self.assertEqual(r["text"], "hi")
 
 
+class RecipeDraft(unittest.TestCase):
+    """draft_recipe only ever stores a draft. Nothing the model can call
+    writes to Notes; the Save button in bot.py is the only way there."""
+
+    ARGS = {"title": "  Arroz   con Pollo ",
+            "ingredients": ["2 lb chicken thighs", "  ", 7, "2 cups rice"],
+            "steps": ["Brown the chicken."],
+            "source_url": "https://example.com/arroz"}
+
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.tmp.close()
+        self.con = fridge.connect(self.tmp.name)
+
+    def tearDown(self):
+        self.con.close()
+        os.unlink(self.tmp.name)
+
+    def test_a_draft_is_cleaned_and_stored_unshown(self):
+        r = llm_agent.exec_draft_recipe(self.con, 1, self.ARGS, TODAY)
+        self.assertNotIn("error", r)
+        d = llm_agent.pending_recipe(self.con, 1)
+        self.assertEqual(d["title"], "Arroz con Pollo")
+        self.assertEqual(d["ingredients"], ["2 lb chicken thighs", "2 cups rice"])
+        self.assertEqual(d["steps"], ["Brown the chicken."])
+        self.assertEqual(d["source_url"], "https://example.com/arroz")
+        self.assertFalse(d["shown"])
+        self.assertTrue(d["id"])
+
+    def test_a_new_draft_replaces_the_old_one_with_a_new_id(self):
+        llm_agent.exec_draft_recipe(self.con, 1, self.ARGS, TODAY)
+        first = llm_agent.pending_recipe(self.con, 1)["id"]
+        llm_agent.exec_draft_recipe(self.con, 1, dict(self.ARGS, title="Flan"), TODAY)
+        d = llm_agent.pending_recipe(self.con, 1)
+        self.assertEqual(d["title"], "Flan")
+        self.assertNotEqual(d["id"], first)
+
+    def test_drafts_are_per_chat(self):
+        llm_agent.exec_draft_recipe(self.con, 1, self.ARGS, TODAY)
+        self.assertIsNone(llm_agent.pending_recipe(self.con, 2))
+
+    def test_a_draft_needs_a_title_and_some_content(self):
+        r = llm_agent.exec_draft_recipe(self.con, 1, dict(self.ARGS, title=" "), TODAY)
+        self.assertIn("error", r)
+        r = llm_agent.exec_draft_recipe(self.con, 1, dict(self.ARGS, ingredients=[], steps=[]), TODAY)
+        self.assertIn("error", r)
+        self.assertIsNone(llm_agent.pending_recipe(self.con, 1))
+
+    def test_a_non_https_source_is_dropped(self):
+        llm_agent.exec_draft_recipe(self.con, 1, dict(self.ARGS, source_url="javascript:alert(1)"), TODAY)
+        self.assertEqual(llm_agent.pending_recipe(self.con, 1)["source_url"], "")
+
+    def test_a_draft_too_long_to_preview_is_refused(self):
+        steps = ["x" * 400] * 20
+        r = llm_agent.exec_draft_recipe(self.con, 1, dict(self.ARGS, steps=steps), TODAY)
+        self.assertIn("error", r)
+        self.assertIsNone(llm_agent.pending_recipe(self.con, 1))
+
+    def test_odd_model_arguments_never_raise(self):
+        for args in (None, 5, "soup", ["a"], {"title": None, "steps": "x"},
+                     {"title": ["Soup"], "ingredients": 3, "steps": None}):
+            r = llm_agent.exec_draft_recipe(self.con, 1, args, TODAY)
+            self.assertIn("error", r, repr(args))
+        self.assertIsNone(llm_agent.pending_recipe(self.con, 1))
+
+    def test_shown_and_clear(self):
+        llm_agent.exec_draft_recipe(self.con, 1, self.ARGS, TODAY)
+        llm_agent.mark_recipe_shown(self.con, 1)
+        self.assertTrue(llm_agent.pending_recipe(self.con, 1)["shown"])
+        llm_agent.clear_pending_recipe(self.con, 1)
+        self.assertIsNone(llm_agent.pending_recipe(self.con, 1))
+
+    def test_no_model_tool_writes_to_notes(self):
+        names = {t["function"]["name"] for t in llm_agent.TOOLS}
+        self.assertEqual(names, {"add_items", "update_item", "remove_item", "list_items",
+                                 "month_summary", "search_recipes",
+                                 "fetch_recipe_page", "draft_recipe"})
+        self.assertEqual(set(llm_agent.TOOL_EXECUTORS), names)
+
+    def test_a_model_asking_to_draft_never_reaches_notes(self):
+        created = []
+        original = llm_agent.create_recipe_note
+        llm_agent.create_recipe_note = lambda *a, **k: created.append(a) or "created"
+        turns = iter([
+            {"choices": [{"message": {"role": "assistant", "tool_calls": [
+                {"id": "t1", "type": "function", "function": {
+                    "name": "draft_recipe", "arguments": json.dumps(self.ARGS)}}]}}]},
+            {"choices": [{"message": {"role": "assistant",
+                                      "content": "Here's the draft, check it over."}}]},
+        ])
+        try:
+            reply = llm_agent.run_agent(self.con, 1, "add this recipe", CFG,
+                                        today=TODAY, caller=lambda m: next(turns))
+        finally:
+            llm_agent.create_recipe_note = original
+        self.assertEqual(reply, "Here's the draft, check it over.")
+        self.assertEqual(created, [])
+        self.assertIsNotNone(llm_agent.pending_recipe(self.con, 1))
+
+
 class LLMAgentLoop(unittest.TestCase):
     """The tool-calling loop, driven with a fake model (the `caller`
     injection point) so no network or API key is needed."""
