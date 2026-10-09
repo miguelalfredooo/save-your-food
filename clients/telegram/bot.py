@@ -676,15 +676,12 @@ def _markdown_to_html(text):
             i += 1
             continue
         if _BULLET_RE.match(line):
-            j = i
-            list_lines = []
-            while j < len(lines) and (_BULLET_RE.match(lines[j]) or not lines[j].strip()):
-                list_lines.append(lines[j])
-                j += 1
-            while list_lines and not list_lines[-1].strip():
-                list_lines.pop()
-            blocks.append("<pre>%s</pre>" % art.esc("\n".join(list_lines)))
-            i = j
+            # Plain "•" lines, not a <pre> block: Telegram draws <pre> as
+            # code, with a copy icon, and a list of words has no columns
+            # worth keeping. The cards keep <pre>; they do have columns.
+            item = _BULLET_RE.sub("", line, count=1)
+            blocks.append("• " + _inline_markdown(art.esc(item)))
+            i += 1
         else:
             blocks.append(_inline_markdown(art.esc(line)))
             i += 1
