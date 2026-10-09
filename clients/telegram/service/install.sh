@@ -30,6 +30,14 @@ echo "bot.py:  $TELEGRAM_DIR/bot.py"
 echo "Logs:    $LOG_DIR"
 
 mkdir -p "$LOG_DIR"
+# Private to this account: config.json holds the bot token and API keys,
+# fridge.db everyone's data, and the logs can name foods and errors.
+chmod 700 "$LOG_DIR"
+chmod 600 "$TELEGRAM_DIR/config.json"
+for f in "$TELEGRAM_DIR/fridge.db" "$TELEGRAM_DIR/recipes_cache.md" \
+         "$TELEGRAM_DIR"/fridge.db.bak-* "$LOG_OUT" "$LOG_ERR"; do
+    if [ -e "$f" ]; then chmod 600 "$f"; fi
+done
 
 # Simple, install-time rotation: keep one prior generation rather than let a
 # log grow forever. This only runs when install.sh does, so it is not
