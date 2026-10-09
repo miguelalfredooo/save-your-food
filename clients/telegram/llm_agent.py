@@ -999,16 +999,23 @@ def call_ollama(base_url, model, messages, tools, timeout=REQUEST_TIMEOUT):
         return json.loads(r.read().decode())
 
 
+# Every tool that reads, drafts toward or fetches for the owner's Notes.
+# Fetching counts too: it only exists to feed a draft, and it is the one
+# tool that makes the owner's computer connect somewhere.
+RECIPE_TOOLS = frozenset({"search_recipes", "fetch_recipe_page", "draft_recipe"})
+
+
 def tools_for(recipes=True):
     """The tools offered to the model. Recipes are the bot owner's own Apple
-    Notes, so a chat that isn't the owner's is never offered the search."""
+    Notes, so a chat that isn't the owner's is never offered any recipe tool."""
     if recipes:
         return TOOLS
-    return [t for t in TOOLS if t["function"]["name"] != "search_recipes"]
+    return [t for t in TOOLS if t["function"]["name"] not in RECIPE_TOOLS]
 
 
-NO_RECIPES_NOTE = ("search_recipes is not available in this chat. Never offer "
-                   "or mention saved recipes here.")
+NO_RECIPES_NOTE = ("Recipe tools (search_recipes, fetch_recipe_page, "
+                   "draft_recipe) are not available in this chat. Never offer "
+                   "or mention saved recipes here, or adding one.")
 
 
 def _default_caller(cfg, tools=TOOLS):
@@ -1029,9 +1036,10 @@ def run_agent(con, chat_id, text, cfg, today=None, caller=None, image_b64=None,
     happens with it depends entirely on the chosen model actually being
     vision-capable; a text-only model just never mentions it.
 
-    recipes=False is for anyone but the bot's owner: search_recipes reads the
-    owner's Apple Notes, so it is left off the tool list, the prompt says so,
-    and a call to it is refused anyway in case the model tries.
+    recipes=False is for anyone but the bot's owner: the recipe tools read,
+    fetch for or draft into the owner's Apple Notes, so they are left off
+    the tool list, the prompt says so, and a call to one is refused anyway in
+    case the model tries.
     """
     today = today or date.today()
     call = caller or _default_caller(cfg, tools_for(recipes))
@@ -1082,7 +1090,7 @@ def run_agent(con, chat_id, text, cfg, today=None, caller=None, image_b64=None,
             if not isinstance(args, dict):
                 args = {}
             executor = TOOL_EXECUTORS.get(name)
-            if not recipes and name == "search_recipes":
+            if not recipes and name in RECIPE_TOOLS:
                 result = {"error": "recipes are not available in this chat"}
             elif name == "fetch_recipe_page" and \
                     str(args.get("url") or "").strip() not in (text or ""):

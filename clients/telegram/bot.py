@@ -1337,13 +1337,12 @@ def handle_recipe_callback(tg, con, chat_id, cb, msg, raw, cfg):
         return
 
     preview = llm_agent.recipe_note_text(draft)
-    # Notes is the owner's single shared store, and an empty allow-list
-    # means the bot answers anyone: only a listed chat may write to it.
-    if chat_id not in (cfg.get("allowed_chat_ids") or []):
+    # Notes is the owner's alone. The allow-list can hold household chats
+    # too, and an empty one means no owner at all, so neither is enough.
+    if not recipes_for(cfg, chat_id):
         tg.answer(cb["id"], "Not allowed.")
         tg.edit(chat_id, msg["message_id"],
-                preview + "\n\nSaving recipes to Notes needs your chat id in "
-                "allowed_chat_ids in config.json.")
+                preview + "\n\nOnly the bot's owner can save recipes to Notes.")
         return
     outcome = llm_agent.create_recipe_note(draft)
     if outcome == "created":

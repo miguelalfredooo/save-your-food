@@ -1854,6 +1854,30 @@ class RecipePageFetch(unittest.TestCase):
             self.assertFalse(llm_agent._is_public_host(host), host)
         self.assertTrue(llm_agent._is_public_host("8.8.8.8"))
 
+    def test_every_home_network_range_is_blocked(self):
+        # The Mac mini sits on the home network: none of these may be
+        # reachable through a link, by name or by number.
+        llm_agent._is_public_host = self._orig_public
+        for host in ("localhost", "127.0.0.1", "127.255.255.254",
+                     "10.0.0.1", "10.255.255.255",
+                     "172.16.0.1", "172.31.255.254",
+                     "192.168.0.1", "192.168.255.254",
+                     "169.254.0.1", "169.254.169.254",
+                     "::1", "::ffff:192.168.1.1", "0.0.0.0"):
+            self.assertFalse(llm_agent._is_public_host(host), host)
+        for host in ("172.15.255.255", "172.32.0.1", "8.8.8.8"):
+            self.assertTrue(llm_agent._is_public_host(host), host)
+
+    def test_a_home_network_link_is_never_opened(self):
+        llm_agent._is_public_host = self._orig_public
+        for url in ("http://192.168.1.1", "https://192.168.1.1/",
+                    "https://localhost/recipe", "https://[::1]/x",
+                    "https://172.20.0.5:8443/x", "https://10.0.0.1/"):
+            opener = FakeOpener(FakePage(b""))
+            r = llm_agent.fetch_recipe_page(url, opener=opener)
+            self.assertIn("error", r, url)
+            self.assertEqual(opener.opened, [], url)
+
     def test_redirect_to_http_is_refused(self):
         handler = llm_agent._SafeRedirect()
         req = urllib.request.Request("https://e.com/a")
@@ -2196,13 +2220,22 @@ class RecipeSaveFlow(unittest.TestCase):
         self.assertEqual(self.tg.answers[-1], "Not allowed.")
         self.assertEqual(
             self.tg.edits[-1],
-            llm_agent.recipe_note_text(d) + "\n\nSaving recipes to Notes needs "
-            "your chat id in allowed_chat_ids in config.json.")
+            llm_agent.recipe_note_text(d) + "\n\nOnly the bot's owner can save "
+            "recipes to Notes.")
         self.assertIsNone(self.tg.edit_buttons[-1])
 
-    def test_a_listed_chat_saves(self):
+    def test_a_listed_chat_that_is_not_the_owner_never_saves(self):
+        # Household chats can be on the allow-list too; the Notes are the
+        # owner's alone.
         d = self._draft()
-        self._tap("recipe:save:%s" % d["id"], cfg=dict(CFG, allowed_chat_ids=[1]))
+        self._tap("recipe:save:%s" % d["id"], cfg=dict(CFG, allowed_chat_ids=[9, 1]))
+        self.assertEqual(self.created, [])
+        self.assertEqual(self.tg.answers[-1], "Not allowed.")
+        self.assertIsNotNone(llm_agent.pending_recipe(self.con, 1))
+
+    def test_the_owner_saves(self):
+        d = self._draft()
+        self._tap("recipe:save:%s" % d["id"], cfg=dict(CFG, allowed_chat_ids=[1, 9]))
         self.assertEqual(self.created, ["Arroz con Pollo"])
 
     def test_a_notes_failure_keeps_the_draft_for_a_retry(self):
@@ -3941,6 +3974,42 @@ class RecipesOwnerOnly(unittest.TestCase):
                             caller=caller, recipes=False)
         self.assertEqual(self.fetched, [])
         self.assertIn("not available", seen[-1]["content"])
+
+    def test_no_recipe_tool_is_offered_to_a_non_owner(self):
+        names = {t["function"]["name"] for t in llm_agent.tools_for(recipes=False)}
+        for tool in ("search_recipes", "fetch_recipe_page", "draft_recipe"):
+            self.assertNotIn(tool, names)
+        all_names = {t["function"]["name"] for t in llm_agent.tools_for(recipes=True)}
+        self.assertTrue({"fetch_recipe_page", "draft_recipe"} <= all_names)
+
+    def test_drafting_or_fetching_anyway_is_refused(self):
+        fetched = []
+        orig = llm_agent.fetch_recipe_page
+        llm_agent.fetch_recipe_page = lambda url, **k: fetched.append(url) or {}
+        draft = {"title": "Soup", "ingredients": ["water"], "steps": ["Boil."]}
+        replies = [
+            {"choices": [{"message": {"tool_calls": [
+                {"id": "c1", "function": {"name": "fetch_recipe_page",
+                 "arguments": json.dumps({"url": "https://e.com/soup"})}},
+                {"id": "c2", "function": {"name": "draft_recipe",
+                 "arguments": json.dumps(draft)}}]}}]},
+            {"choices": [{"message": {"content": "done"}}]},
+        ]
+        seen = []
+        def caller(messages):
+            seen.append(list(messages))
+            return replies[len(seen) - 1]
+        try:
+            llm_agent.run_agent(self.con, 2, "add https://e.com/soup", CFG, TODAY,
+                                caller=caller, recipes=False)
+        finally:
+            llm_agent.fetch_recipe_page = orig
+        self.assertEqual(fetched, [])
+        self.assertIsNone(llm_agent.pending_recipe(self.con, 2))
+        tool_msgs = [m for m in seen[-1] if m.get("role") == "tool"]
+        self.assertEqual(len(tool_msgs), 2)
+        for m in tool_msgs:
+            self.assertIn("not available", m["content"])
 
 
 class AIUsage(unittest.TestCase):
