@@ -699,6 +699,26 @@ def send_llm_reply(tg, chat_id, text):
         tg.send(chat_id, text)
 
 
+def _recipe_buttons(draft):
+    return [[{"text": "Save to Notes", "callback_data": "recipe:save:%s" % draft["id"]},
+             {"text": "Cancel", "callback_data": "recipe:cancel:%s" % draft["id"]}]]
+
+
+def send_pending_recipe(tg, con, chat_id):
+    """A recipe the model drafted this turn, shown with Save and Cancel.
+
+    The tap is the confirmation, and it is handled here in code, not by the
+    model: a recipe page that talks the model into "saving" gets no further
+    than this preview. Plain text, not HTML, because every word of it came
+    from a user or a web page."""
+    draft = llm_agent.pending_recipe(con, chat_id)
+    if not draft or draft.get("shown"):
+        return
+    if tg.send(chat_id, llm_agent.recipe_note_text(draft),
+               buttons=_recipe_buttons(draft)):
+        llm_agent.mark_recipe_shown(con, chat_id)
+
+
 MAX_PHOTO_BYTES = 10 * 1024 * 1024
 # Telegram keeps a 2560px copy of newer photos. A vision model is billed by
 # pixels, and that copy costs about four times the 1280px one, which still
@@ -732,6 +752,7 @@ def handle_photo(tg, con, chat_id, msg, cfg):
         return
     image_b64 = base64.b64encode(photo_bytes).decode()
     send_llm_reply(tg, chat_id, run_ai(con, chat_id, caption, cfg, image_b64=image_b64))
+    send_pending_recipe(tg, con, chat_id)
 
 
 INVITE_SPENT = ("That invite link has already been used or has expired. "
@@ -941,6 +962,7 @@ def handle_message(tg, con, msg, cfg):
                 or (onb.active(con, chat_id) and not text.startswith("/")))
     if ai_for(con, cfg, chat_id) and not in_setup:
         send_llm_reply(tg, chat_id, run_ai(con, chat_id, text, cfg))
+        send_pending_recipe(tg, con, chat_id)
         return
 
     # A reply to me or a genuine question can arrive at any point, onboarding
@@ -1131,6 +1153,9 @@ def handle_callback(tg, con, cb, cfg):
     if not allowed(con, cfg, chat_id):
         return
     state, _, raw_id = data.partition(":")
+    if state == "recipe":
+        handle_recipe_callback(tg, con, chat_id, cb, msg, raw_id, cfg)
+        return
 
     if state == "member":
         action, _, raw = raw_id.partition(":")
@@ -1290,6 +1315,58 @@ def handle_callback(tg, con, cb, cfg):
         return
     send_delight(tg, con, chat_id, state, item=row["name"],
                  caption=CLOSE_LINES[state])
+
+
+def handle_recipe_callback(tg, con, chat_id, cb, msg, raw, cfg):
+    """recipe:save:<id> or recipe:cancel:<id>. The id must match the
+    current draft, so an old preview can't act on a newer one."""
+    action, _, draft_id = raw.partition(":")
+    draft = llm_agent.pending_recipe(con, chat_id)
+    if not draft or draft.get("id") != draft_id:
+        tg.answer(cb["id"], "That draft's gone.")
+        tg.edit(chat_id, msg["message_id"],
+                "That draft's gone. Send the recipe again if you still want it.")
+        return
+    if action == "cancel":
+        llm_agent.clear_pending_recipe(con, chat_id)
+        tg.answer(cb["id"], "Not saved.")
+        tg.edit(chat_id, msg["message_id"], "Not saved: %s" % draft["title"])
+        return
+    if action != "save":
+        tg.answer(cb["id"])
+        return
+
+    preview = llm_agent.recipe_note_text(draft)
+    # Notes is the owner's alone. The allow-list can hold household chats
+    # too, and an empty one means no owner at all, so neither is enough.
+    if not recipes_for(cfg, chat_id):
+        tg.answer(cb["id"], "Not allowed.")
+        tg.edit(chat_id, msg["message_id"],
+                preview + "\n\nOnly the bot's owner can save recipes to Notes.")
+        return
+    outcome = llm_agent.create_recipe_note(draft)
+    if outcome == "created":
+        llm_agent.clear_pending_recipe(con, chat_id)
+        tg.answer(cb["id"], "Saved.")
+        tg.edit(chat_id, msg["message_id"], "Saved to Notes ✓ %s" % draft["title"])
+    elif outcome == "duplicate":
+        llm_agent.clear_pending_recipe(con, chat_id)
+        tg.answer(cb["id"], "Already in Notes.")
+        tg.edit(chat_id, msg["message_id"],
+                "You already have a recipe called \"%s\" in Notes, so I didn't "
+                "save this one. Send the recipe again with a different title if "
+                "you want both."
+                % draft["title"])
+    elif outcome == "no_folder":
+        tg.answer(cb["id"], "No Recipes folder.")
+        tg.edit(chat_id, msg["message_id"],
+                preview + "\n\nThere's no folder called Recipes in Notes. Make "
+                "one, then tap Save again.", buttons=_recipe_buttons(draft))
+    else:
+        tg.answer(cb["id"], "Couldn't reach Notes.")
+        tg.edit(chat_id, msg["message_id"],
+                preview + "\n\nCouldn't reach Notes just now. Tap Save to try "
+                "again.", buttons=_recipe_buttons(draft))
 
 
 # --- daily nudge -----------------------------------------------------------
