@@ -8,8 +8,9 @@ It watches what's in your fridge, works out roughly when each thing turns, and
 sends one reminder a day naming what to do about it — with a recipe from your own
 collection where one fits. Reminders persist until you tick them off as used,
 frozen or tossed, then stop cleanly instead of nagging.
-Send it a recipe, as text, a link or (in chat) a photo, and it adds it to your
-Notes once you say yes. It never edits a recipe that's already there.
+Send it a recipe as text or a link (or, through the Claude skill, a photo of a
+cookbook page), and it adds it to your Notes once you say yes. It never edits a
+recipe that's already there.
 
 This is one person's working system, published as a reference rather than a
 product. The specifics in it — a Puerto Rican / Cuban / Peruvian and Asian

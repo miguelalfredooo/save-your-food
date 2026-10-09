@@ -10,10 +10,11 @@ is not meant to.
 ## Scope is deliberately thin
 
 Typed capture, one daily nudge, three inline buttons (Used it / Froze it /
-Tossed it), per-class disposal prompts. Recipe search reads Notes live, and a recipe sent
-as text or a link can be added to Notes after a Save tap (create-only; see
-SKILL.md §8a). No cook log, scorecard or geofences. The only question this client exists to answer is whether a chat nudge
-gets answered more often than a Reminders alert.
+Tossed it), per-class disposal prompts. In LLM mode only, recipe search reads
+Notes live, and a recipe sent as text or a link can be added to Notes after a
+Save tap (create-only; see SKILL.md §8a). No cook log, scorecard or geofences.
+The only question this client exists to answer is whether a chat nudge gets
+answered more often than a Reminders alert.
 
 ## What ports and what doesn't
 
@@ -24,8 +25,8 @@ gets answered more often than a Reminders alert.
 | Restock notes | yes | ride the daily message |
 | Duplicate check | **no** | no geofence means no arriving moment to attach it to; degrades to an on-demand question |
 | Receipt diff | **no** | reading a receipt needs vision and an API key |
-| Recipe matching | yes | reads Apple Notes live, falls back to the last snapshot |
-| Recipe adding | yes | text or https link → draft → Save button → new note in Recipes. Never edits a note. Photos not yet |
+| Recipe matching | yes (LLM mode) | reads Notes live, last snapshot as fallback |
+| Recipe adding | yes (LLM mode) | text or link → draft → Save → new note; never edits; no photos |
 
 ## Constraints
 
