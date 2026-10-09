@@ -169,6 +169,17 @@ def load_config():
     return cfg
 
 
+def owner(cfg):
+    """The first allowed chat id. It invites, lists members, and loads seed."""
+    return cfg["allowed_chat_ids"][0] if cfg["allowed_chat_ids"] else None
+
+
+def allowed(con, cfg, chat_id):
+    """In config.json, or let in by an invite. An empty list is open to all."""
+    return (not cfg["allowed_chat_ids"] or chat_id in cfg["allowed_chat_ids"]
+            or fridge.is_member(con, chat_id))
+
+
 # --- telegram --------------------------------------------------------------
 
 class Telegram:
@@ -324,6 +335,11 @@ COMMANDS = [
     ("setup", "Run the setup again"),
     ("clear", "Wipe everything"),
     ("help", "What I can do"),
+]
+
+OWNER_COMMANDS = [
+    ("invite", "Make a one-use link for a friend"),
+    ("members", "Who has joined, and remove them"),
 ]
 
 
@@ -681,6 +697,45 @@ def handle_photo(tg, con, chat_id, msg, cfg):
     send_llm_reply(tg, chat_id, llm_agent.run_agent(con, chat_id, caption, cfg, image_b64=image_b64))
 
 
+INVITE_SPENT = ("That invite link has already been used or has expired. "
+                "Ask whoever sent it for a new link.")
+
+
+def join_by_invite(tg, con, msg):
+    """Let a chat in if its message is "/start <code>" with a live code.
+
+    This is how a t.me/<bot>?start=<code> link arrives. Returns True if the
+    chat is now in, so the /start carries on into setup as usual. A bad code
+    gets one line back, since the link already gave the bot away; a chat
+    with no code at all still gets nothing.
+    """
+    text = (msg.get("text") or "").strip()
+    parts = text.split()
+    if len(parts) != 2 or parts[0].lower() != "/start":
+        return False
+    chat = msg["chat"]
+    if fridge.redeem_invite(con, parts[1], chat["id"], chat.get("first_name")):
+        return True
+    tg.send(chat["id"], INVITE_SPENT)
+    return False
+
+
+def compose_members(con):
+    """(text, buttons) for /members: who got in by invite, each removable."""
+    people = fridge.members(con)
+    if not people:
+        return ("Nobody has joined by invite yet. /invite makes a link.", None)
+    lines = ["Joined by invite (%d). Removing someone ends their access and "
+             "their nudges; their data stays." % len(people), ""]
+    buttons = []
+    for p in people:
+        name = p["name"] or "chat %d" % p["chat_id"]
+        lines.append("  • %s, joined %s" % (name, p["joined"][:10]))
+        buttons.append([{"text": "Remove %s" % name,
+                         "callback_data": "member:remove:%d" % p["chat_id"]}])
+    return "\n".join(lines), buttons
+
+
 def handle_message(tg, con, msg, cfg):
     chat_id = msg["chat"]["id"]
     # A flood gets nothing back, quietly, before any other work runs.
@@ -691,9 +746,11 @@ def handle_message(tg, con, msg, cfg):
     if msg["chat"].get("type") != "private":
         return
     # A reply confirms the bot exists, so a chat that isn't on the allow
-    # list gets nothing at all, not even an error.
-    if cfg["allowed_chat_ids"] and chat_id not in cfg["allowed_chat_ids"]:
-        return
+    # list gets nothing at all, not even an error. The one exception is a
+    # chat holding an invite link: it already knows the bot exists.
+    if not allowed(con, cfg, chat_id):
+        if not join_by_invite(tg, con, msg):
+            return
     if "photo" in msg:
         handle_photo(tg, con, chat_id, msg, cfg)
         return
@@ -781,11 +838,21 @@ def handle_message(tg, con, msg, cfg):
             {"text": "No, keep it", "callback_data": "clear:no"},
         ]])
         return
+    if low.startswith("/invite") and chat_id == owner(cfg):
+        code = fridge.create_invite(con)
+        tg.send(chat_id, "Send this to one person. It lets them in once and "
+                         "stops working after %d days:\n\nhttps://t.me/%s?start=%s"
+                % (fridge.INVITE_DAYS, cfg.get("bot_username") or "<your bot>",
+                   code))
+        return
+    if low.startswith("/members") and chat_id == owner(cfg):
+        text, buttons = compose_members(con)
+        tg.send(chat_id, text, buttons=buttons)
+        return
     if low.startswith("/seed"):
         # seed.json is the owner's real fridge. Anyone with nothing logged
         # could otherwise load it, which leaks personal data.
-        owner = cfg["allowed_chat_ids"][0] if cfg["allowed_chat_ids"] else None
-        if chat_id == owner:
+        if chat_id == owner(cfg):
             handle_seed(tg, con, chat_id)
         else:
             tg.send(chat_id, HELP)
@@ -901,9 +968,25 @@ def handle_callback(tg, con, cb, cfg):
         return
     if msg.get("chat", {}).get("type") != "private":
         return
-    if cfg["allowed_chat_ids"] and chat_id not in cfg["allowed_chat_ids"]:
+    if not allowed(con, cfg, chat_id):
         return
     state, _, raw_id = data.partition(":")
+
+    if state == "member":
+        action, _, raw = raw_id.partition(":")
+        if chat_id != owner(cfg) or action != "remove":
+            tg.answer(cb["id"])
+            return
+        try:
+            who = int(raw)
+        except ValueError:
+            tg.answer(cb["id"])
+            return
+        fridge.remove_member(con, who)
+        tg.answer(cb["id"], "Removed.")
+        text, buttons = compose_members(con)
+        tg.edit(chat_id, msg["message_id"], text, buttons=buttons)
+        return
 
     if state == "frz":
         outcome, _, raw = raw_id.partition(":")
@@ -1051,6 +1134,9 @@ def sweep(tg, con, cfg, now=None):
     chats = [r["chat_id"] for r in
              con.execute("SELECT DISTINCT chat_id FROM items").fetchall()]
     for chat_id in chats:
+        # A removed member keeps their data but stops hearing from the bot.
+        if not allowed(con, cfg, chat_id):
+            continue
         # Someone halfway through onboarding must not get a scheduled nudge on
         # top of the step they are answering.
         if onb.active(con, chat_id):
@@ -1078,8 +1164,14 @@ def main():
     me = tg.call("getMe")
     if not me or not me.get("ok"):
         sys.exit("! Couldn't reach Telegram. Check the token and your connection.")
+    cfg["bot_username"] = me["result"]["username"]
     tg.call("setMyCommands", commands=[
         {"command": c, "description": d} for c, d in COMMANDS])
+    if owner(cfg):
+        # Only the owner's / menu shows these; they do nothing for anyone else.
+        tg.call("setMyCommands", scope={"type": "chat", "chat_id": owner(cfg)},
+                commands=[{"command": c, "description": d}
+                          for c, d in COMMANDS + OWNER_COMMANDS])
     print("Fridge Loop running as @%s. Nudging at %02d:%02d. Ctrl-C to stop."
           % (me["result"]["username"], cfg["nudge_hour"], cfg["nudge_minute"]))
 

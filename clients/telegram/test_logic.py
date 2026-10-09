@@ -2,6 +2,7 @@
 
 import base64
 import json
+import re
 import os
 import sys
 import sqlite3
@@ -3076,6 +3077,105 @@ class MonthCard(unittest.TestCase):
                                           "text": "/month"}, CFG)
         self.assertIn("no figure to give", tg.sent[0])
         self.assertNotIn("<pre>", tg.sent[0])
+
+
+class Invites(unittest.TestCase):
+    """Friends get in with a one-use link from the owner, not a chat id."""
+
+    OWNER, FRIEND, STRANGER = 1, 2, 3
+    CFG = dict(CFG, allowed_chat_ids=[1], bot_username="fridgebot")
+
+    def setUp(self):
+        self.con = fridge.connect(tempfile.mktemp(suffix=".db"))
+        self.tg = FakeTG()
+        bot.reset_rate_limits()
+
+    def _say(self, chat_id, text, name="Ana"):
+        bot.handle_message(self.tg, self.con, {
+            "chat": {"id": chat_id, "type": "private", "first_name": name},
+            "text": text}, self.CFG)
+
+    def _invite(self):
+        self._say(self.OWNER, "/invite")
+        link = re.search(r"https://t\.me/fridgebot\?start=(\S+)", self.tg.sent[-1])
+        self.assertIsNotNone(link, self.tg.sent[-1])
+        return link.group(1)
+
+    def test_a_stranger_still_gets_nothing(self):
+        self._say(self.STRANGER, "milk")
+        self._say(self.STRANGER, "/start")
+        self.assertEqual(self.tg.sent, [])
+
+    def test_an_invite_lets_a_friend_in_and_starts_setup(self):
+        code = self._invite()
+        n = len(self.tg.sent)
+        self._say(self.FRIEND, "/start " + code)
+        self.assertGreater(len(self.tg.sent), n)
+        self.assertTrue(bot.allowed(self.con, self.CFG, self.FRIEND))
+        self.assertTrue(onb.started(self.con, self.FRIEND))
+        n = len(self.tg.sent)
+        self._say(self.FRIEND, "/fridge")
+        self.assertGreater(len(self.tg.sent), n)
+
+    def test_an_invite_works_once(self):
+        code = self._invite()
+        self._say(self.FRIEND, "/start " + code)
+        self._say(self.STRANGER, "/start " + code)
+        self.assertFalse(bot.allowed(self.con, self.CFG, self.STRANGER))
+        self.assertIn("new link", self.tg.sent[-1])
+
+    def test_an_invite_expires(self):
+        code = fridge.create_invite(self.con, datetime(2026, 1, 1))
+        self.assertFalse(fridge.redeem_invite(self.con, code, self.FRIEND, "Ana",
+                                              datetime(2026, 1, 9)))
+
+    def test_a_made_up_code_does_not_get_in(self):
+        self._say(self.STRANGER, "/start notarealcode")
+        self.assertFalse(bot.allowed(self.con, self.CFG, self.STRANGER))
+
+    def test_only_the_owner_can_invite_or_list(self):
+        code = self._invite()
+        self._say(self.FRIEND, "/start " + code)
+        for cmd in ("/invite", "/members"):
+            self._say(self.FRIEND, cmd)
+            self.assertEqual(self.tg.sent[-1], bot.HELP, cmd)
+
+    def test_members_lists_and_removes(self):
+        code = self._invite()
+        self._say(self.FRIEND, "/start " + code, name="Ana")
+        self._say(self.OWNER, "/members")
+        self.assertIn("Ana", self.tg.sent[-1])
+        button = self.tg.buttons[-1][0][0]
+        bot.handle_callback(self.tg, self.con, {
+            "id": "cb", "data": button["callback_data"],
+            "message": {"chat": {"id": self.OWNER, "type": "private"},
+                        "message_id": len(self.tg.sent)}}, self.CFG)
+        self.assertFalse(bot.allowed(self.con, self.CFG, self.FRIEND))
+
+    def test_a_friend_cannot_press_the_remove_button(self):
+        code = self._invite()
+        self._say(self.FRIEND, "/start " + code)
+        bot.handle_callback(self.tg, self.con, {
+            "id": "cb", "data": "member:remove:%d" % self.FRIEND,
+            "message": {"chat": {"id": self.FRIEND, "type": "private"},
+                        "message_id": 1}}, self.CFG)
+        self.assertTrue(bot.allowed(self.con, self.CFG, self.FRIEND))
+
+    def test_a_removed_member_is_not_nudged(self):
+        code = self._invite()
+        self._say(self.FRIEND, "/start " + code)
+        onb.set_step(self.con, self.FRIEND, onb.DONE)
+        fridge.add_items(self.con, self.FRIEND, ["milk"], TODAY)
+        fridge.remove_member(self.con, self.FRIEND)
+        self.tg = FakeTG()
+        bot.sweep(self.tg, self.con, self.CFG,
+                  now=datetime.combine(TODAY + timedelta(days=10),
+                                       datetime.min.time()).replace(hour=20))
+        self.assertEqual(self.tg.sent, [])
+
+    def test_an_open_bot_needs_no_invite(self):
+        cfg = dict(self.CFG, allowed_chat_ids=[])
+        self.assertTrue(bot.allowed(self.con, cfg, self.STRANGER))
 
 
 class MonthSummaryTool(unittest.TestCase):
