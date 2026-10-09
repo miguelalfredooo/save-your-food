@@ -292,6 +292,17 @@ def handle_seed(tg, con, chat_id):
             + fridge.compose_inventory(fridge.open_items(con, chat_id)) + tail)
 
 
+COMMANDS = [
+    ("fridge", "What's tracked, soonest first"),
+    ("nudge", "What needs using right now"),
+    ("pantry", "What I remember but don't track"),
+    ("undo", "Take back the last list"),
+    ("setup", "Run the setup again"),
+    ("clear", "Wipe everything"),
+    ("help", "What I can do"),
+]
+
+
 def send_card(tg, con, chat_id, kind, head, items, today):
     """One card for these items, remembered so a tap can redraw it.
 
@@ -954,6 +965,8 @@ def main():
     me = tg.call("getMe")
     if not me or not me.get("ok"):
         sys.exit("! Couldn't reach Telegram. Check the token and your connection.")
+    tg.call("setMyCommands", commands=[
+        {"command": c, "description": d} for c, d in COMMANDS])
     print("Fridge Loop running as @%s. Nudging at %02d:%02d. Ctrl-C to stop."
           % (me["result"]["username"], cfg["nudge_hour"], cfg["nudge_minute"]))
 
