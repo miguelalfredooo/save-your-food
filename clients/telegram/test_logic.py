@@ -2349,8 +2349,33 @@ class Cards(unittest.TestCase):
     def test_a_one_tier_nudge_drops_the_label_its_heading_repeats(self):
         self._items(["milk", "spinach"])                # both past by self.day
         bot.send_nudge(self.tg, self.con, 1, self.day)
-        self.assertIn("check before eating", self.tg.sent[0].split("<pre>")[0])
+        self.assertIn("check before eating", self.tg.sent[0].split("<pre>")[0].lower())
         self.assertNotIn("CHECK BEFORE EATING", self._pre_lines(self.tg.sent[0]))
+
+    def _head(self, html):
+        return html.split("</b>", 1)[0].replace("<b>", "")
+
+    def test_a_one_tier_heading_is_that_tier(self):
+        self._items(["milk", "spinach"])
+        bot.send_nudge(self.tg, self.con, 1, self.day)
+        self.assertEqual(self._head(self.tg.sent[0]), "Check before eating")
+
+    def test_a_mixed_heading_is_a_short_count(self):
+        fridge.add_items(self.con, 1, ["milk"], TODAY)
+        fridge.add_items(self.con, 1, ["chicken thighs"], self.day)
+        bot.send_nudge(self.tg, self.con, 1, self.day)
+        self.assertEqual(self._head(self.tg.sent[0]), "1 tonight, 1 to check")
+
+    def test_nudge_headings_never_widen_the_card(self):
+        for n0, n1 in ((0, 1), (1, 0), (15, 0), (0, 15), (15, 15), (7, 8)):
+            items = ([{"use_by_date": self.day - timedelta(days=2)}] * n0
+                     + [{"use_by_date": self.day}] * n1)
+            self.assertLessEqual(len(card.nudge_title(items, self.day)), card.WIDTH)
+
+    def test_a_long_heading_is_clipped_to_the_card(self):
+        items = self._items(["milk"])
+        html, _ = card.render("x" * 40, items, self.day, "f")
+        self.assertEqual(len(self._head(html)), card.WIDTH)
 
     def test_a_mixed_nudge_keeps_its_section_labels(self):
         fridge.add_items(self.con, 1, ["milk"], TODAY)                 # 7d: past

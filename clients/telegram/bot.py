@@ -447,7 +447,7 @@ def send_nudge(tg, con, chat_id, today=None):
     if not items:
         return 0
     return send_card(tg, con, chat_id, "nudge",
-                     fridge.nudge_head(items, today), items, today)
+                     card.nudge_title(items, today), items, today)
 
 
 def send_fridge(tg, con, chat_id, today=None):
@@ -605,7 +605,7 @@ def send_sample_nudge(tg, con, chat_id, today=None):
                          "one tomorrow.")
         return
     today = today or date.today()
-    send_card(tg, con, chat_id, "nudge", fridge.nudge_head(items[:1], today),
+    send_card(tg, con, chat_id, "nudge", card.nudge_title(items[:1], today),
               items[:1], today)
 
 
