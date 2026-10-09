@@ -12,11 +12,11 @@ Why monospace and a fixed width
 The body sits in a <pre> block padded to exactly WIDTH columns, framed by a
 rule of the same width. Monospace makes every character the same width, so
 every card is the same width on a given phone, and the rule pins it even when
-every line is short. WIDTH is 32: on a current phone at the default text size
-a code block fits about 38 columns, so 32 keeps item names and dates on one
-line far more often than the old 24, with room to spare. It was 24 to match
-the drawings' canvas, which is sized for the narrowest phones; the drawings
-stay 24 and sit inside the wider card.
+every line is short. WIDTH is 36: on a current phone at the default text size
+a code block fits about 38 columns, so 36 keeps item names and dates on one
+line with a small margin. It was 24 to match the drawings' canvas, sized for
+the narrowest phones, then 32; the drawings stay 24 and sit inside the card.
+On a very small phone, or with very large text, a line can wrap.
 
 Names, not buttons, carry the item
 ----------------------------------
@@ -33,7 +33,7 @@ import art
 import fridge
 import shelf_life as sl
 
-WIDTH = 32
+WIDTH = 36
 RULE = "─" * WIDTH
 RIGHT = 8                 # the date column: "14d past", "tomorrow", "Oct 14"
 MAX_ITEMS = 15            # 3 buttons each stays well under Telegram's 100
@@ -161,6 +161,10 @@ def render(head, items, today, footer, closing=None, label_one_tier=True,
             if labelled:
                 body.append(sl.TIERS[t].upper())
             seen = t
+        elif n > 1:
+            # A blank line between items: a name, its date and its warning
+            # read as one unit, and the eye can find item 7 without counting.
+            body.append("")
         body.extend(lines_for(n, item, today))
     body += [RULE, footer]
     for note in notes or ():
@@ -199,6 +203,8 @@ def render_freezer(head, items, footer):
     date stops meaning anything, so the right column is when it went in."""
     body = [RULE, "FROZEN ON".rjust(WIDTH)]
     for n, item in enumerate(items, 1):
+        if n > 1:
+            body.append("")
         outcome = item.get("freezer_outcome")
         if outcome:
             body.extend(_row("%s %s" % (MARK[outcome], item["name"]),

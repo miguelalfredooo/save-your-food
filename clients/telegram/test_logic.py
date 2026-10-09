@@ -4607,6 +4607,14 @@ class OneLookForLists(unittest.TestCase):
         for name in names:        # each whole name sits on a single line
             self.assertTrue(any(name in line for line in lines), name)
 
+    def test_items_are_separated_by_a_blank_line(self):
+        fridge.add_items(self.con, 1, ["milk", "yogurt", "cheddar"], TODAY)
+        html, _ = card.render("h", fridge.open_items(self.con, 1), TODAY, "f")
+        body = html.split("<pre>", 1)[1].split("</pre>", 1)[0].split("\n")
+        starts = [i for i, l in enumerate(body) if l[:1].isdigit()]
+        for a, b in zip(starts, starts[1:]):
+            self.assertIn("", body[a + 1:b])
+
     def test_a_long_name_wraps_instead_of_being_cut(self):
         rows = card._row("1 butter chicken (leftovers)", "in 3d")
         self.assertNotIn("…", "".join(rows))
