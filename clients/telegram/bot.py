@@ -796,33 +796,42 @@ def handle_message(tg, con, msg, cfg):
         tg.send(chat_id, HELP)
         return
 
-    # "these items are all from the pantry" is a correction, not an item. Act on
-    # it rather than logging the sentence, which is what used to happen.
-    fix = fridge.correction(text)
-    if fix:
-        _, reply = fridge.reclassify_last(con, chat_id, fix)
-        tg.send(chat_id, reply)
-        return
+    # "I put butter chicken in the fridge as leftovers" is a capture written
+    # as a sentence. It has to be read before the correction check, which
+    # would otherwise see "fridge" and move the previous list.
+    put = fridge.put_away(text)
+    if put:
+        names, too_long = [put], []
+    else:
+        # "these items are all from the pantry" is a correction, not an item.
+        # Act on it rather than logging the sentence, which is what used to
+        # happen.
+        fix = fridge.correction(text)
+        if fix:
+            _, reply = fridge.reclassify_last(con, chat_id, fix)
+            tg.send(chat_id, reply)
+            return
 
-    # Any other sentence is prose. Logging it produces a dated fridge item with
-    # a whole clause for a name, which then turns up in a nudge.
-    if fridge.looks_like_sentence(text):
-        tg.send(chat_id, "That reads like a sentence rather than a list, so I "
-                         "haven't tracked it.\n\nFood goes in with commas "
-                         "between: milk, spinach, chicken thighs. If I sorted "
-                         "your last list wrong, say \"those are pantry\" or "
-                         "\"those are fridge\" and I'll move them.")
-        return
+        # Any other sentence is prose. Logging it produces a dated fridge item
+        # with a whole clause for a name, which then turns up in a nudge.
+        if fridge.looks_like_sentence(text):
+            tg.send(chat_id, "That reads like a sentence rather than a list, "
+                             "so I haven't tracked it.\n\nFood goes in with "
+                             "commas between: milk, spinach, chicken thighs. "
+                             "If I sorted your last list wrong, say \"those are "
+                             "pantry\" or \"those are fridge\" and I'll move "
+                             "them.")
+            return
 
-    # "milk eggs bread" has no comma to split on, so without this it becomes
-    # one tracked item named "milk eggs bread" with a fake date on it.
-    if fridge.looks_like_an_unseparated_list(text):
-        tg.send(chat_id, "Looks like a few different things with nothing "
-                         "between them. Put commas between them and send it "
-                         "again: milk, eggs, bread.")
-        return
+        # "milk eggs bread" has no comma to split on, so without this it
+        # becomes one tracked item named "milk eggs bread" with a fake date.
+        if fridge.looks_like_an_unseparated_list(text):
+            tg.send(chat_id, "Looks like a few different things with nothing "
+                             "between them. Put commas between them and send "
+                             "it again: milk, eggs, bread.")
+            return
 
-    names, too_long = fridge.parse_list(text, report=True)
+        names, too_long = fridge.parse_list(text, report=True)
     names, n_dropped = fridge.cap_names(names)
 
     if too_long:
