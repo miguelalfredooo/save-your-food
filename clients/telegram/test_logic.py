@@ -2466,9 +2466,9 @@ class SeedClassification(unittest.TestCase):
 
 class LLMReplyFormatting(unittest.TestCase):
     """The model writes plain markdown and, for a list, "- " bulleted
-    lines. Telegram needs HTML to render either, and a run of bulleted
-    lines needs a monospace <pre> block or a phone's proportional font
-    scrambles the alignment."""
+    lines. Telegram needs HTML to render either. A list is plain "•" lines,
+    not a <pre> block: Telegram draws <pre> as code, with a copy icon, and a
+    list of words has no columns to keep."""
 
     def test_bold_and_italic_become_html_tags(self):
         html = bot._markdown_to_html("**Got it.** Should be good till *Sunday*.")
@@ -2478,10 +2478,11 @@ class LLMReplyFormatting(unittest.TestCase):
         self.assertEqual(bot._markdown_to_html("use `/undo` any time"),
                          "use <code>/undo</code> any time")
 
-    def test_a_bulleted_list_is_wrapped_in_a_pre_block(self):
-        text = "Here's what you have:\n- milk: today\n- eggs: in 5 days"
+    def test_a_bulleted_list_becomes_plain_bullet_lines(self):
+        text = "Here's what you have:\n- milk: today\n- eggs: in *5* days"
         html = bot._markdown_to_html(text)
-        self.assertEqual(html, "Here's what you have:\n<pre>- milk: today\n- eggs: in 5 days</pre>")
+        self.assertEqual(html, "Here's what you have:\n• milk: today\n• eggs: in <i>5</i> days")
+        self.assertNotIn("<pre>", html)
 
     def test_overlapping_bold_and_italic_fall_back_to_plain_rather_than_break(self):
         # "**bold *italic** more*" crosses its own boundaries: bold and
@@ -2513,7 +2514,7 @@ class LLMReplyFormatting(unittest.TestCase):
 
     def test_a_lone_dash_bullet_is_not_mistaken_for_a_rule(self):
         html = bot._markdown_to_html("- milk")
-        self.assertEqual(html, "<pre>- milk</pre>")
+        self.assertEqual(html, "• milk")
 
     def test_html_special_characters_are_escaped(self):
         html = bot._markdown_to_html("watch out for <3 cilantro & onions")
@@ -4237,6 +4238,155 @@ class BotName(unittest.TestCase):
                                                "text": "/start"}, cfg)
         self.assertIn("What Save Your Food keeps", self.tg.sent[0])
         self.assertIn("I'm Save Your Food.", self.tg.sent[1])
+
+
+class AIMemory(unittest.TestCase):
+    """A follow-up like "add as a recipe" only works if the model sees the
+    message it follows. A few recent exchanges ride along, briefly."""
+
+    NOW = datetime(2026, 10, 8, 20, 0)
+
+    def setUp(self):
+        self.con = fridge.connect(tempfile.mktemp(suffix=".db"))
+        self.seen = []
+
+    def _run(self, text, reply, now):
+        def caller(messages):
+            self.seen.append(messages)
+            return {"choices": [{"message": {"content": reply}}]}
+        return llm_agent.run_agent(self.con, 1, text, CFG, now.date(),
+                                   caller=caller, now=now)
+
+    def test_the_last_exchange_is_sent_with_the_next_message(self):
+        self._run("Vanilla smoothie: milk, berries", "Nice smoothie!", self.NOW)
+        self._run("Add as a recipe", "Drafting it.", self.NOW + timedelta(minutes=2))
+        sent = self.seen[-1]
+        self.assertEqual([m["role"] for m in sent], ["system", "user", "assistant", "user"])
+        self.assertEqual(sent[1]["content"], "Vanilla smoothie: milk, berries")
+        self.assertEqual(sent[2]["content"], "Nice smoothie!")
+        self.assertEqual(sent[3]["content"], "Add as a recipe")
+
+    def test_only_the_last_few_exchanges_are_kept(self):
+        for n in range(6):
+            self._run("msg %d" % n, "reply %d" % n, self.NOW + timedelta(minutes=n))
+        self._run("latest", "ok", self.NOW + timedelta(minutes=7))
+        users = [m["content"] for m in self.seen[-1] if m["role"] == "user"]
+        self.assertEqual(users, ["msg 3", "msg 4", "msg 5", "latest"])
+
+    def test_old_exchanges_are_forgotten(self):
+        self._run("old", "old reply", self.NOW)
+        self._run("new", "ok", self.NOW + timedelta(minutes=45))
+        self.assertEqual([m["role"] for m in self.seen[-1]], ["system", "user"])
+
+    def test_a_failed_call_is_not_remembered(self):
+        def boom(messages):
+            raise OSError("down")
+        llm_agent.run_agent(self.con, 1, "hello", CFG, self.NOW.date(),
+                            caller=boom, now=self.NOW)
+        self._run("again", "ok", self.NOW + timedelta(minutes=1))
+        self.assertEqual([m["role"] for m in self.seen[-1]], ["system", "user"])
+
+    def test_memory_is_per_person(self):
+        self._run("mine", "ok", self.NOW)
+        seen = []
+        llm_agent.run_agent(self.con, 2, "theirs", CFG, self.NOW.date(),
+                            caller=lambda m: seen.append(m) or
+                            {"choices": [{"message": {"content": "ok"}}]},
+                            now=self.NOW)
+        self.assertEqual([m["role"] for m in seen[0]], ["system", "user"])
+
+    def test_deleteme_forgets_it(self):
+        self._run("mine", "ok", self.NOW)
+        fridge.delete_person(self.con, 1)
+        self._run("again", "ok", self.NOW + timedelta(minutes=1))
+        self.assertEqual([m["role"] for m in self.seen[-1]], ["system", "user"])
+
+    def test_a_photo_is_remembered_as_its_caption_not_its_bytes(self):
+        def caller(messages):
+            self.seen.append(messages)
+            return {"choices": [{"message": {"content": "I see milk."}}]}
+        llm_agent.run_agent(self.con, 1, "my fridge", CFG, self.NOW.date(),
+                            caller=caller, image_b64="aGVsbG8=", now=self.NOW)
+        self._run("thanks", "ok", self.NOW + timedelta(minutes=1))
+        self.assertEqual(self.seen[-1][1]["content"], "my fridge [photo]")
+
+    def test_the_prompt_drafts_a_pasted_recipe(self):
+        p = " ".join(llm_agent.SYSTEM_PROMPT.lower().split())
+        self.assertIn("looks like a recipe", p)
+        self.assertIn("earlier in the conversation", p)
+
+
+class RecipeLinks(unittest.TestCase):
+    """A message that is just a recipe link is drafted by the bot itself,
+    not left to the model, which on a small model often won't call the
+    fetch tool and says it can't open links."""
+
+    OWNER, OTHER = 1, 2
+    CFG = dict(CFG, allowed_chat_ids=[1, 2], llm_mode=True, openrouter_api_key="k")
+    PAGE = {"title": "Vanilla Berry Protein Smoothie",
+            "ingredients": ["1 cup strawberry, frozen", "1 scoop protein powder"],
+            "steps": ["Blend until smooth."],
+            "source_url": "https://tasty.co/recipe/vanilla-berry-protein-smoothie"}
+
+    def setUp(self):
+        self.con = fridge.connect(tempfile.mktemp(suffix=".db"))
+        self.tg = FakeTG()
+        bot.reset_rate_limits()
+        for chat in (self.OWNER, self.OTHER):
+            onb.set_step(self.con, chat, onb.DONE)
+        self.fetched, self.ai = [], []
+        self.page = dict(self.PAGE)
+        self.orig_fetch = llm_agent.fetch_recipe_page
+        self.orig_run = llm_agent.run_agent
+        llm_agent.fetch_recipe_page = lambda url, **k: self.fetched.append(url) or self.page
+        llm_agent.run_agent = lambda con, chat_id, text, cfg, **k: self.ai.append(text) or "ai reply"
+
+    def tearDown(self):
+        llm_agent.fetch_recipe_page = self.orig_fetch
+        llm_agent.run_agent = self.orig_run
+
+    def _say(self, chat_id, text, cfg=None):
+        bot.handle_message(self.tg, self.con, {
+            "chat": {"id": chat_id, "type": "private"}, "text": text}, cfg or self.CFG)
+
+    def test_a_bare_link_becomes_a_draft_without_the_model(self):
+        self._say(self.OWNER, "https://tasty.co/recipe/vanilla-berry-protein-smoothie")
+        self.assertEqual(self.ai, [])
+        self.assertEqual(self.fetched, [self.PAGE["source_url"]])
+        self.assertIn("Vanilla Berry Protein Smoothie", self.tg.sent[-1])
+        self.assertEqual(self.tg.buttons[-1][0][0]["text"], "Save to Notes")
+
+    def test_a_link_with_a_few_words_still_counts(self):
+        self._say(self.OWNER, "save this https://tasty.co/recipe/x")
+        self.assertEqual(self.fetched, ["https://tasty.co/recipe/x"])
+        self.assertEqual(self.ai, [])
+
+    def test_it_works_with_ai_off_too(self):
+        self._say(self.OWNER, "https://tasty.co/recipe/x", dict(self.CFG, llm_mode=False))
+        self.assertEqual(self.tg.buttons[-1][0][0]["text"], "Save to Notes")
+
+    def test_only_the_owner(self):
+        self._say(self.OTHER, "https://tasty.co/recipe/x")
+        self.assertEqual(self.fetched, [])
+
+    def test_a_page_without_recipe_data_goes_to_the_model_with_its_text(self):
+        self.page = {"text": "Smoothie. You need berries and milk. Blend.",
+                     "source_url": "https://example.com/s"}
+        self._say(self.OWNER, "https://example.com/s")
+        self.assertEqual(len(self.ai), 1)
+        self.assertIn("berries and milk", self.ai[0])
+
+    def test_a_failed_fetch_says_so_plainly(self):
+        self.page = {"error": "That page took too long to load."}
+        self._say(self.OWNER, "https://tasty.co/recipe/x")
+        self.assertIn("took too long", self.tg.sent[-1])
+        self.assertEqual(self.ai, [])
+
+    def test_a_link_inside_a_longer_message_is_left_to_the_model(self):
+        self._say(self.OWNER, "I tried https://tasty.co/recipe/x last night and "
+                              "it was too sweet, what can I swap?")
+        self.assertEqual(self.fetched, [])
+        self.assertEqual(len(self.ai), 1)
 
 
 class MonthSummaryTool(unittest.TestCase):
