@@ -2181,7 +2181,7 @@ class RecipeSaveFlow(unittest.TestCase):
         self._tap("recipe:save:%s" % d["id"])
         self.assertEqual(self.created, ["Arroz con Pollo"])
         self.assertIsNone(llm_agent.pending_recipe(self.con, 1))
-        self.assertIn("Saved to Notes", self.tg.edits[-1])
+        self.assertIn("Saved to Recipes", self.tg.edits[-1])
 
     def test_cancel_saves_nothing(self):
         d = self._draft()
@@ -4356,7 +4356,7 @@ class RecipeLinks(unittest.TestCase):
         self.assertEqual(self.ai, [])
         self.assertEqual(self.fetched, [self.PAGE["source_url"]])
         self.assertIn("Vanilla Berry Protein Smoothie", self.tg.sent[-1])
-        self.assertEqual(self.tg.buttons[-1][0][0]["text"], "Save to Notes")
+        self.assertEqual(self.tg.buttons[-1][0][0]["text"], "Save to Recipes")
 
     def test_a_link_with_a_few_words_still_counts(self):
         self._say(self.OWNER, "save this https://tasty.co/recipe/x")
@@ -4365,7 +4365,7 @@ class RecipeLinks(unittest.TestCase):
 
     def test_it_works_with_ai_off_too(self):
         self._say(self.OWNER, "https://tasty.co/recipe/x", dict(self.CFG, llm_mode=False))
-        self.assertEqual(self.tg.buttons[-1][0][0]["text"], "Save to Notes")
+        self.assertEqual(self.tg.buttons[-1][0][0]["text"], "Save to Recipes")
 
     def test_only_the_owner(self):
         self._say(self.OTHER, "https://tasty.co/recipe/x")
@@ -4478,11 +4478,11 @@ class PastedRecipeFlow(unittest.TestCase):
         self.assertEqual(self.ai, [])
         self.assertTrue(self.tg.sent[-1].startswith("Easy Italian Meat Sauce"))
         self.assertEqual([b["text"] for b in self.tg.buttons[-1][0]],
-                         ["Save to Notes", "Cancel"])
+                         ["Save to Recipes", "Cancel"])
 
     def test_it_works_with_ai_off(self):
         self._say(self.OWNER, SMOOTHIE, dict(self.CFG, llm_mode=False))
-        self.assertEqual(self.tg.buttons[-1][0][0]["text"], "Save to Notes")
+        self.assertEqual(self.tg.buttons[-1][0][0]["text"], "Save to Recipes")
 
     def test_only_the_owner(self):
         self._say(self.OTHER, MEAT_SAUCE)
@@ -4495,7 +4495,7 @@ class PastedRecipeFlow(unittest.TestCase):
         self._say(self.OWNER, "Save to notes")
         self.assertEqual(self.ai, [])
         self.assertTrue(self.tg.sent[-1].startswith("Easy Italian Meat Sauce"))
-        self.assertEqual(self.tg.buttons[-1][0][0]["text"], "Save to Notes")
+        self.assertEqual(self.tg.buttons[-1][0][0]["text"], "Save to Recipes")
 
     def test_save_to_notes_with_nothing_before_goes_to_the_model(self):
         self._say(self.OWNER, "Save to notes")
@@ -4603,6 +4603,14 @@ class OneLookForLists(unittest.TestCase):
         self.assertIn("(leftovers)", "".join(rows))
         for row in rows:
             self.assertLessEqual(len(row), card.WIDTH)
+
+    def test_action_buttons_name_what_they_act_on(self):
+        self._say("/clear")
+        self.assertEqual(self.tg.buttons[-1][0][0]["text"], "Wipe fridge and pantry")
+        self._say("/deleteme")
+        self.assertEqual(self.tg.buttons[-1][0][0]["text"], "Delete my data")
+        draft = {"id": "abc", "title": "T", "ingredients": ["x"], "steps": []}
+        self.assertEqual(bot._recipe_buttons(draft)[0][0]["text"], "Save to Recipes")
 
     def test_confirm_buttons_are_action_then_cancel(self):
         for cmd in ("/clear", "/deleteme"):

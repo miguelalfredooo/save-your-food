@@ -363,7 +363,7 @@ COMMANDS = [
     ("month", "What you used in time, and what got tossed"),
     ("undo", "Take back the last list"),
     ("setup", "Run the setup again"),
-    ("clear", "Wipe everything"),
+    ("clear", "Wipe your fridge and pantry"),
     ("privacy", "What I keep, and who can see it"),
     ("deleteme", "Delete everything I have about you"),
     ("help", "What I can do"),
@@ -736,7 +736,8 @@ def send_llm_reply(tg, chat_id, text):
 
 
 def _recipe_buttons(draft):
-    return [[{"text": "Save to Notes", "callback_data": "recipe:save:%s" % draft["id"]},
+    # Named for what lands where: a recipe, in the Recipes folder.
+    return [[{"text": "Save to Recipes", "callback_data": "recipe:save:%s" % draft["id"]},
              {"text": "Cancel", "callback_data": "recipe:cancel:%s" % draft["id"]}]]
 
 
@@ -920,7 +921,7 @@ def compose_members(con, cfg):
         row = [{"text": "Remove %s" % name,
                 "callback_data": "member:remove:%d" % p["chat_id"]}]
         if cfg["llm_mode"]:
-            row.append({"text": "AI off" if on else "AI on",
+            row.append({"text": "Turn AI off" if on else "Turn AI on",
                         "callback_data": "member:ai:%d" % p["chat_id"]})
         buttons.append(row)
     return "\n".join(lines), buttons
@@ -974,7 +975,7 @@ def handle_account_command(tg, con, chat_id, text, cfg):
         return True
     if low.startswith("/deleteme"):
         tg.send(chat_id, DELETE_ASK, buttons=[[
-            {"text": "Delete it all", "callback_data": "deleteme:yes"},
+            {"text": "Delete my data", "callback_data": "deleteme:yes"},
             {"text": "Cancel", "callback_data": "deleteme:no"},
         ]])
         return True
@@ -1152,7 +1153,7 @@ def handle_message(tg, con, msg, cfg):
         return
     if low.startswith("/clear"):
         tg.send(chat_id, CLEAR_ASK, buttons=[[
-            {"text": "Wipe everything", "callback_data": "clear:yes"},
+            {"text": "Wipe fridge and pantry", "callback_data": "clear:yes"},
             {"text": "Cancel", "callback_data": "clear:no"},
         ]])
         return
@@ -1501,7 +1502,7 @@ def handle_recipe_callback(tg, con, chat_id, cb, msg, raw, cfg):
     if outcome == "created":
         llm_agent.clear_pending_recipe(con, chat_id)
         tg.answer(cb["id"], "Saved.")
-        tg.edit(chat_id, msg["message_id"], "Saved to Notes ✓ %s" % draft["title"])
+        tg.edit(chat_id, msg["message_id"], "Saved to Recipes ✓ %s" % draft["title"])
     elif outcome == "duplicate":
         llm_agent.clear_pending_recipe(con, chat_id)
         tg.answer(cb["id"], "Already in Notes.")
