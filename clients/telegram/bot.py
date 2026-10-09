@@ -1045,7 +1045,10 @@ def handle_message(tg, con, msg, cfg):
     if not in_setup and (handle_recipe_link(tg, con, chat_id, text, cfg)
                          or handle_pasted_recipe(tg, con, chat_id, text, cfg)):
         return
-    if ai_for(con, cfg, chat_id) and not in_setup:
+    # Commands are the bot's, always. They used to go to the model with AI
+    # on, so a tap on /fridge in the menu got prose instead of the card, and
+    # the same tap looked different depending on a setting.
+    if ai_for(con, cfg, chat_id) and not in_setup and not text.startswith("/"):
         send_llm_reply(tg, chat_id, run_ai(con, chat_id, text, cfg))
         send_pending_recipe(tg, con, chat_id)
         return

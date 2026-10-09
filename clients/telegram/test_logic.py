@@ -4501,6 +4501,51 @@ class PastedRecipeFlow(unittest.TestCase):
         self.assertEqual(self.ai, ["Save to notes"])
 
 
+class CommandsAreAlwaysTheBots(unittest.TestCase):
+    """With AI mode on, a slash command used to go to the model, so /fridge
+    from the menu got prose instead of the card. Commands are the bot's;
+    the model only gets free text."""
+
+    CFG = dict(CFG, allowed_chat_ids=[1], llm_mode=True, openrouter_api_key="k")
+
+    def setUp(self):
+        self.con = fridge.connect(tempfile.mktemp(suffix=".db"))
+        self.tg = FakeTG()
+        bot.reset_rate_limits()
+        onb.set_step(self.con, 1, onb.DONE)
+        fridge.add_items(self.con, 1, ["milk"], TODAY)
+        self.ai = []
+        self.orig = llm_agent.run_agent
+        llm_agent.run_agent = lambda con, chat_id, text, cfg, **k: self.ai.append(text) or "ai reply"
+
+    def tearDown(self):
+        llm_agent.run_agent = self.orig
+
+    def _say(self, text):
+        bot.handle_message(self.tg, self.con, {
+            "chat": {"id": 1, "type": "private"}, "text": text}, self.CFG)
+
+    def test_every_menu_command_is_handled_by_the_bot(self):
+        for cmd in ("/fridge", "/nudge", "/pantry", "/freezer", "/month",
+                    "/undo", "/clear", "/help", "/fridge@fridgebot"):
+            self._say(cmd)
+        self.assertEqual(self.ai, [])
+
+    def test_fridge_is_the_card_with_ai_on(self):
+        self._say("/fridge")
+        self.assertIn("<pre>", self.tg.sent[-1])
+        self.assertTrue(self.tg.buttons[-1])
+
+    def test_an_unknown_command_gets_help_not_the_model(self):
+        self._say("/whatever")
+        self.assertEqual(self.tg.sent[-1], bot.HELP)
+        self.assertEqual(self.ai, [])
+
+    def test_free_text_still_goes_to_the_model(self):
+        self._say("what can I make tonight?")
+        self.assertEqual(self.ai, ["what can I make tonight?"])
+
+
 class MonthSummaryTool(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
