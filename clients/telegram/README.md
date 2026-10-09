@@ -165,6 +165,13 @@ owner's Apple Notes, so only the owner's chat (the first id in
 and a call to it is refused. On an open bot, with no owner, nobody gets it.
 `/invite` and `/members` still work for the owner with AI mode on.
 
+**What it costs.** Every model call is logged per person and day, with the
+tokens and, on OpenRouter, the dollar cost the provider reports. The owner
+sends `/usage` to see the last 7 days and the month so far. Replies are
+capped at 1,000 tokens, and a photo is sent at most 1,280px on its long
+edge, not Telegram's 2,560px copy, which costs about four times as much to
+read.
+
 This mode is a genuinely different front end, not a layer over the regular
 one: a message never reaches onboarding, the sentence/correction logic, or
 `parse_list` while it's on. It shares the same `items`/`pantry` tables, so
@@ -241,7 +248,7 @@ typed lists only for now.
 | `fridge.py` | Storage, list parsing, composing messages |
 | `card.py` | The fixed-width card the nudge, `/fridge` and `/freezer` are drawn as |
 | `shelf_life.py` | The use-by table and risk classes, ported from the skill |
-| `test_logic.py` | 364 tests. `python3 test_logic.py` |
+| `test_logic.py` | 369 tests. `python3 test_logic.py` |
 | `preview.py` | Renders the messages for any date, no token needed. `python3 preview.py 2026-09-26` |
 | `try_chat.py` | Chat with the real handlers in a terminal, no token. `tap 2 used` presses a card button. `python3 try_chat.py -i` |
 | `seed.json` | Real fridge contents as of Sep 23, so the test runs against real food |
@@ -299,7 +306,7 @@ The bot registers these with Telegram on startup, so they show in the `/` menu.
 
     python3 test_logic.py
 
-364 tests, no network needed. The interesting ones are the bucket collisions
+369 tests, no network needed. The interesting ones are the bucket collisions
 (`ground beef` vs `ground ginger`, `coconut milk` vs `oat milk`, `butternut
 squash` vs `peanut butter`) and the correction phrasings, including negation.
 
