@@ -298,6 +298,8 @@ COMMANDS = [
     ("fridge", "What's tracked, soonest first"),
     ("nudge", "What needs using right now"),
     ("pantry", "What I remember but don't track"),
+    ("freezer", "What you froze, and how it ended up"),
+    ("month", "What you used in time, and what got tossed"),
     ("undo", "Take back the last list"),
     ("setup", "Run the setup again"),
     ("clear", "Wipe everything"),
