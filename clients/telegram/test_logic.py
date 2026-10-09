@@ -2181,7 +2181,7 @@ class RecipeSaveFlow(unittest.TestCase):
         self._tap("recipe:save:%s" % d["id"])
         self.assertEqual(self.created, ["Arroz con Pollo"])
         self.assertIsNone(llm_agent.pending_recipe(self.con, 1))
-        self.assertIn("Saved to Notes", self.tg.edits[-1])
+        self.assertIn("Saved to Recipes", self.tg.edits[-1])
 
     def test_cancel_saves_nothing(self):
         d = self._draft()
@@ -4128,6 +4128,13 @@ class Privacy(unittest.TestCase):
             llm_agent.run_agent = orig
         self.assertNotIn("ai reply", self.tg.sent)
 
+    def test_the_owner_is_told_notes_are_untouched(self):
+        self._say(self.OWNER, "/deleteme")
+        self.assertIn("Recipes folder in Notes", self.tg.sent[-1])
+        self._join()
+        self._say(self.FRIEND, "/deleteme")
+        self.assertNotIn("Notes", self.tg.sent[-1])
+
     def test_deleteme_asks_first(self):
         fridge.add_items(self.con, self.OWNER, ["milk"], TODAY)
         self._say(self.OWNER, "/deleteme")
@@ -4356,7 +4363,7 @@ class RecipeLinks(unittest.TestCase):
         self.assertEqual(self.ai, [])
         self.assertEqual(self.fetched, [self.PAGE["source_url"]])
         self.assertIn("Vanilla Berry Protein Smoothie", self.tg.sent[-1])
-        self.assertEqual(self.tg.buttons[-1][0][0]["text"], "Save to Notes")
+        self.assertEqual(self.tg.buttons[-1][0][0]["text"], "Save to Recipes")
 
     def test_a_link_with_a_few_words_still_counts(self):
         self._say(self.OWNER, "save this https://tasty.co/recipe/x")
@@ -4365,7 +4372,7 @@ class RecipeLinks(unittest.TestCase):
 
     def test_it_works_with_ai_off_too(self):
         self._say(self.OWNER, "https://tasty.co/recipe/x", dict(self.CFG, llm_mode=False))
-        self.assertEqual(self.tg.buttons[-1][0][0]["text"], "Save to Notes")
+        self.assertEqual(self.tg.buttons[-1][0][0]["text"], "Save to Recipes")
 
     def test_only_the_owner(self):
         self._say(self.OTHER, "https://tasty.co/recipe/x")
@@ -4478,11 +4485,11 @@ class PastedRecipeFlow(unittest.TestCase):
         self.assertEqual(self.ai, [])
         self.assertTrue(self.tg.sent[-1].startswith("Easy Italian Meat Sauce"))
         self.assertEqual([b["text"] for b in self.tg.buttons[-1][0]],
-                         ["Save to Notes", "Cancel"])
+                         ["Save to Recipes", "Cancel"])
 
     def test_it_works_with_ai_off(self):
         self._say(self.OWNER, SMOOTHIE, dict(self.CFG, llm_mode=False))
-        self.assertEqual(self.tg.buttons[-1][0][0]["text"], "Save to Notes")
+        self.assertEqual(self.tg.buttons[-1][0][0]["text"], "Save to Recipes")
 
     def test_only_the_owner(self):
         self._say(self.OTHER, MEAT_SAUCE)
@@ -4495,7 +4502,7 @@ class PastedRecipeFlow(unittest.TestCase):
         self._say(self.OWNER, "Save to notes")
         self.assertEqual(self.ai, [])
         self.assertTrue(self.tg.sent[-1].startswith("Easy Italian Meat Sauce"))
-        self.assertEqual(self.tg.buttons[-1][0][0]["text"], "Save to Notes")
+        self.assertEqual(self.tg.buttons[-1][0][0]["text"], "Save to Recipes")
 
     def test_save_to_notes_with_nothing_before_goes_to_the_model(self):
         self._say(self.OWNER, "Save to notes")
@@ -4604,6 +4611,14 @@ class OneLookForLists(unittest.TestCase):
         for row in rows:
             self.assertLessEqual(len(row), card.WIDTH)
 
+    def test_action_buttons_name_what_they_act_on(self):
+        self._say("/clear")
+        self.assertEqual(self.tg.buttons[-1][0][0]["text"], "Wipe fridge and pantry")
+        self._say("/deleteme")
+        self.assertEqual(self.tg.buttons[-1][0][0]["text"], "Delete my data")
+        draft = {"id": "abc", "title": "T", "ingredients": ["x"], "steps": []}
+        self.assertEqual(bot._recipe_buttons(draft)[0][0]["text"], "Save to Recipes")
+
     def test_confirm_buttons_are_action_then_cancel(self):
         for cmd in ("/clear", "/deleteme"):
             self._say(cmd)
@@ -4661,6 +4676,61 @@ class AIVoiceAndListings(unittest.TestCase):
         self.assertIn("no emoji", p)
         self.assertIn("i'm here to help", p)
         self.assertIn("at most one question", p)
+
+
+class CorrectionCards(unittest.TestCase):
+    """"Those are pantry", "those are fridge" and /undo answer with the same
+    cards as everything else that lists food."""
+
+    def setUp(self):
+        self.con = fridge.connect(tempfile.mktemp(suffix=".db"))
+        self.tg = FakeTG()
+        bot.reset_rate_limits()
+        onb.set_step(self.con, 1, onb.DONE)
+
+    def _say(self, text):
+        bot.handle_message(self.tg, self.con, {
+            "chat": {"id": 1, "type": "private"}, "text": text}, CFG)
+
+    def test_those_are_pantry_shows_the_pantry_card(self):
+        self._say("spinach, yogurt")
+        self._say("those are pantry")
+        html = self.tg.sent[-1]
+        self.assertTrue(html.startswith("<b>Moved to your pantry</b>\n<pre>"))
+        self.assertIn("spinach", html)
+        self.assertIn("yogurt", html)
+
+    def test_raw_meat_kept_is_a_note_on_the_card(self):
+        self._say("spinach, chicken thighs")
+        self._say("those are pantry")
+        html = self.tg.sent[-1].replace("\n", " ")
+        self.assertIn("Moved to your pantry", html)
+        self.assertIn("Kept chicken thighs", html)
+
+    def test_those_are_fridge_shows_the_fridge_card_with_buttons(self):
+        self._say("cumin, olive oil")
+        self._say("those are fridge")
+        self.assertTrue(self.tg.sent[-1].startswith("<b>Moved to your fridge</b>\n<pre>"))
+        self.assertEqual(len(self.tg.buttons[-1]), 2)
+
+    def test_undo_names_what_it_took_back(self):
+        self._say("milk, cumin")
+        self._say("/undo")
+        html = self.tg.sent[-1]
+        self.assertTrue(html.startswith("<b>Took back your last list</b>\n<pre>"))
+        self.assertIn("TRACKED (1)", html)
+        self.assertIn("PANTRY (1)", html)
+        self.assertEqual(fridge.open_items(self.con, 1), [])
+
+    def test_explanations_stay_plain(self):
+        self._say("/undo")
+        self.assertEqual(self.tg.sent[-1], "Nothing to undo.")
+        self._say("those are pantry")
+        self.assertNotIn("<pre>", self.tg.sent[-1])
+
+    def test_the_prose_versions_are_unchanged_for_the_model(self):
+        fridge.add_items(self.con, 1, ["milk"], TODAY)
+        self.assertEqual(fridge.undo_last(self.con, 1), "Took back 1 tracked thing.")
 
 
 class MonthSummaryTool(unittest.TestCase):

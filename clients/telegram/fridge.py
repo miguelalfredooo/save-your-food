@@ -405,6 +405,21 @@ def reclassify_last(con, chat_id, target, today=None):
     and it has to work on the words a person would actually use rather than a
     command they have to learn.
     """
+    r = reclassify(con, chat_id, target, today)
+    return r["moved"], r["message"]
+
+
+def reclassify(con, chat_id, target, today=None):
+    """reclassify_last, with its parts kept apart so the bot can draw a card:
+    {"moved": names, "held": raw meat kept tracked, "message": prose}."""
+    r = _reclassify(con, chat_id, target, today)
+    if isinstance(r, tuple):
+        names, message = r
+        return {"moved": names, "held": [], "message": message}
+    return r
+
+
+def _reclassify(con, chat_id, target, today=None):
     today = today or date.today()
     stamp = last_batch(con, chat_id)
     if not stamp:
@@ -444,7 +459,7 @@ def reclassify_last(con, chat_id, target, today=None):
             msg += ("\n\nI kept %s tracked. Raw meat and fish are the one thing I "
                     "won't quietly stop watching. /undo if it should not be "
                     "there at all." % _join(held))
-        return names, msg
+        return {"moved": names, "held": held, "message": msg}
 
     rows = con.execute("SELECT name FROM pantry WHERE chat_id=? AND batch=?",
                        (chat_id, stamp)).fetchall()
@@ -637,14 +652,29 @@ def undo_last(con, chat_id):
     the escape hatch for a list that went in wrong — without it the only fix is
     /clear, which throws away the good with the bad.
     """
+    return undo(con, chat_id)["message"]
+
+
+def undo(con, chat_id):
+    """undo_last with the names kept, so the bot can show what went:
+    {"tracked": names, "pantry": names, "message": prose}."""
     stamp = last_batch(con, chat_id)
     if not stamp:
-        return "Nothing to undo."
+        return {"tracked": [], "pantry": [], "message": "Nothing to undo."}
+    tracked = [r["name"] for r in con.execute(
+        "SELECT name FROM items WHERE chat_id=? AND batch=?", (chat_id, stamp))]
+    pantry = [r["name"] for r in con.execute(
+        "SELECT name FROM pantry WHERE chat_id=? AND batch=?", (chat_id, stamp))]
     n_i = con.execute("DELETE FROM items WHERE chat_id=? AND batch=?",
                       (chat_id, stamp)).rowcount
     n_p = con.execute("DELETE FROM pantry WHERE chat_id=? AND batch=?",
                       (chat_id, stamp)).rowcount
     con.commit()
+    return {"tracked": tracked, "pantry": pantry,
+            "message": _undo_message(n_i, n_p)}
+
+
+def _undo_message(n_i, n_p):
     if not (n_i or n_p):
         return "Nothing to undo."
     bits = []

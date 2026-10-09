@@ -363,7 +363,7 @@ COMMANDS = [
     ("month", "What you used in time, and what got tossed"),
     ("undo", "Take back the last list"),
     ("setup", "Run the setup again"),
-    ("clear", "Wipe everything"),
+    ("clear", "Wipe your fridge and pantry"),
     ("privacy", "What I keep, and who can see it"),
     ("deleteme", "Delete everything I have about you"),
     ("help", "What I can do"),
@@ -736,7 +736,8 @@ def send_llm_reply(tg, chat_id, text):
 
 
 def _recipe_buttons(draft):
-    return [[{"text": "Save to Notes", "callback_data": "recipe:save:%s" % draft["id"]},
+    # Named for what lands where: a recipe, in the Recipes folder.
+    return [[{"text": "Save to Recipes", "callback_data": "recipe:save:%s" % draft["id"]},
              {"text": "Cancel", "callback_data": "recipe:cancel:%s" % draft["id"]}]]
 
 
@@ -920,7 +921,7 @@ def compose_members(con, cfg):
         row = [{"text": "Remove %s" % name,
                 "callback_data": "member:remove:%d" % p["chat_id"]}]
         if cfg["llm_mode"]:
-            row.append({"text": "AI off" if on else "AI on",
+            row.append({"text": "Turn AI off" if on else "Turn AI on",
                         "callback_data": "member:ai:%d" % p["chat_id"]})
         buttons.append(row)
     return "\n".join(lines), buttons
@@ -961,6 +962,10 @@ DELETE_ASK = ("This deletes everything I have about you: your fridge, pantry "
               "undone.")
 
 
+KEEPS_RECIPES = ("\n\nRecipes you saved stay in your Recipes folder in "
+                 "Notes: this never touches Notes.")
+
+
 def handle_account_command(tg, con, chat_id, text, cfg):
     """/privacy and /deleteme. True if handled.
 
@@ -973,8 +978,10 @@ def handle_account_command(tg, con, chat_id, text, cfg):
         tg.send(chat_id, privacy_note(con, cfg, chat_id))
         return True
     if low.startswith("/deleteme"):
-        tg.send(chat_id, DELETE_ASK, buttons=[[
-            {"text": "Delete it all", "callback_data": "deleteme:yes"},
+        # Only the owner can save recipes, so only the owner could wonder.
+        ask = DELETE_ASK + (KEEPS_RECIPES if recipes_for(cfg, chat_id) else "")
+        tg.send(chat_id, ask, buttons=[[
+            {"text": "Delete my data", "callback_data": "deleteme:yes"},
             {"text": "Cancel", "callback_data": "deleteme:no"},
         ]])
         return True
@@ -1148,11 +1155,11 @@ def handle_message(tg, con, msg, cfg):
         send_pantry(tg, con, chat_id)
         return
     if low.startswith("/undo"):
-        tg.send(chat_id, fridge.undo_last(con, chat_id))
+        send_undo(tg, con, chat_id)
         return
     if low.startswith("/clear"):
         tg.send(chat_id, CLEAR_ASK, buttons=[[
-            {"text": "Wipe everything", "callback_data": "clear:yes"},
+            {"text": "Wipe fridge and pantry", "callback_data": "clear:yes"},
             {"text": "Cancel", "callback_data": "clear:no"},
         ]])
         return
@@ -1188,8 +1195,7 @@ def handle_message(tg, con, msg, cfg):
         # happen.
         fix = fridge.correction(text)
         if fix:
-            _, reply = fridge.reclassify_last(con, chat_id, fix)
-            tg.send(chat_id, reply)
+            send_correction(tg, con, chat_id, fix)
             return
 
         # Any other sentence is prose. Logging it produces a dated fridge item
@@ -1258,6 +1264,41 @@ def send_capture(tg, con, chat_id, tracked, stable, outside, again):
         tg.send(chat_id, card.render_pantry(
             "Added to your pantry", _capped_names(stable), _capped_names(outside)),
             html=True)
+
+
+def send_correction(tg, con, chat_id, target):
+    """"Those are pantry" or "those are fridge", answered with the card for
+    where things went. Nothing moved means an explanation, which stays text."""
+    r = fridge.reclassify(con, chat_id, target)
+    if not r["moved"]:
+        tg.send(chat_id, r["message"])
+        return
+    if target == "fridge":
+        moved = set(r["moved"])
+        items = [i for i in fridge.open_items(con, chat_id) if i["name"] in moved]
+        send_card(tg, con, chat_id, "fridge", "Moved to your fridge", items,
+                  date.today())
+        return
+    notes = []
+    if r["held"]:
+        notes.append("Kept %s in the fridge. Raw meat and fish stay "
+                     "watched; /undo removes it." % ", ".join(r["held"]))
+    tg.send(chat_id, card.render_pantry("Moved to your pantry",
+                                        _capped_names(r["moved"]), [], notes),
+            html=True)
+
+
+def send_undo(tg, con, chat_id):
+    """/undo, answered with a card naming what was taken back."""
+    r = fridge.undo(con, chat_id)
+    if not (r["tracked"] or r["pantry"]):
+        tg.send(chat_id, r["message"])
+        return
+    tg.send(chat_id, card.render_list(
+        "Took back your last list",
+        [("TRACKED", _capped_names(r["tracked"])),
+         ("PANTRY", _capped_names(r["pantry"]))],
+        "Removed. Nothing kept."), html=True)
 
 
 def handle_callback(tg, con, cb, cfg):
@@ -1467,7 +1508,7 @@ def handle_recipe_callback(tg, con, chat_id, cb, msg, raw, cfg):
     if outcome == "created":
         llm_agent.clear_pending_recipe(con, chat_id)
         tg.answer(cb["id"], "Saved.")
-        tg.edit(chat_id, msg["message_id"], "Saved to Notes ✓ %s" % draft["title"])
+        tg.edit(chat_id, msg["message_id"], "Saved to Recipes ✓ %s" % draft["title"])
     elif outcome == "duplicate":
         llm_agent.clear_pending_recipe(con, chat_id)
         tg.answer(cb["id"], "Already in Notes.")

@@ -314,19 +314,25 @@ def _wrap_names(names, indent=""):
     return lines
 
 
-def render_pantry(head, stable, outside):
-    """What is remembered but never nudged, as a card with no buttons.
-
-    `stable` and `outside` are names, already capped by the caller. Two
-    sections, because pantry and counter are the split people get wrong.
-    """
+def render_list(head, sections, footer, notes=None):
+    """A card of plain names, no buttons: what was moved, taken back, or is
+    remembered. `sections` is [(label, names)]; empty ones are skipped."""
     body = [RULE]
-    for label, names in (("PANTRY", stable), ("ON THE COUNTER", outside)):
+    for label, names in sections:
         if not names:
             continue
         if len(body) > 1:
             body.append("")
         body.append("%s (%d)" % (label, len(names)))
         body += _wrap_names(names, "  ")
-    body += [RULE, "Remembered, never nudged"]
+    body += [RULE, footer]
+    for note in notes or ():
+        body += [""] + _wrap(note)
     return _html(head, body, None)
+
+
+def render_pantry(head, stable, outside, notes=None):
+    """What is remembered but never nudged. Two sections, because pantry and
+    counter are the split people get wrong. Names already capped."""
+    return render_list(head, [("PANTRY", stable), ("ON THE COUNTER", outside)],
+                       "Remembered, never nudged", notes)
