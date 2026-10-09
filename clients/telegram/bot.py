@@ -303,6 +303,8 @@ HELP = (
     "/undo: take back the last list I added\n"
     "\"those are pantry\": move the last list out of tracking\n"
     "/clear: wipe everything and start over\n"
+    "/privacy: what I keep, and who can see it\n"
+    "/deleteme: delete everything I have about you\n"
     "/help: this"
 )
 
@@ -361,6 +363,8 @@ COMMANDS = [
     ("undo", "Take back the last list"),
     ("setup", "Run the setup again"),
     ("clear", "Wipe everything"),
+    ("privacy", "What I keep, and who can see it"),
+    ("deleteme", "Delete everything I have about you"),
     ("help", "What I can do"),
 ]
 
@@ -781,6 +785,57 @@ def compose_members(con, cfg):
     return "\n".join(lines), buttons
 
 
+def privacy_note(con, cfg, chat_id):
+    """What is kept and who can see it, in plain words.
+
+    The AI line only appears for someone whose messages actually go to a
+    model, and says where: a person with AI off is not told about a service
+    that never sees their messages.
+    """
+    if not ai_for(con, cfg, chat_id):
+        ai = ("Apart from Telegram delivering them, your messages go "
+              "nowhere else.")
+    elif cfg["llm_provider"] == "ollama":
+        ai = ("Your messages and photos are read by an AI model running on "
+              "that same computer, not sent anywhere else.")
+    else:
+        ai = ("Your messages and photos are also sent to an AI service "
+              "(OpenRouter) so they can be understood.")
+    return ("What I keep, and who can see it:\n\n"
+            "  • The food you send me, what happened to it, and your "
+            "settings.\n"
+            "  • It's stored on the computer of whoever runs this bot, not "
+            "in the cloud, and they can see it.\n"
+            "  • %s\n\n"
+            "/deleteme removes all of it, any time. /privacy shows this "
+            "again." % ai)
+
+
+DELETE_ASK = ("This deletes everything I have about you: your fridge, pantry "
+              "and freezer, your settings, and your history. It can't be "
+              "undone.")
+
+
+def handle_account_command(tg, con, chat_id, text, cfg):
+    """/privacy and /deleteme. True if handled.
+
+    Ahead of AI mode for the same reason as the owner commands: someone
+    asking what is kept, or to be deleted, must get the real answer and the
+    real button, not the model's paraphrase of one.
+    """
+    low = text.lower()
+    if low.startswith("/privacy"):
+        tg.send(chat_id, privacy_note(con, cfg, chat_id))
+        return True
+    if low.startswith("/deleteme"):
+        tg.send(chat_id, DELETE_ASK, buttons=[[
+            {"text": "Yes, delete it all", "callback_data": "deleteme:yes"},
+            {"text": "No, keep it", "callback_data": "deleteme:no"},
+        ]])
+        return True
+    return False
+
+
 def handle_owner_command(tg, con, chat_id, text, cfg):
     """/invite and /members, from the owner's chat only. True if handled.
 
@@ -872,6 +927,8 @@ def handle_message(tg, con, msg, cfg):
     # both modes since they are not an understanding problem.
     if handle_owner_command(tg, con, chat_id, text, cfg):
         return
+    if handle_account_command(tg, con, chat_id, text, cfg):
+        return
     if ai_for(con, cfg, chat_id):
         send_llm_reply(tg, chat_id, run_ai(con, chat_id, text, cfg))
         return
@@ -900,6 +957,7 @@ def handle_message(tg, con, msg, cfg):
         # A first /start onboards. A later one does not restart it: someone
         # tapping /start out of curiosity should not lose their fridge.
         if not onb.started(con, chat_id):
+            tg.send(chat_id, privacy_note(con, cfg, chat_id))
             tg.send(chat_id, onb.begin(con, chat_id))
         else:
             tg.send(chat_id, WELCOME)
@@ -1152,6 +1210,23 @@ def handle_callback(tg, con, cb, cfg):
         send_sample_nudge(tg, con, chat_id)
         onb.set_step(con, chat_id, onb.DONE)
         send_delight(tg, con, chat_id, "welcome", caption=onb.finished(hour))
+        return
+
+    if state == "deleteme":
+        if raw_id != "yes":
+            tg.answer(cb["id"], "Kept.")
+            tg.edit(chat_id, msg["message_id"], "Nothing deleted.")
+            return
+        was_member = fridge.is_member(con, chat_id)
+        n_items, n_pantry = fridge.delete_person(con, chat_id)
+        tg.answer(cb["id"], "Deleted.")
+        tail = (" You've also left this bot: you'd need a new invite to come "
+                "back." if was_member else " Send /start to begin again.")
+        tg.edit(chat_id, msg["message_id"],
+                "Deleted %d tracked thing%s, %d pantry entr%s, your settings "
+                "and your history.%s" % (
+                    n_items, "" if n_items == 1 else "s",
+                    n_pantry, "y" if n_pantry == 1 else "ies", tail))
         return
 
     if state == "clear":

@@ -611,6 +611,25 @@ def clear_chat(con, chat_id):
     return n_items, n_pantry
 
 
+def delete_person(con, chat_id):
+    """Everything this chat ever left here, for /deleteme. Returns (items,
+    pantry) counts.
+
+    Wider than clear_chat on purpose: that one wipes the food and keeps the
+    settings, for starting over. This one is for leaving, so it also takes
+    the settings, saved cards, AI usage and membership. The invite code they
+    used stays spent, so it cannot let anyone else in.
+    """
+    n_items = con.execute("SELECT COUNT(*) FROM items WHERE chat_id=?",
+                          (chat_id,)).fetchone()[0]
+    n_pantry = con.execute("SELECT COUNT(*) FROM pantry WHERE chat_id=?",
+                           (chat_id,)).fetchone()[0]
+    for table in ("items", "pantry", "meta", "ai_usage", "members"):
+        con.execute("DELETE FROM %s WHERE chat_id=?" % table, (chat_id,))
+    con.commit()
+    return n_items, n_pantry
+
+
 def undo_last(con, chat_id):
     """Remove everything captured in the most recent capture batch.
 
