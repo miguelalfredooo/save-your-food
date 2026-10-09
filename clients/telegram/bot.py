@@ -929,7 +929,13 @@ def handle_message(tg, con, msg, cfg):
         return
     if handle_account_command(tg, con, chat_id, text, cfg):
         return
-    if ai_for(con, cfg, chat_id):
+    # Setup is the bot's own conversation, with or without AI: /start,
+    # /setup and /skip, and every answer while a step is waiting. Without
+    # this, AI mode took /start too, so anyone with AI on never saw setup
+    # or the privacy note.
+    in_setup = (text.lower().startswith(("/start", "/setup", "/skip"))
+                or (onb.active(con, chat_id) and not text.startswith("/")))
+    if ai_for(con, cfg, chat_id) and not in_setup:
         send_llm_reply(tg, chat_id, run_ai(con, chat_id, text, cfg))
         return
 

@@ -91,7 +91,8 @@ STEP4_HEAD = (
     "    “those are pantry”   moves the last list out of tracking\n"
     "    “those are fridge”   moves them back\n"
     "    /undo                takes back the last list entirely\n\n"
-    "Here is what a nudge looks like. Tap one and it stops asking."
+    "Here is what a nudge looks like. Under each item: ✅ used it, ❄️ froze "
+    "it, 🗑 tossed it. Tap one and it stops asking."
 )
 
 TIME_BUTTONS = [
@@ -112,6 +113,7 @@ def finished(hour):
         "you're fine.\n"
         "  %s Bought something? Send it as a list, with commas between things.\n"
         "  %s /fridge shows what's tracked. /pantry shows what I remember. "
+        "/freezer and /month show what you froze and how the month went. "
         "/help shows the rest.\n\n"
         "That's it. No app, no login, nothing to keep open."
         % (B, hour, B, B)

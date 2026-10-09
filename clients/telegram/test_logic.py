@@ -858,6 +858,15 @@ class Onboarding(unittest.TestCase):
         self.assertIn("08:00", text)
         self.assertIn("hear nothing", text)
 
+    def test_step_four_says_what_the_buttons_mean(self):
+        for phrase in ("used it", "froze it", "tossed it"):
+            self.assertIn(phrase, onb.STEP4_HEAD)
+
+    def test_the_closing_message_points_at_freezer_and_month(self):
+        text = onb.finished(8)
+        self.assertIn("/freezer", text)
+        self.assertIn("/month", text)
+
     def test_skip_leaves_no_half_finished_state(self):
         onb.begin(self.con, 1)
         msg = onb.skip(self.con, 1, 8)
@@ -3473,6 +3482,52 @@ class Privacy(unittest.TestCase):
         self._confirm_delete(self.OWNER)
         self.assertTrue(bot.allowed(self.con, self.CFG, self.OWNER))
         self.assertFalse(onb.started(self.con, self.OWNER))
+
+
+class OnboardingWithAI(unittest.TestCase):
+    """AI mode takes every message, so setup has to be carved out of it, or
+    someone with AI on never gets onboarding or the privacy note."""
+
+    CFG = dict(CFG, allowed_chat_ids=[1], llm_mode=True, openrouter_api_key="k")
+
+    def setUp(self):
+        self.con = fridge.connect(tempfile.mktemp(suffix=".db"))
+        self.tg = FakeTG()
+        bot.reset_rate_limits()
+        self.calls = []
+        self.orig = llm_agent.run_agent
+        llm_agent.run_agent = lambda *a, **k: self.calls.append(a[2]) or "ai reply"
+
+    def tearDown(self):
+        llm_agent.run_agent = self.orig
+
+    def _say(self, text):
+        bot.handle_message(self.tg, self.con, {
+            "chat": {"id": 1, "type": "private"}, "text": text}, self.CFG)
+
+    def test_start_onboards_with_the_privacy_note(self):
+        self._say("/start")
+        self.assertEqual(self.calls, [])
+        self.assertIn("who can see it", self.tg.sent[0])
+        self.assertTrue(onb.active(self.con, 1))
+
+    def test_setup_answers_go_to_setup_not_the_model(self):
+        self._say("/start")
+        self._say("milk")
+        self.assertEqual(self.calls, [])
+        self.assertEqual(onb.step(self.con, 1), "2")
+
+    def test_skip_ends_setup_and_the_model_takes_over(self):
+        self._say("/start")
+        self._say("/skip")
+        self.assertFalse(onb.active(self.con, 1))
+        self._say("what can I cook")
+        self.assertEqual(self.calls, ["what can I cook"])
+
+    def test_after_setup_messages_go_to_the_model(self):
+        onb.set_step(self.con, 1, onb.DONE)
+        self._say("milk")
+        self.assertEqual(self.calls, ["milk"])
 
 
 class MonthSummaryTool(unittest.TestCase):
