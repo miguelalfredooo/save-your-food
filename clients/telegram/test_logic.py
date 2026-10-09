@@ -2564,7 +2564,7 @@ class BotHandlers(unittest.TestCase):
 
     def test_capturing_a_list_does_not_crash(self):
         bot.handle_message(self.tg, self.con, {"chat": {"id": 1, "type": "private"}, "text": "milk, spinach"}, CFG)
-        self.assertIn("First one to watch", self.tg.sent[-1])
+        self.assertIn("Added to your fridge", self.tg.sent[-1])
 
     def test_an_unseparated_list_is_asked_for_commas_not_mistracked(self):
         bot.handle_message(self.tg, self.con, {"chat": {"id": 1, "type": "private"},
@@ -2808,7 +2808,8 @@ class BotHandlers(unittest.TestCase):
         self.assertEqual([p["name"] for p in fridge.pantry_items(self.con, 1)], ["cumin"])
         self.assertIn("butter chicken (leftovers)", by_name)
         self.assertEqual(by_name["butter chicken (leftovers)"]["risk"], sl.YELLOW)
-        self.assertIn("butter chicken (leftovers)", self.tg.sent[-1])
+        self.assertIn("butter chicken", self.tg.sent[-1])
+        self.assertIn("(leftovers)", self.tg.sent[-1])     # wrapped, not cut
 
     def test_put_them_in_the_fridge_still_corrects(self):
         # A pronoun instead of a food: this is about the last list, not a capture.
@@ -4544,6 +4545,71 @@ class CommandsAreAlwaysTheBots(unittest.TestCase):
     def test_free_text_still_goes_to_the_model(self):
         self._say("what can I make tonight?")
         self.assertEqual(self.ai, ["what can I make tonight?"])
+
+
+class OneLookForLists(unittest.TestCase):
+    """Adding food, /fridge and /pantry all answer as the same kind of card,
+    and every confirm button reads [Action] [Cancel]."""
+
+    def setUp(self):
+        self.con = fridge.connect(tempfile.mktemp(suffix=".db"))
+        self.tg = FakeTG()
+        bot.reset_rate_limits()
+        onb.set_step(self.con, 1, onb.DONE)
+
+    def _say(self, text):
+        bot.handle_message(self.tg, self.con, {
+            "chat": {"id": 1, "type": "private"}, "text": text}, CFG)
+
+    def test_a_typed_list_answers_with_the_fridge_card(self):
+        self._say("milk, spinach, rice")
+        html = self.tg.sent[-1]
+        self.assertTrue(html.startswith("<b>Added to your fridge</b>\n<pre>"))
+        self.assertIn("Pantry, no nudges: rice.", html.replace("\n", " "))
+        self.assertEqual(len(self.tg.buttons[-1]), 2)
+
+    def test_a_capture_tap_edits_that_card(self):
+        self._say("milk")
+        item = fridge.open_items(self.con, 1)[0]
+        bot.handle_callback(self.tg, self.con, {
+            "id": "cb", "data": "used:%d" % item["id"],
+            "message": {"chat": {"id": 1, "type": "private"},
+                        "message_id": len(self.tg.sent)}}, CFG)
+        self.assertEqual(len(self.tg.sent), 1)               # edited, not resent
+        self.assertIn("used", self.tg.edits[-1])
+
+    def test_only_pantry_things_get_the_pantry_card(self):
+        self._say("cumin, rice, olive oil")
+        self.assertTrue(self.tg.sent[-1].startswith("<b>Added to your pantry</b>"))
+        self.assertIsNone(self.tg.buttons[-1])
+
+    def test_slash_pantry_is_a_card(self):
+        fridge.add_items(self.con, 1, ["cumin", "olive oil", "onions"], TODAY)
+        self._say("/pantry")
+        html = self.tg.sent[-1]
+        self.assertIn("<pre>", html)
+        self.assertIn("PANTRY (2)", html)
+        self.assertIn("ON THE COUNTER (1)", html)
+
+    def test_pantry_names_wrap_between_names(self):
+        lines = card._wrap_names(["cumin", "rice", "olive oil", "chicken bouillon"], "  ")
+        self.assertIn("  olive oil,", lines)
+        for line in lines:
+            self.assertLessEqual(len(line), card.WIDTH)
+
+    def test_a_long_name_wraps_instead_of_being_cut(self):
+        rows = card._row("1 butter chicken (leftovers)", "in 3d")
+        self.assertNotIn("…", "".join(rows))
+        self.assertIn("(leftovers)", "".join(rows))
+        for row in rows:
+            self.assertLessEqual(len(row), card.WIDTH)
+
+    def test_confirm_buttons_are_action_then_cancel(self):
+        for cmd in ("/clear", "/deleteme"):
+            self._say(cmd)
+            labels = [b["text"] for b in self.tg.buttons[-1][0]]
+            self.assertEqual(labels[1], "Cancel", cmd)
+            self.assertFalse(labels[0].lower().startswith(("yes", "no")), cmd)
 
 
 class MonthSummaryTool(unittest.TestCase):

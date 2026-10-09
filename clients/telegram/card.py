@@ -76,11 +76,20 @@ def _clip(text, width):
 
 
 def _row(left, right):
-    """left and right on one WIDTH line, or two lines if they will not fit."""
+    """left and right on one WIDTH line. When they won't fit, the name wraps
+    onto as many lines as it needs and the right column goes under it: the
+    width never changes, and the name is never cut short, since a card is
+    also how someone checks what was saved."""
     room = WIDTH - len(right) - 1
     if len(left) <= room:
         return [left + " " * (WIDTH - len(left) - len(right)) + right]
-    return [_clip(left, WIDTH), right.rjust(WIDTH)]
+    lines = textwrap.wrap(left, WIDTH, subsequent_indent="  ",
+                          break_on_hyphens=False) or [left[:WIDTH]]
+    last = lines[-1]
+    if len(last) + 1 + len(right) <= WIDTH:
+        lines[-1] = last + " " * (WIDTH - len(last) - len(right)) + right
+        return lines
+    return lines + [right.rjust(WIDTH)]
 
 
 def lines_for(n, item, today):
@@ -122,13 +131,15 @@ def _html(head, body, closing):
     return html + ("\n" + closing if closing else "")
 
 
-def render(head, items, today, footer, closing=None, label_one_tier=True):
+def render(head, items, today, footer, closing=None, label_one_tier=True,
+           notes=None):
     """(html, buttons) for a card.
 
     `items` keep their order for the life of the card, closed or not, so an
     item's number never changes under someone's thumb. Sections follow the
     tier each item was in on the day the card went out, not today, for the
     same reason. `closing` is an already-rendered art block, or None.
+    `notes` are short sentences under the footer, wrapped to the card.
 
     A nudge's heading already names its tier when there is only one ("2
     things past their best: check before eating"), so label_one_tier=False
@@ -147,6 +158,8 @@ def render(head, items, today, footer, closing=None, label_one_tier=True):
             seen = t
         body.extend(lines_for(n, item, today))
     body += [RULE, footer]
+    for note in notes or ():
+        body += [""] + _wrap(note)
     html = _html(head, body, closing)
     buttons = [[{"text": "%d %s" % (n, icon),
                  "callback_data": "%s:%d" % (state, item["id"])}
@@ -280,3 +293,40 @@ def render_month(fig):
     for i, note in enumerate(notes):
         body += ([""] if i else []) + _wrap(note)
     return _html(fridge._month_name(fig["month"]), body, None)
+
+
+# --- /pantry ----------------------------------------------------------------
+
+def _wrap_names(names, indent=""):
+    """Names joined with commas, wrapped between names, never inside one:
+    "olive / oil" across two lines reads as two things."""
+    lines, cur = [], ""
+    for i, name in enumerate(names):
+        piece = name + ("," if i < len(names) - 1 else "")
+        piece = _clip(piece, WIDTH - len(indent))
+        if cur and len(indent) + len(cur) + 1 + len(piece) > WIDTH:
+            lines.append(indent + cur)
+            cur = piece
+        else:
+            cur = piece if not cur else cur + " " + piece
+    if cur:
+        lines.append(indent + cur)
+    return lines
+
+
+def render_pantry(head, stable, outside):
+    """What is remembered but never nudged, as a card with no buttons.
+
+    `stable` and `outside` are names, already capped by the caller. Two
+    sections, because pantry and counter are the split people get wrong.
+    """
+    body = [RULE]
+    for label, names in (("PANTRY", stable), ("ON THE COUNTER", outside)):
+        if not names:
+            continue
+        if len(body) > 1:
+            body.append("")
+        body.append("%s (%d)" % (label, len(names)))
+        body += _wrap_names(names, "  ")
+    body += [RULE, "Remembered, never nudged"]
+    return _html(head, body, None)
