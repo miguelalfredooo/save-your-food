@@ -373,7 +373,8 @@ def _render(kind, head, items, today, more, closing=None):
     footer = card.tally(kind, items, more)
     if kind == "freezer":
         return card.render_freezer(head, items, footer)
-    return card.render(head, items, today, footer, closing)
+    return card.render(head, items, today, footer, closing,
+                       label_one_tier=(kind != "nudge"))
 
 
 def refresh_card(tg, con, chat_id, message_id, spec):

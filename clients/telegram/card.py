@@ -102,21 +102,28 @@ def _html(head, body, closing):
     return html + ("\n" + closing if closing else "")
 
 
-def render(head, items, today, footer, closing=None):
+def render(head, items, today, footer, closing=None, label_one_tier=True):
     """(html, buttons) for a card.
 
     `items` keep their order for the life of the card, closed or not, so an
     item's number never changes under someone's thumb. Sections follow the
     tier each item was in on the day the card went out, not today, for the
     same reason. `closing` is an already-rendered art block, or None.
+
+    A nudge's heading already names its tier when there is only one ("2
+    things past their best: check before eating"), so label_one_tier=False
+    drops the section label that would repeat it right underneath.
     """
+    tiers = {sl.tier(i["use_by_date"], today) for i in items}
+    labelled = label_one_tier or len(tiers) > 1
     body, seen = [RULE], None
     for n, item in enumerate(items, 1):
         t = sl.tier(item["use_by_date"], today)
         if t != seen:
             if seen is not None:
                 body.append("")
-            body.append(sl.TIERS[t].upper())
+            if labelled:
+                body.append(sl.TIERS[t].upper())
             seen = t
         body.extend(lines_for(n, item, today))
     body += [RULE, footer]
