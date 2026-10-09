@@ -3530,6 +3530,38 @@ class OnboardingWithAI(unittest.TestCase):
         self.assertEqual(self.calls, ["milk"])
 
 
+class BotName(unittest.TestCase):
+    """The bot's display name, as Telegram reports it, names the privacy
+    note and introduces setup. Without one, the copy reads as before."""
+
+    def setUp(self):
+        self.con = fridge.connect(tempfile.mktemp(suffix=".db"))
+        self.tg = FakeTG()
+        bot.reset_rate_limits()
+
+    def test_the_privacy_note_is_headed_with_the_name(self):
+        cfg = dict(CFG, bot_name="Save Your Food")
+        note = bot.privacy_note(self.con, cfg, 1)
+        self.assertTrue(note.startswith("What Save Your Food keeps, and who can see it:"))
+        self.assertIn("The food you send, what happened to it", note)
+
+    def test_without_a_name_the_note_reads_as_before(self):
+        self.assertTrue(bot.privacy_note(self.con, CFG, 1)
+                        .startswith("What I keep, and who can see it:"))
+
+    def test_setup_introduces_the_bot_by_name(self):
+        self.assertTrue(onb.begin(self.con, 1, "Save Your Food")
+                        .startswith("I'm Save Your Food. I help you use food"))
+        self.assertTrue(onb.begin(self.con, 2).startswith("I help you use food"))
+
+    def test_start_uses_the_name_in_both(self):
+        cfg = dict(CFG, bot_name="Save Your Food")
+        bot.handle_message(self.tg, self.con, {"chat": {"id": 1, "type": "private"},
+                                               "text": "/start"}, cfg)
+        self.assertIn("What Save Your Food keeps", self.tg.sent[0])
+        self.assertIn("I'm Save Your Food.", self.tg.sent[1])
+
+
 class MonthSummaryTool(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
