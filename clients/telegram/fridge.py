@@ -10,6 +10,7 @@ import re
 import sqlite3
 from datetime import date, datetime
 
+import prices
 import shelf_life as sl
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fridge.db")
@@ -25,7 +26,11 @@ CREATE TABLE IF NOT EXISTS items (
     added     TEXT    NOT NULL,
     batch     TEXT,                     -- one capture's stamp, for /undo
     state     TEXT    NOT NULL DEFAULT 'open',  -- open | used | frozen | tossed
-    closed    TEXT
+    closed    TEXT,
+    tier      INTEGER,                  -- urgency tier at the moment it closed
+    tier_source TEXT,                   -- recorded | reconstructed
+    freezer_outcome TEXT,               -- used | tossed, once it leaves the freezer
+    freezer_at TEXT                     -- when that happened
 );
 CREATE TABLE IF NOT EXISTS pantry (
     id        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -49,14 +54,48 @@ def connect(path=None):
     con = sqlite3.connect(path or DB_PATH)
     con.row_factory = sqlite3.Row
     con.executescript(SCHEMA)
-    # A db made before /undo existed has no batch column. Add it rather than
-    # asking anyone to delete their fridge to get an upgrade.
-    for table in ("items", "pantry"):
+    # A db made before a feature existed is missing its columns. Add them
+    # rather than asking anyone to delete their fridge to get an upgrade.
+    for table, column, decl in (
+        ("items", "batch", "TEXT"),
+        ("pantry", "batch", "TEXT"),
+        ("items", "tier", "INTEGER"),
+        ("items", "tier_source", "TEXT"),
+        ("items", "freezer_outcome", "TEXT"),
+        ("items", "freezer_at", "TEXT"),
+    ):
         cols = [r[1] for r in con.execute("PRAGMA table_info(%s)" % table)]
-        if "batch" not in cols:
-            con.execute("ALTER TABLE %s ADD COLUMN batch TEXT" % table)
+        if column not in cols:
+            con.execute("ALTER TABLE %s ADD COLUMN %s %s" % (table, column, decl))
     con.commit()
+    backfill_tiers(con)
     return con
+
+
+def backfill_tiers(con):
+    """Reconstruct the tier for closes that happened before the column existed.
+
+    Exact, not a guess. A closed row keeps the use_by it had, the dedupe in
+    add_items only touches open rows, and sl.tier's thresholds have never
+    changed since they were written, so sl.tier(use_by, close date) returns
+    what it would have returned on the day. The date part of the timestamp is
+    what counts, so an item closed just after midnight gets that day's tier.
+
+    Marked `reconstructed` all the same, because a report that mixes the two
+    silently is claiming more than it knows. Idempotent: only NULL tiers.
+    """
+    rows = con.execute(
+        "SELECT id, use_by, closed FROM items"
+        " WHERE state != 'open' AND tier IS NULL AND closed IS NOT NULL"
+    ).fetchall()
+    for r in rows:
+        closed_day = date.fromisoformat(r["closed"][:10])
+        t = sl.tier(date.fromisoformat(r["use_by"]), closed_day)
+        con.execute("UPDATE items SET tier=?, tier_source='reconstructed'"
+                    " WHERE id=?", (t, r["id"]))
+    if rows:
+        con.commit()
+    return len(rows)
 
 
 # --- capture ---------------------------------------------------------------
@@ -610,12 +649,290 @@ def load_card(con, chat_id, message_id):
     return json.loads(raw) if raw else None
 
 
-def close_item(con, chat_id, item_id, state):
+def close_item(con, chat_id, item_id, state, today=None):
+    """Close an item out, recording the tier it was in at that moment.
+
+    Returns True if it closed, False if there was no open item to close.
+
+    Tiers are computed and never stored (SKILL §1, §5), so this row is the only
+    place that moment survives, and it is what makes a rescue countable later.
+
+    Every close goes through here, including the LLM's update_item, so there is
+    one place the tier can be missed and it is this one.
+    """
+    now = datetime.now()
+    row = con.execute("SELECT use_by FROM items WHERE id=? AND chat_id=?"
+                      " AND state='open'",
+                      (item_id, chat_id)).fetchone()
+    if not row:
+        return False
+    t = sl.tier(date.fromisoformat(row["use_by"]), today or now.date())
+    # Only an open item closes. Without this an inline button tapped twice, or
+    # a stale one tapped weeks later, would overwrite the close date and the
+    # tier of a close that already happened, moving a rescue into the wrong
+    # month or out of being a rescue at all.
     con.execute(
-        "UPDATE items SET state=?, closed=? WHERE id=? AND chat_id=?",
-        (state, datetime.now().isoformat(timespec="seconds"), item_id, chat_id),
+        "UPDATE items SET state=?, closed=?, tier=?, tier_source='recorded'"
+        " WHERE id=? AND chat_id=? AND state='open'",
+        (state, now.isoformat(timespec="seconds"), t, item_id, chat_id),
     )
     con.commit()
+    return True
+
+
+RESCUE_TIERS = (0, 1)
+
+
+def is_rescue(state, tier):
+    """A rescue is a used or frozen close at t0 or t1 (SKILL §15).
+
+    Nothing earlier counts. Milk drunk on day 2 of 8 was never at risk, so
+    counting it would credit the system for breakfast.
+    """
+    return state in ("used", "frozen") and tier in RESCUE_TIERS
+
+
+def tier_counts(con, chat_id):
+    """How many closed rows carry a recorded tier versus a reconstructed one.
+
+    A report built from these has to be able to say "N reconstructed".
+    """
+    out = {"recorded": 0, "reconstructed": 0, "none": 0}
+    for r in con.execute(
+            "SELECT tier_source, COUNT(*) n FROM items"
+            " WHERE chat_id=? AND state != 'open' GROUP BY tier_source",
+            (chat_id,)):
+        out[r["tier_source"] or "none"] = r["n"]
+    return out
+
+
+# --- the freezer -----------------------------------------------------------
+#
+# Freezing used to be a dead end: the item left open_items and had no buttons
+# ever again, so a frozen rescue could never be reversed and the rescued figure
+# could only ever drift upward. These two columns give it somewhere to go.
+#
+# A frozen item keeps state='frozen' and its original close date and tier. That
+# close really happened and the rescue was really earned, so it stays attributed
+# to the month it happened in. What comes later is a separate event with its own
+# date, which is what lets a reversal land in the month of the toss (SKILL §15)
+# rather than silently rewriting an earlier month.
+
+def frozen_items(con, chat_id):
+    """What is in the freezer and still undecided."""
+    rows = con.execute(
+        "SELECT * FROM items WHERE chat_id=? AND state='frozen'"
+        " AND freezer_outcome IS NULL ORDER BY closed DESC",
+        (chat_id,),
+    ).fetchall()
+    return [dict(r, use_by_date=date.fromisoformat(r["use_by"])) for r in rows]
+
+
+def settle_freezer_item(con, chat_id, item_id, outcome):
+    """Record what finally happened to something frozen: used or tossed.
+
+    'tossed' is the reversal. Freezing only to delay the bin is not a save, so
+    the rescue comes back off in the month the bin happened.
+    """
+    if outcome not in ("used", "tossed"):
+        raise ValueError("outcome must be used or tossed")
+    # First answer wins. Telegram keeps inline buttons tappable forever, so a
+    # stale message could otherwise overwrite "used" with "tossed" and reverse
+    # a rescue that was never reversed. The bot checks this too; the guard
+    # belongs here as well, because the button is the untrusted side.
+    con.execute(
+        "UPDATE items SET freezer_outcome=?, freezer_at=?"
+        " WHERE id=? AND chat_id=? AND state='frozen'"
+        " AND freezer_outcome IS NULL",
+        (outcome, datetime.now().isoformat(timespec="seconds"), item_id, chat_id),
+    )
+    con.commit()
+
+
+def reversed_rescues(con, chat_id):
+    """Frozen rescues that later went in the bin, with the date they did."""
+    rows = con.execute(
+        "SELECT * FROM items WHERE chat_id=? AND state='frozen'"
+        " AND freezer_outcome='tossed' ORDER BY freezer_at DESC",
+        (chat_id,),
+    ).fetchall()
+    return [dict(r) for r in rows if is_rescue("frozen", r["tier"])]
+
+
+# --- the monthly figures ---------------------------------------------------
+#
+# Two numbers, side by side, rescued first because it is the one the system
+# affects (SKILL §17). Everything here is counted from this bot's own SQLite
+# store and nothing else: it cannot read Apple Reminders or Restock.md, so the
+# text says where the numbers come from rather than letting them be mistaken
+# for the Mac side's.
+#
+# A reversal is the awkward case. A frozen rescue that later goes in the bin
+# counts in the month of the toss, on both sides: the toss goes onto thrown
+# away, and the rescue reverses. But the month the rescue was earned keeps it,
+# because the freeze and the toss are two events with their own dates. So the
+# reversal is shown as its own clause and never subtracted into a smaller
+# rescued figure, which would be a negative number wearing a disguise.
+
+def _month_of(stamp):
+    return (stamp or "")[:7]
+
+
+def month_figures(con, chat_id, today=None):
+    """The raw counts behind a monthly report. All from this bot's store."""
+    today = today or date.today()
+    month = today.isoformat()[:7]
+    rows = [dict(r) for r in con.execute(
+        "SELECT * FROM items WHERE chat_id=? AND state != 'open'", (chat_id,))]
+
+    rescued, tossed, reversals = [], [], []
+    for r in rows:
+        if _month_of(r["closed"]) == month and is_rescue(r["state"], r["tier"]):
+            rescued.append(r)
+        if _month_of(r["closed"]) == month and r["state"] == "tossed":
+            tossed.append(r)
+        # A frozen rescue binned this month: a toss here, and a reversal here,
+        # whichever month the freeze happened in.
+        if (r["state"] == "frozen" and r["freezer_outcome"] == "tossed"
+                and _month_of(r["freezer_at"]) == month):
+            if is_rescue("frozen", r["tier"]):
+                reversals.append(r)
+            tossed.append(r)
+
+    # Scoped to the rows this month's figures are built from, not the whole
+    # store. An all-time count sitting under a monthly figure reads as a claim
+    # about that month: September said "6 tiers reconstructed" when only 5 of
+    # its rows were in September at all.
+    counted = {}
+    for r in rescued + tossed + reversals:
+        counted[r["id"]] = r
+    reconstructed = sum(1 for r in counted.values()
+                        if r["tier_source"] == "reconstructed")
+    return {
+        "month": month,
+        "rescued": rescued,
+        "tossed": tossed,
+        "reversals": reversals,
+        "reconstructed": reconstructed,
+    }
+
+
+def _price_side(items):
+    """(rounded total, n_items, {source label: count}) for one side of the ledger.
+
+    Unpriced items still count in the tally and stay out of the money, which is
+    the whole reason the report says how many were priced.
+    """
+    total, by_source = 0.0, {}
+    for i in items:
+        amount, src = prices.price_for(i["name"])
+        if amount is None:
+            continue
+        total += amount
+        label = prices.source_label(src)
+        by_source[label] = by_source.get(label, 0) + 1
+    return int(round(total)), len(items), by_source
+
+
+def _side_clause(total, n, by_source):
+    """One side of the ledger as a sentence.
+
+    With nothing priced there is no dollar figure at all. "about $0 across 1
+    item" reads as "it cost nothing", which is a confident claim built from no
+    data -- the item counts in the tally and stays out of the money, which is
+    the whole reason the priced count is printed next to it.
+    """
+    if not n:
+        return "nothing yet."
+    plural = "" if n == 1 else "s"
+    if not sum(by_source.values()):
+        return "%d item%s, none of them priced." % (n, plural)
+    return "about $%d across %d item%s (%s)." % (
+        total, n, plural, _priced_clause(by_source, n))
+
+
+def _priced_clause(by_source, n_total):
+    n_priced = sum(by_source.values())
+    if not n_priced:
+        return "none of them priced"
+    split = ", ".join("%d %s" % (n, label)
+                      for label, n in sorted(by_source.items()))
+    if n_priced == n_total:
+        return "all %d priced: %s" % (n_priced, split)
+    return "%d of %d priced: %s" % (n_priced, n_total, split)
+
+
+def _month_name(month):
+    y, m = month.split("-")
+    return date(int(y), int(m), 1).strftime("%B %Y")
+
+
+def compose_month(fig):
+    """The monthly text. One shape, used by /month and by the LLM tool alike.
+
+    No net figure, ever: rescued minus thrown away would present a ledger as a
+    verdict, and the two are not the same kind of number (SKILL §17). And never
+    "saved you" -- rescued means it reached the edge and got used, not that it
+    would otherwise have been binned.
+    """
+    r_total, r_n, r_src = _price_side(fig["rescued"])
+    t_total, t_n, t_src = _price_side(fig["tossed"])
+    name = _month_name(fig["month"])
+
+    if not r_n and not t_n:
+        return ("Nothing closed out in %s yet, so there is no figure to give. "
+                "This counts only what you have told me here." % name)
+
+    lines = ["%s, from what you have told me here." % name, ""]
+
+    used = "Used before it went off: " + _side_clause(r_total, r_n, r_src)
+    if fig["reversals"]:
+        rev_total, rev_n, rev_src = _price_side(fig["reversals"])
+        # Same rule for the reversal clause: no figure when nothing is priced.
+        money = (" (about $%d)" % rev_total
+                 if sum(rev_src.values()) else "")
+        used += (" %d item%s frozen earlier %s tossed this month%s."
+                 % (rev_n, "" if rev_n == 1 else "s",
+                    "was" if rev_n == 1 else "were", money))
+    lines.append(used)
+
+    lines.append("Thrown away: " + _side_clause(t_total, t_n, t_src))
+
+    notes = []
+    # Only caveat a figure that was actually shown.
+    if sum(r_src.values()) or sum(t_src.values()):
+        notes.append("Every price is a rough estimate, not what you actually "
+                     "paid.")
+    if fig["reconstructed"]:
+        n = fig["reconstructed"]
+        notes.append("%d tier%s reconstructed from before I recorded %s."
+                     % (n, "" if n == 1 else "s", "it" if n == 1 else "them"))
+    if notes:
+        lines += ["", " ".join(notes)]
+    return "\n".join(lines)
+
+
+def month_summary(con, chat_id, today=None):
+    return compose_month(month_figures(con, chat_id, today))
+
+
+def all_time_figures(con, chat_id):
+    """Totals, where a reversed rescue is not a rescue.
+
+    It counts once, as a toss. A month reports what happened in it; a total
+    reports how things ended, so the two disagree on purpose (SKILL §15).
+    """
+    rows = [dict(r) for r in con.execute(
+        "SELECT * FROM items WHERE chat_id=? AND state != 'open'", (chat_id,))]
+    rescued, tossed = [], []
+    for r in rows:
+        binned = (r["state"] == "tossed"
+                  or (r["state"] == "frozen" and r["freezer_outcome"] == "tossed"))
+        if binned:
+            tossed.append(r)
+        elif is_rescue(r["state"], r["tier"]):
+            rescued.append(r)
+    return {"rescued": rescued, "tossed": tossed}
 
 
 # --- the nudge -------------------------------------------------------------

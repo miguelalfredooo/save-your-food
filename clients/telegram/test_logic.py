@@ -12,6 +12,7 @@ from datetime import date, datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fridge
+import prices
 import shelf_life as sl
 import onboarding as onb
 import art
@@ -2199,6 +2200,658 @@ class Cards(unittest.TestCase):
     def test_rel_column_fits(self):
         for d in (-30, -1, 0, 1, 3, 40):
             self.assertLessEqual(len(card.rel(TODAY + timedelta(days=d), TODAY)), card.RIGHT)
+
+
+class TierAtClose(unittest.TestCase):
+    """The tier an item was in when it closed is the only record of that
+    moment, because tiers are computed and never stored."""
+
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.tmp.close()
+        self.con = fridge.connect(self.tmp.name)
+
+    def tearDown(self):
+        self.con.close()
+        os.unlink(self.tmp.name)
+
+    def _close(self, name, use_by_offset, state, day_offset=0):
+        fridge.add_items(self.con, 1, [name], TODAY)
+        item = [i for i in fridge.open_items(self.con, 1)
+                if i["name"] == name][0]
+        self.con.execute("UPDATE items SET use_by=? WHERE id=?",
+                         ((TODAY + timedelta(days=use_by_offset)).isoformat(),
+                          item["id"]))
+        self.con.commit()
+        fridge.close_item(self.con, 1, item["id"], state,
+                          today=TODAY + timedelta(days=day_offset))
+        return self.con.execute("SELECT * FROM items WHERE id=?",
+                                (item["id"],)).fetchone()
+
+    def test_a_close_records_its_tier(self):
+        row = self._close("milk", 5, "used")
+        self.assertEqual(row["tier"], 3)
+        self.assertEqual(row["tier_source"], "recorded")
+
+    def test_each_tier_is_recorded_correctly(self):
+        self.assertEqual(self._close("a", -1, "used")["tier"], 0)
+        self.assertEqual(self._close("b", 0, "used")["tier"], 1)
+        self.assertEqual(self._close("c", 1, "used")["tier"], 1)
+        self.assertEqual(self._close("d", 2, "used")["tier"], 2)
+        self.assertEqual(self._close("e", 4, "used")["tier"], 2)
+        self.assertEqual(self._close("f", 5, "used")["tier"], 3)
+
+    def test_a_toss_keeps_its_tier_too(self):
+        # "tossed at t3" means the use-by estimate was too short, which is
+        # worth knowing (SKILL §15).
+        row = self._close("spinach", 6, "tossed")
+        self.assertEqual(row["tier"], 3)
+
+    def test_the_tier_is_taken_at_the_close_not_today(self):
+        # Closed two days later than it was logged: the tier has to be the one
+        # on the day it closed.
+        row = self._close("yogurt", 3, "used", day_offset=2)
+        self.assertEqual(row["tier"], 1)
+
+    def test_reclosing_an_already_closed_item_changes_nothing(self):
+        # The guard belongs in the data layer, not only in the two callers:
+        # Telegram keeps inline buttons tappable forever, so the button is the
+        # untrusted side. Without it a stale tap would overwrite the close
+        # date and the tier, moving a rescue into the wrong month or out of
+        # being a rescue at all.
+        fridge.add_items(self.con, 1, ["milk"], TODAY)
+        item = fridge.open_items(self.con, 1)[0]
+        self.assertTrue(fridge.close_item(self.con, 1, item["id"], "used",
+                                          today=TODAY))
+        before = dict(self.con.execute(
+            "SELECT state, closed, tier, tier_source FROM items WHERE id=?",
+            (item["id"],)).fetchone())
+
+        # A stale "Tossed it" tap, a week later.
+        self.assertFalse(fridge.close_item(self.con, 1, item["id"], "tossed",
+                                           today=TODAY + timedelta(days=7)))
+        after = dict(self.con.execute(
+            "SELECT state, closed, tier, tier_source FROM items WHERE id=?",
+            (item["id"],)).fetchone())
+        self.assertEqual(before, after)
+        self.assertEqual(after["state"], "used")
+
+    def test_closing_something_that_does_not_exist_is_false_not_a_crash(self):
+        self.assertFalse(fridge.close_item(self.con, 1, 99999, "used"))
+
+    def test_closing_another_chats_item_does_nothing(self):
+        fridge.add_items(self.con, 2, ["milk"], TODAY)
+        item = fridge.open_items(self.con, 2)[0]
+        self.assertFalse(fridge.close_item(self.con, 1, item["id"], "used"))
+        row = self.con.execute("SELECT state FROM items WHERE id=?",
+                               (item["id"],)).fetchone()
+        self.assertEqual(row["state"], "open")
+
+    def test_a_rescue_is_used_or_frozen_at_t0_or_t1(self):
+
+        self.assertTrue(fridge.is_rescue("used", 0))
+        self.assertTrue(fridge.is_rescue("used", 1))
+        self.assertTrue(fridge.is_rescue("frozen", 0))
+        self.assertTrue(fridge.is_rescue("frozen", 1))
+
+    def test_nothing_earlier_counts_as_a_rescue(self):
+        # Milk drunk on day 2 of 8 was never at risk. Counting it would credit
+        # the system for breakfast.
+        self.assertFalse(fridge.is_rescue("used", 2))
+        self.assertFalse(fridge.is_rescue("used", 3))
+        self.assertFalse(fridge.is_rescue("frozen", 3))
+
+    def test_a_toss_is_never_a_rescue_at_any_tier(self):
+        for t in (0, 1, 2, 3):
+            self.assertFalse(fridge.is_rescue("tossed", t))
+
+    def test_an_unknown_tier_is_not_a_rescue(self):
+        # A row whose tier could not be reconstructed must not be counted.
+        self.assertFalse(fridge.is_rescue("used", None))
+
+
+class BackfilledTiers(unittest.TestCase):
+    def test_old_closes_are_reconstructed_and_marked(self):
+        # A db written before the column existed. The reconstruction is exact:
+        # the stored use_by has not moved and sl.tier's thresholds never
+        # changed. It is still marked, because a report that mixes recorded and
+        # reconstructed tiers silently is claiming more than it knows.
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        tmp.close()
+        old = sqlite3.connect(tmp.name)
+        old.executescript("""
+            CREATE TABLE items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER NOT NULL,
+                name TEXT NOT NULL, use_by TEXT NOT NULL, risk TEXT NOT NULL,
+                estimated INTEGER NOT NULL, added TEXT NOT NULL,
+                state TEXT NOT NULL DEFAULT 'open', closed TEXT);
+        """)
+        rows = [
+            ("chicken", "2026-09-24", "2026-09-25T13:06:33", "used"),    # t0
+            ("olives",  "2026-09-28", "2026-09-27T12:31:02", "used"),    # t1
+            ("ginger",  "2026-09-28", "2026-09-27T12:30:57", "used"),    # t1
+            ("naan",    "2026-09-28", "2026-09-27T12:30:47", "used"),    # t1
+            ("basil",   "2026-09-26", "2026-09-25T13:06:37", "tossed"),  # t1
+            ("milk",    "2026-09-30", "2026-10-08T18:50:45", "tossed"),  # t0
+        ]
+        for name, use_by, closed, state in rows:
+            old.execute("INSERT INTO items (chat_id,name,use_by,risk,estimated,"
+                        "added,state,closed) VALUES (1,?,?,'yellow',1,?,?,?)",
+                        (name, use_by, use_by, state, closed))
+        old.execute("INSERT INTO items (chat_id,name,use_by,risk,estimated,added,state)"
+                    " VALUES (1,'open thing','2026-10-20','yellow',1,'2026-10-08','open')")
+        old.commit()
+        old.close()
+
+        con = fridge.connect(tmp.name)
+        got = dict((r["name"], (r["tier"], r["tier_source"])) for r in
+                   con.execute("SELECT name, tier, tier_source FROM items"))
+        self.assertEqual(got["chicken"], (0, "reconstructed"))
+        self.assertEqual(got["olives"], (1, "reconstructed"))
+        self.assertEqual(got["ginger"], (1, "reconstructed"))
+        self.assertEqual(got["naan"], (1, "reconstructed"))
+        self.assertEqual(got["basil"], (1, "reconstructed"))
+        self.assertEqual(got["milk"], (0, "reconstructed"))
+        # An open item has no close, so it has no tier.
+        self.assertEqual(got["open thing"], (None, None))
+
+        counts = fridge.tier_counts(con, 1)
+        self.assertEqual(counts["reconstructed"], 6)
+        self.assertEqual(counts["recorded"], 0)
+
+        # Four of the six were rescues: used at t0 or t1.
+        rescues = [r["name"] for r in
+                   con.execute("SELECT name, state, tier FROM items WHERE state!='open'")
+                   if fridge.is_rescue(r["state"], r["tier"])]
+        self.assertEqual(sorted(rescues), ["chicken", "ginger", "naan", "olives"])
+        con.close()
+        os.unlink(tmp.name)
+
+    def test_backfill_does_not_touch_recorded_tiers(self):
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        tmp.close()
+        con = fridge.connect(tmp.name)
+        fridge.add_items(con, 1, ["milk"], TODAY)
+        item = fridge.open_items(con, 1)[0]
+        fridge.close_item(con, 1, item["id"], "used", today=TODAY)
+        self.assertEqual(fridge.backfill_tiers(con), 0)
+        row = con.execute("SELECT tier_source FROM items WHERE id=?",
+                          (item["id"],)).fetchone()
+        self.assertEqual(row["tier_source"], "recorded")
+        con.close()
+        os.unlink(tmp.name)
+
+    def test_backfill_is_idempotent(self):
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        tmp.close()
+        con = fridge.connect(tmp.name)
+        con.execute("INSERT INTO items (chat_id,name,use_by,risk,estimated,added,"
+                    "state,closed) VALUES (1,'x','2026-09-28','yellow',1,"
+                    "'2026-09-20','used','2026-09-27T10:00:00')")
+        con.commit()
+        self.assertEqual(fridge.backfill_tiers(con), 1)
+        self.assertEqual(fridge.backfill_tiers(con), 0)
+        con.close()
+        os.unlink(tmp.name)
+
+
+class Freezer(unittest.TestCase):
+    """Freezing used to be a dead end: the item left every view and could never
+    be answered for again, so a frozen rescue could never be reversed."""
+
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.tmp.close()
+        self.con = fridge.connect(self.tmp.name)
+        fridge.add_items(self.con, 1, ["chicken thighs"], TODAY)
+        self.item = fridge.open_items(self.con, 1)[0]
+
+    def tearDown(self):
+        self.con.close()
+        os.unlink(self.tmp.name)
+
+    def _freeze(self, day_offset=1):
+        fridge.close_item(self.con, 1, self.item["id"], "frozen",
+                          today=TODAY + timedelta(days=day_offset))
+
+    def test_a_frozen_item_is_reachable_afterwards(self):
+        self._freeze()
+        self.assertEqual(fridge.open_items(self.con, 1), [])      # not in the fridge
+        names = [i["name"] for i in fridge.frozen_items(self.con, 1)]
+        self.assertEqual(names, ["chicken thighs"])               # but not gone
+
+    def test_freezing_at_t1_is_a_rescue(self):
+        self._freeze()
+        row = fridge.frozen_items(self.con, 1)[0]
+        self.assertEqual(row["tier"], 1)
+        self.assertTrue(fridge.is_rescue("frozen", row["tier"]))
+
+    def test_using_it_out_of_the_freezer_settles_it(self):
+        self._freeze()
+        fridge.settle_freezer_item(self.con, 1, self.item["id"], "used")
+        self.assertEqual(fridge.frozen_items(self.con, 1), [])
+        self.assertEqual(fridge.reversed_rescues(self.con, 1), [])
+
+    def test_tossing_it_out_of_the_freezer_reverses_the_rescue(self):
+        self._freeze()
+        fridge.settle_freezer_item(self.con, 1, self.item["id"], "tossed")
+        self.assertEqual(fridge.frozen_items(self.con, 1), [])
+        rev = fridge.reversed_rescues(self.con, 1)
+        self.assertEqual([r["name"] for r in rev], ["chicken thighs"])
+
+    def test_the_reversal_carries_its_own_date(self):
+        # The rescue stays attributed to the month it was earned; the reversal
+        # lands in the month of the toss, rather than rewriting an earlier one.
+        self._freeze()
+        fridge.settle_freezer_item(self.con, 1, self.item["id"], "tossed")
+        row = fridge.reversed_rescues(self.con, 1)[0]
+        self.assertTrue(row["closed"])
+        self.assertTrue(row["freezer_at"])
+        self.assertEqual(row["tier"], 1)          # the freeze tier survives
+        self.assertEqual(row["state"], "frozen")  # the close is not rewritten
+
+    def test_freezing_something_that_was_never_at_risk_is_not_a_rescue(self):
+        self._freeze(day_offset=-3)   # frozen while still t3
+        fridge.settle_freezer_item(self.con, 1, self.item["id"], "tossed")
+        self.assertEqual(fridge.reversed_rescues(self.con, 1), [])
+
+    def test_a_settled_item_cannot_be_settled_twice(self):
+        self._freeze()
+        fridge.settle_freezer_item(self.con, 1, self.item["id"], "used")
+        fridge.settle_freezer_item(self.con, 1, self.item["id"], "tossed")
+        row = self.con.execute("SELECT freezer_outcome FROM items WHERE id=?",
+                               (self.item["id"],)).fetchone()
+        self.assertEqual(row["freezer_outcome"], "used")
+
+    def test_a_bad_outcome_is_refused(self):
+        self._freeze()
+        with self.assertRaises(ValueError):
+            fridge.settle_freezer_item(self.con, 1, self.item["id"], "frozen")
+
+
+class TossInChatIsNotADelete(unittest.TestCase):
+    """The LLM has both update_item and remove_item. remove_item DELETEs, so a
+    toss routed there drops silently out of the monthly figures."""
+
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.tmp.close()
+        self.con = fridge.connect(self.tmp.name)
+
+    def tearDown(self):
+        self.con.close()
+        os.unlink(self.tmp.name)
+
+    def test_a_toss_through_the_llm_closes_the_item_and_keeps_it(self):
+        fridge.add_items(self.con, 1, ["cilantro"], TODAY)
+        res = llm_agent.exec_update_item(
+            self.con, 1, {"name": "cilantro", "state": "tossed"}, TODAY)
+        self.assertTrue(res.get("ok"))
+        row = self.con.execute("SELECT state, tier, tier_source FROM items"
+                               " WHERE name='cilantro'").fetchone()
+        self.assertEqual(row["state"], "tossed")
+        self.assertIsNotNone(row["tier"])
+        self.assertEqual(row["tier_source"], "recorded")
+
+    def test_a_use_through_the_llm_records_a_rescue(self):
+        fridge.add_items(self.con, 1, ["spinach"], TODAY)
+        item = fridge.open_items(self.con, 1)[0]
+        self.con.execute("UPDATE items SET use_by=? WHERE id=?",
+                         (TODAY.isoformat(), item["id"]))
+        self.con.commit()
+        llm_agent.exec_update_item(self.con, 1, {"name": "spinach", "state": "used"}, TODAY)
+        row = self.con.execute("SELECT state, tier FROM items WHERE name='spinach'").fetchone()
+        self.assertTrue(fridge.is_rescue(row["state"], row["tier"]))
+
+    def test_remove_item_still_deletes_for_a_mistaken_entry(self):
+        fridge.add_items(self.con, 1, ["mlik"], TODAY)
+        llm_agent.exec_remove_item(self.con, 1, {"name": "mlik"})
+        self.assertEqual(
+            self.con.execute("SELECT COUNT(*) FROM items WHERE name='mlik'").fetchone()[0], 0)
+
+    def test_the_tools_tell_the_model_which_is_which(self):
+        # The only thing stopping a toss being deleted is how these read.
+        tools = dict((t["function"]["name"], t["function"]["description"])
+                     for t in llm_agent.TOOLS)
+        update, remove = tools["update_item"], tools["remove_item"]
+        for word in ("threw out", "binned", "wasted", "froze"):
+            self.assertIn(word, update.lower(), word)
+        self.assertIn("never", remove.lower())
+        self.assertIn("mistake", remove.lower())
+        self.assertIn("update_item", remove)
+
+    def test_the_prompt_routes_outcomes_to_update_item(self):
+        p = llm_agent.SYSTEM_PROMPT.lower()
+        self.assertIn("outcomes", p)
+        for word in ("threw it out", "binned it", "froze"):
+            self.assertIn(word, p, word)
+        self.assertIn("never remove_item", p)
+
+
+
+
+class PriceTableParity(unittest.TestCase):
+    """prices.ROWS is generated from ops/reference-prices-west.md. If the two
+    ever drift, every dollar figure is quoting a table nobody is maintaining."""
+
+    def test_rows_match_the_ops_table_exactly(self):
+        parsed = prices.parse_markdown()
+        self.assertTrue(parsed, "parsed no rows out of the ops table")
+        self.assertEqual(parsed, prices.ROWS,
+                         "prices.ROWS has drifted from ops/reference-prices-"
+                         "west.md. Run: python3 prices.py --regenerate")
+
+    def test_the_source_marking_is_carried_through(self):
+        # A W row and a US row must stay distinguishable: a US figure is a
+        # national price and is never scaled up to West.
+        self.assertEqual(prices.ROWS["Milk, whole"][1], "W")
+        self.assertEqual(prices.ROWS["Eggs, grade A large"][1], "US Aug 2026")
+
+    def test_the_receipts_table_is_not_parsed_as_prices(self):
+        # It has a different shape and is derived from Restock.md.
+        for item in prices.ROWS:
+            self.assertNotIn("no receipts captured", item.lower())
+
+
+class PriceLookup(unittest.TestCase):
+    def test_an_alias_reaches_the_same_item(self):
+        self.assertEqual(prices.price_for("ground beef"),
+                         prices.ROWS["Ground beef, 100%"])
+        self.assertEqual(prices.price_for("milk"), prices.ROWS["Milk, whole"])
+        self.assertEqual(prices.price_for("Milk"), prices.ROWS["Milk, whole"])
+
+    def test_a_parenthetical_is_ignored(self):
+        self.assertEqual(prices.price_for("milk (half gallon)"),
+                         prices.ROWS["Milk, whole"])
+
+    def test_a_table_item_matches_its_own_name(self):
+        self.assertEqual(prices.price_for("Potatoes, white"),
+                         prices.ROWS["Potatoes, white"])
+
+    def test_a_neighbouring_item_is_never_a_match(self):
+        # The whole point. A price guessed from a similar item is the kind of
+        # number this system exists to avoid.
+        for name in ("chicken thighs", "naan", "cilantro", "fresh ginger",
+                     "basil", "yogurt", "tofu", "butter", "spinach",
+                     "oat milk", "salmon", "leftover guiso"):
+            self.assertEqual(prices.price_for(name), prices.UNPRICED, name)
+
+    def test_bare_chicken_is_too_vague_to_price(self):
+        # Two table rows could be meant, so neither is.
+        self.assertEqual(prices.price_for("chicken"), prices.UNPRICED)
+        self.assertEqual(prices.price_for("chicken (fridge)"), prices.UNPRICED)
+
+    def test_an_empty_name_is_unpriced_not_a_crash(self):
+        for name in ("", None, "   ", "???"):
+            self.assertEqual(prices.price_for(name), prices.UNPRICED)
+
+    def test_receipts_outrank_the_table(self):
+        # The day receipts exist they win, per the skill's source order.
+        own = {"milk": (6.49, "R3")}
+        self.assertEqual(prices.price_for("milk", receipts=own), (6.49, "R3"))
+        self.assertEqual(prices.source_label("R3"), "your receipts")
+        self.assertEqual(prices.source_label("W"), "BLS")
+        self.assertEqual(prices.source_label("US Aug 2026"), "BLS")
+
+
+class MonthlyFigures(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.tmp.close()
+        self.con = fridge.connect(self.tmp.name)
+
+    def tearDown(self):
+        self.con.close()
+        os.unlink(self.tmp.name)
+
+    def _closed(self, name, state, tier, closed, freezer_outcome=None,
+                freezer_at=None):
+        self.con.execute(
+            "INSERT INTO items (chat_id,name,use_by,risk,estimated,added,state,"
+            "closed,tier,tier_source,freezer_outcome,freezer_at)"
+            " VALUES (1,?,?,'yellow',1,?,?,?,?,'recorded',?,?)",
+            (name, closed[:10], closed[:10], state, closed, tier,
+             freezer_outcome, freezer_at))
+        self.con.commit()
+
+    def test_the_reconstructed_count_is_this_months_rows_only(self):
+        # An all-time count under a monthly figure reads as a claim about that
+        # month. Two reconstructed rows, in different months: each month must
+        # own up to one.
+        for name, when in (("milk", "2026-09-20T09:00:00"),
+                           ("cilantro", "2026-10-03T09:00:00")):
+            self.con.execute(
+                "INSERT INTO items (chat_id,name,use_by,risk,estimated,added,"
+                "state,closed) VALUES (1,?,?,'yellow',1,?,'tossed',?)",
+                (name, when[:10], when[:10], when))
+        self.con.commit()
+        self.assertEqual(fridge.backfill_tiers(self.con), 2)
+        self.assertEqual(
+            fridge.month_figures(self.con, 1, date(2026, 9, 30))["reconstructed"], 1)
+        self.assertEqual(
+            fridge.month_figures(self.con, 1, date(2026, 10, 8))["reconstructed"], 1)
+        self.assertEqual(
+            fridge.month_figures(self.con, 1, date(2026, 11, 2))["reconstructed"], 0)
+
+    def test_a_recorded_close_is_not_counted_as_reconstructed(self):
+        fridge.add_items(self.con, 1, ["milk"], TODAY)
+        item = fridge.open_items(self.con, 1)[0]
+        fridge.close_item(self.con, 1, item["id"], "used", today=TODAY)
+        self.assertEqual(fridge.month_figures(self.con, 1, TODAY)["reconstructed"], 0)
+
+    def test_a_reversal_is_not_counted_twice(self):
+        # The reversal row is appended to tossed as well, so a naive count
+        # would report it in both.
+        self.con.execute(
+            "INSERT INTO items (chat_id,name,use_by,risk,estimated,added,state,"
+            "closed,freezer_outcome,freezer_at) VALUES (1,'chicken breast',"
+            "'2026-09-21','yellow',1,'2026-09-18','frozen','2026-09-20T09:00:00',"
+            "'tossed','2026-10-05T09:00:00')")
+        self.con.commit()
+        fridge.backfill_tiers(self.con)
+        fig = fridge.month_figures(self.con, 1, date(2026, 10, 8))
+        self.assertEqual(len(fig["reversals"]), 1)
+        self.assertEqual(fig["reconstructed"], 1)
+
+    def test_a_rescue_is_counted_in_the_month_it_closed(self):
+
+        self._closed("milk", "used", 1, "2026-10-03T09:00:00")
+        fig = fridge.month_figures(self.con, 1, date(2026, 10, 8))
+        self.assertEqual([i["name"] for i in fig["rescued"]], ["milk"])
+        self.assertEqual(fig["tossed"], [])
+
+    def test_last_months_closes_are_not_in_this_month(self):
+        self._closed("milk", "used", 1, "2026-09-30T09:00:00")
+        fig = fridge.month_figures(self.con, 1, date(2026, 10, 8))
+        self.assertEqual(fig["rescued"], [])
+
+    def test_a_reversal_lands_in_the_month_of_the_toss(self):
+        # Frozen in September at t1, binned in October. October gets the toss
+        # and the reversal; September keeps the rescue.
+        self._closed("chicken thighs", "frozen", 1, "2026-09-20T09:00:00",
+                     freezer_outcome="tossed", freezer_at="2026-10-05T09:00:00")
+        sep = fridge.month_figures(self.con, 1, date(2026, 9, 25))
+        self.assertEqual([i["name"] for i in sep["rescued"]], ["chicken thighs"])
+        self.assertEqual(sep["reversals"], [])
+        self.assertEqual(sep["tossed"], [])
+
+        oct_ = fridge.month_figures(self.con, 1, date(2026, 10, 8))
+        self.assertEqual(oct_["rescued"], [])
+        self.assertEqual([i["name"] for i in oct_["reversals"]], ["chicken thighs"])
+        self.assertEqual([i["name"] for i in oct_["tossed"]], ["chicken thighs"])
+
+    def test_the_reversal_reads_as_its_own_clause_never_a_negative(self):
+        self._closed("ground beef", "used", 0, "2026-10-02T09:00:00")
+        self._closed("chicken breast", "frozen", 1, "2026-09-20T09:00:00",
+                     freezer_outcome="tossed", freezer_at="2026-10-05T09:00:00")
+        text = fridge.month_summary(self.con, 1, date(2026, 10, 8))
+        self.assertIn("Used before it went off: about $", text)
+        self.assertIn("frozen earlier was tossed this month", text)
+        self.assertNotIn("-$", text)
+        self.assertNotIn("about $-", text)
+
+    def test_a_frozen_item_never_at_risk_does_not_reverse(self):
+        self._closed("peas", "frozen", 3, "2026-09-20T09:00:00",
+                     freezer_outcome="tossed", freezer_at="2026-10-05T09:00:00")
+        fig = fridge.month_figures(self.con, 1, date(2026, 10, 8))
+        self.assertEqual(fig["reversals"], [])
+        self.assertEqual([i["name"] for i in fig["tossed"]], ["peas"])
+
+    def test_all_time_counts_a_reversed_rescue_once_as_a_toss(self):
+        self._closed("milk", "used", 1, "2026-10-03T09:00:00")
+        self._closed("chicken breast", "frozen", 1, "2026-09-20T09:00:00",
+                     freezer_outcome="tossed", freezer_at="2026-10-05T09:00:00")
+        allt = fridge.all_time_figures(self.con, 1)
+        self.assertEqual([i["name"] for i in allt["rescued"]], ["milk"])
+        self.assertEqual([i["name"] for i in allt["tossed"]], ["chicken breast"])
+
+    def test_all_time_keeps_a_frozen_item_still_in_the_freezer_as_a_rescue(self):
+        self._closed("chicken breast", "frozen", 1, "2026-09-20T09:00:00")
+        allt = fridge.all_time_figures(self.con, 1)
+        self.assertEqual([i["name"] for i in allt["rescued"]], ["chicken breast"])
+        self.assertEqual(allt["tossed"], [])
+
+
+class MonthlyText(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.tmp.close()
+        self.con = fridge.connect(self.tmp.name)
+
+    def tearDown(self):
+        self.con.close()
+        os.unlink(self.tmp.name)
+
+    def _closed(self, name, state, tier, closed):
+        self.con.execute(
+            "INSERT INTO items (chat_id,name,use_by,risk,estimated,added,state,"
+            "closed,tier,tier_source) VALUES (1,?,?,'yellow',1,?,?,?,?,'recorded')",
+            (name, closed[:10], closed[:10], state, closed, tier))
+        self.con.commit()
+
+    def test_the_two_figures_are_both_named_rescued_first(self):
+        self._closed("milk", "used", 1, "2026-10-02T09:00:00")
+        self._closed("cilantro", "tossed", 0, "2026-10-03T09:00:00")
+        text = fridge.month_summary(self.con, 1, date(2026, 10, 8))
+        self.assertIn("Used before it went off:", text)
+        self.assertIn("Thrown away:", text)
+        self.assertLess(text.index("Used before it went off"),
+                        text.index("Thrown away"))
+
+    def test_it_never_shows_a_net_figure(self):
+        self._closed("ground beef", "used", 1, "2026-10-02T09:00:00")
+        self._closed("milk", "tossed", 0, "2026-10-03T09:00:00")
+        text = fridge.month_summary(self.con, 1, date(2026, 10, 8)).lower()
+        for banned in ("net", "minus", "difference", "ahead by", "down by"):
+            self.assertNotIn(banned, text, banned)
+
+    def test_it_never_claims_the_counterfactual(self):
+        self._closed("ground beef", "used", 1, "2026-10-02T09:00:00")
+        text = fridge.month_summary(self.con, 1, date(2026, 10, 8)).lower()
+        for banned in ("saved you", "you saved", "savings", "would have"):
+            self.assertNotIn(banned, text, banned)
+
+    def test_it_says_how_many_were_priced_and_from_where(self):
+        self._closed("milk", "used", 1, "2026-10-02T09:00:00")        # priced
+        self._closed("cilantro", "used", 1, "2026-10-02T10:00:00")    # unpriced
+        text = fridge.month_summary(self.con, 1, date(2026, 10, 8))
+        self.assertIn("1 of 2 priced: 1 BLS", text)
+
+    def test_an_unpriced_side_shows_no_dollar_figure(self):
+        # "about $0 across 1 item" reads as "it cost nothing", which is a
+        # confident claim built from no data.
+        self._closed("cilantro", "tossed", 0, "2026-10-03T09:00:00")
+        text = fridge.month_summary(self.con, 1, date(2026, 10, 8))
+        self.assertIn("Thrown away: 1 item, none of them priced.", text)
+        self.assertNotIn("$0", text)
+        self.assertNotIn("about $", text)
+
+    def test_the_estimate_caveat_only_appears_with_a_figure(self):
+        self._closed("cilantro", "tossed", 0, "2026-10-03T09:00:00")
+        self.assertNotIn("rough estimate",
+                         fridge.month_summary(self.con, 1, date(2026, 10, 8)))
+        self._closed("milk", "used", 1, "2026-10-04T09:00:00")
+        self.assertIn("rough estimate",
+                      fridge.month_summary(self.con, 1, date(2026, 10, 8)))
+
+    def test_it_says_when_nothing_could_be_priced(self):
+
+        self._closed("cilantro", "used", 1, "2026-10-02T09:00:00")
+        self.assertIn("none of them priced",
+                      fridge.month_summary(self.con, 1, date(2026, 10, 8)))
+
+    def test_it_calls_the_prices_estimates(self):
+        self._closed("milk", "used", 1, "2026-10-02T09:00:00")
+        self.assertIn("rough estimate",
+                      fridge.month_summary(self.con, 1, date(2026, 10, 8)))
+
+    def test_it_says_the_numbers_are_from_what_it_was_told(self):
+        # Never to be mistaken for the Reminders side, which it cannot read.
+        self._closed("milk", "used", 1, "2026-10-02T09:00:00")
+        self.assertIn("what you have told me here",
+                      fridge.month_summary(self.con, 1, date(2026, 10, 8)))
+
+    def test_an_empty_month_says_so_without_a_dollar_sign(self):
+        text = fridge.month_summary(self.con, 1, date(2026, 10, 8))
+        self.assertIn("no figure to give", text)
+        self.assertNotIn("$", text)
+
+    def test_reconstructed_tiers_are_declared(self):
+        self.con.execute(
+            "INSERT INTO items (chat_id,name,use_by,risk,estimated,added,state,"
+            "closed) VALUES (1,'milk','2026-10-02','yellow',1,'2026-09-28',"
+            "'used','2026-10-02T09:00:00')")
+        self.con.commit()
+        fridge.backfill_tiers(self.con)
+        self.assertIn("1 tier reconstructed from before I recorded it.",
+                      fridge.month_summary(self.con, 1, date(2026, 10, 8)))
+
+    def test_singular_and_plural_agree(self):
+        self._closed("milk", "used", 1, "2026-10-02T09:00:00")
+        one = fridge.month_summary(self.con, 1, date(2026, 10, 8))
+        self.assertIn("across 1 item (", one)
+        self._closed("ground beef", "used", 1, "2026-10-03T09:00:00")
+        two = fridge.month_summary(self.con, 1, date(2026, 10, 8))
+        self.assertIn("across 2 items", two)
+
+
+class MonthSummaryTool(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.tmp.close()
+        self.con = fridge.connect(self.tmp.name)
+
+    def tearDown(self):
+        self.con.close()
+        os.unlink(self.tmp.name)
+
+    def test_the_tool_returns_the_same_text_as_the_command(self):
+        fridge.add_items(self.con, 1, ["milk"], TODAY)
+        item = fridge.open_items(self.con, 1)[0]
+        fridge.close_item(self.con, 1, item["id"], "used", today=TODAY)
+        res = llm_agent.exec_month_summary(self.con, 1, TODAY)
+        self.assertEqual(res["summary"], fridge.month_summary(self.con, 1, TODAY))
+        self.assertTrue(res["relay_verbatim"])
+
+    def test_the_tool_is_declared_to_the_model(self):
+        names = [t["function"]["name"] for t in llm_agent.TOOLS]
+        self.assertIn("month_summary", names)
+        desc = dict((t["function"]["name"], t["function"]["description"])
+                    for t in llm_agent.TOOLS)["month_summary"].lower()
+        for word in ("money", "cost", "waste", "savings"):
+            self.assertIn(word, desc, word)
+        self.assertIn("never work a figure out yourself", desc)
+
+    def test_the_tool_is_wired_into_the_dispatch(self):
+        self.assertIn("month_summary", llm_agent.TOOL_EXECUTORS)
+
+    def test_the_prompt_routes_money_through_the_tool(self):
+        p = llm_agent.SYSTEM_PROMPT.lower()
+        self.assertIn("money", p)
+        self.assertIn("month_summary", p)
+        self.assertIn("saved you", p)        # named, to forbid it
+        self.assertIn("subtract", p)
+
 
 
 if __name__ == "__main__":
