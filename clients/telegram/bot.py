@@ -263,6 +263,13 @@ class Telegram:
             params["reply_markup"] = {"inline_keyboard": buttons}
         self.call("editMessageText", **params)
 
+    def set_buttons(self, chat_id, message_id, buttons):
+        """Swap only the keyboard: picking an item on a card changes what
+        can be tapped, not what the card says."""
+        self.call("editMessageReplyMarkup", chat_id=chat_id,
+                  message_id=message_id,
+                  reply_markup={"inline_keyboard": buttons or []})
+
     def download_photo(self, file_id, timeout=REQUEST_DOWNLOAD_TIMEOUT):
         """The actual image bytes for a photo, or None on any failure.
         Two calls: getFile resolves file_id to a path, then the file itself
@@ -386,8 +393,10 @@ def send_card(tg, con, chat_id, kind, head, items, today, notes=None, top=None):
     spec = {"kind": kind, "head": head, "day": today.isoformat(),
             "ids": [i["id"] for i in shown], "more": more,
             "used_before": fridge.count_closed(con, chat_id, "used"),
-            "notes": notes or [], "top": top}
-    html, buttons = _render(kind, head, shown, today, more, notes=notes, top=top)
+            "notes": notes or [], "top": top,
+            "pick": _picks(kind, shown, today)}
+    html, buttons = _render(kind, head, shown, today, more, notes=notes, top=top,
+                            pick=spec["pick"])
     res = tg.send(chat_id, html, buttons=buttons, html=True)
     msg_id = ((res or {}).get("result") or {}).get("message_id")
     if msg_id is not None:
@@ -418,12 +427,36 @@ def close_card(con, chat_id, spec, items):
     return art.render(frame, caption)
 
 
-def _render(kind, head, items, today, more, closing=None, notes=None, top=None):
-    footer = card.tally(kind, items, more)
+def _actionable(kind, today):
+    """Which open items on this kind of card get buttons of their own.
+
+    A nudge is all decisions. /fridge only asks about what's past its date or
+    due tonight or tomorrow; the rest sit behind "Something else". The card
+    after adding food asks nothing: it was bought a moment ago.
+    """
+    if kind == "fridge":
+        return lambda i: sl.tier(i["use_by_date"], today) <= 1
+    return None
+
+
+def _picks(kind, items, today):
+    """Whether a card starts as one row of numbers: more than DIRECT_MAX
+    items with buttons of their own. Decided once, when it is sent."""
+    act = _actionable(kind, today) or (lambda i: True)
+    return sum(1 for i in items if not card.settled(kind, i) and act(i)) \
+        > card.DIRECT_MAX
+
+
+def _render(kind, head, items, today, more, closing=None, notes=None, top=None,
+            pick=None):
+    footer = card.tally("fridge" if kind == "added" else kind, items, more)
     if kind == "freezer":
-        return card.render_freezer(head, items, footer)
-    return card.render(head, items, today, footer, closing,
-                       label_one_tier=(kind != "nudge"), notes=notes, top=top)
+        return card.render_freezer(head, items, footer, pick=pick)
+    html, buttons = card.render(head, items, today, footer, closing,
+                                label_one_tier=(kind != "nudge"), notes=notes,
+                                top=top, actionable=_actionable(kind, today),
+                                pick=pick)
+    return html, (None if kind == "added" else buttons)
 
 
 def refresh_card(tg, con, chat_id, message_id, spec):
@@ -438,7 +471,7 @@ def refresh_card(tg, con, chat_id, message_id, spec):
         closing = close_card(con, chat_id, spec, items)
     html, buttons = _render(spec["kind"], spec["head"], items, today,
                             spec["more"], closing, notes=spec.get("notes"),
-                            top=spec.get("top"))
+                            top=spec.get("top"), pick=spec.get("pick"))
     tg.edit(chat_id, message_id, html, buttons=buttons, html=True)
 
 
@@ -1285,7 +1318,7 @@ def send_capture(tg, con, chat_id, tracked, stable, outside, again):
         glyph = next((g for g in (art.for_item(i["name"]) for i in items) if g),
                      None)
         top = draw(con, chat_id, "capture", frame=glyph) if glyph else None
-        send_card(tg, con, chat_id, "fridge", "Added to your fridge", items,
+        send_card(tg, con, chat_id, "added", "Added to your fridge", items,
                   date.today(), notes=notes, top=top)
     elif stable or outside:
         tg.send(chat_id, card.render_pantry(
@@ -1328,6 +1361,44 @@ def send_undo(tg, con, chat_id):
         "Removed. Nothing kept."), html=True)
 
 
+def handle_pick(tg, con, chat_id, cb, msg, state, raw_id):
+    """Tap a number, then choose: the keyboard swaps, the card doesn't.
+
+    pick:<id> shows that item's choices, pickall shows a number for every
+    open item (behind "Something else"), unpick goes back to the card's own
+    buttons. The choice itself is an ordinary used:/frz: tap, which closes
+    the item and redraws the card with its normal buttons.
+    """
+    spec = fridge.load_card(con, chat_id, msg.get("message_id", 0))
+    if not spec:
+        tg.answer(cb["id"], "That list is out of date. Send it again.")
+        return
+    freezer = spec["kind"] == "freezer"
+    items = fridge.items_by_ids(con, chat_id, spec["ids"])
+    numbered = [(n, i) for n, i in enumerate(items, 1)
+                if not card.settled(spec["kind"], i)]
+    if state == "unpick":
+        _, buttons = _render(spec["kind"], spec["head"], items,
+                             date.fromisoformat(spec["day"]), spec["more"],
+                             notes=spec.get("notes"), top=spec.get("top"),
+                             pick=spec.get("pick"))
+    elif state == "pickall":
+        buttons = card.picker(numbered)
+    else:
+        try:
+            want = int(raw_id)
+        except ValueError:
+            tg.answer(cb["id"])
+            return
+        match = [(n, i) for n, i in numbered if i["id"] == want]
+        if not match:
+            tg.answer(cb["id"], "Already handled.")
+            return
+        buttons = card.actions(match[0][0], match[0][1], freezer)
+    tg.answer(cb["id"])
+    tg.set_buttons(chat_id, msg["message_id"], buttons)
+
+
 def handle_callback(tg, con, cb, cfg):
     data = cb.get("data", "")
     msg = cb.get("message") or {}
@@ -1340,6 +1411,9 @@ def handle_callback(tg, con, cb, cfg):
     if not allowed(con, cfg, chat_id):
         return
     state, _, raw_id = data.partition(":")
+    if state in ("pick", "pickall", "unpick"):
+        handle_pick(tg, con, chat_id, cb, msg, state, raw_id)
+        return
     if state == "recipe":
         handle_recipe_callback(tg, con, chat_id, cb, msg, raw_id, cfg)
         return

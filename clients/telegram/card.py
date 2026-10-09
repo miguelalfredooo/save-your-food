@@ -45,6 +45,61 @@ OUTCOME = {"used": "used", "frozen": "frozen", "tossed": "tossed"}
 BUTTONS = (("used", "✅"), ("frozen", "❄️"), ("tossed", "\U0001f5d1"))
 # Something already frozen has no "froze it": only finished, or binned.
 FREEZER_BUTTONS = (("used", "✅"), ("tossed", "\U0001f5d1"))
+WORDS = {"used": "Used", "frozen": "Froze", "tossed": "Tossed"}
+
+# Past this many items with buttons, a card shows one row of numbers instead
+# of a row of three buttons per item: tap a number, then choose. Fifteen rows
+# of [n ✅] [n ❄️] [n 🗑] is a wall to read before you can answer anything.
+DIRECT_MAX = 4
+PICKER_ROW = 6
+
+
+# --- keyboards --------------------------------------------------------------
+
+def _data(state, item, freezer):
+    return ("frz:%s:%d" if freezer else "%s:%d") % (state, item["id"])
+
+
+def keyboard(numbered, freezer=False, others=False, pick=None):
+    """Buttons for these (n, item) pairs, or None.
+
+    Up to DIRECT_MAX get a direct row each, one tap to answer. More get a
+    single row of numbers. `others` adds "Something else" for items on the
+    card that have no buttons of their own, so nothing is out of reach.
+    `pick` fixes the layout: a card keeps the one it was sent with, or it
+    would switch from numbers to rows under someone's thumb as they answer.
+    """
+    if not numbered and not others:
+        return None
+    states = FREEZER_BUTTONS if freezer else BUTTONS
+    if pick is None:
+        pick = len(numbered) > DIRECT_MAX
+    if not pick:
+        rows = [[{"text": "%d %s" % (n, icon), "callback_data": _data(st, item, freezer)}
+                 for st, icon in states] for n, item in numbered]
+    else:
+        nums = [{"text": str(n), "callback_data": "pick:%d" % item["id"]}
+                for n, item in numbered]
+        rows = [nums[i:i + PICKER_ROW] for i in range(0, len(nums), PICKER_ROW)]
+    if others:
+        rows.append([{"text": "Something else \u203a", "callback_data": "pickall:0"}])
+    return rows
+
+
+def picker(numbered):
+    """A row of numbers for every one of these, for "Something else"."""
+    nums = [{"text": str(n), "callback_data": "pick:%d" % item["id"]}
+            for n, item in numbered]
+    rows = [nums[i:i + PICKER_ROW] for i in range(0, len(nums), PICKER_ROW)]
+    return rows + [[{"text": "\u2039 Back", "callback_data": "unpick:0"}]]
+
+
+def actions(n, item, freezer=False):
+    """The choices for one picked item, and the way back to the numbers."""
+    states = FREEZER_BUTTONS if freezer else BUTTONS
+    return [[{"text": "%s %s %d" % (icon, WORDS[st], n),
+              "callback_data": _data(st, item, freezer)} for st, icon in states],
+            [{"text": "\u2039 Back", "callback_data": "unpick:0"}]]
 
 
 def rel(use_by, today):
@@ -135,7 +190,7 @@ def _html(head, body, closing):
 
 
 def render(head, items, today, footer, closing=None, label_one_tier=True,
-           notes=None, top=None):
+           notes=None, top=None, actionable=None, pick=None):
     """(html, buttons) for a card.
 
     `items` keep their order for the life of the card, closed or not, so an
@@ -145,6 +200,8 @@ def render(head, items, today, footer, closing=None, label_one_tier=True,
     `notes` are short sentences under the footer, wrapped to the card.
     `top` is a drawing for the head of the card, inside the same block: the
     drawings are drawn to the card's width, so it costs no extra message.
+    `actionable` picks which open items get buttons (all, by default); the
+    rest are reachable through "Something else".
 
     A nudge's heading already names its tier when there is only one ("2
     things past their best: check before eating"), so label_one_tier=False
@@ -170,11 +227,10 @@ def render(head, items, today, footer, closing=None, label_one_tier=True,
     for note in notes or ():
         body += [""] + _wrap(note)
     html = _html(head, body, closing)
-    buttons = [[{"text": "%d %s" % (n, icon),
-                 "callback_data": "%s:%d" % (state, item["id"])}
-                for state, icon in BUTTONS]
-               for n, item in enumerate(items, 1) if item["state"] == "open"]
-    return html, (buttons or None)
+    is_open = [(n, i) for n, i in enumerate(items, 1) if i["state"] == "open"]
+    act = actionable or (lambda i: True)
+    numbered = [(n, i) for n, i in is_open if act(i)]
+    return html, keyboard(numbered, others=len(numbered) < len(is_open), pick=pick)
 
 
 def frozen_on(item):
@@ -198,7 +254,7 @@ def settled(kind, item):
     return item["state"] != "open"
 
 
-def render_freezer(head, items, footer):
+def render_freezer(head, items, footer, pick=None):
     """(html, buttons) for /freezer. No tier sections: once frozen, a use-by
     date stops meaning anything, so the right column is when it went in."""
     body = [RULE, "FROZEN ON".rjust(WIDTH)]
@@ -216,12 +272,9 @@ def render_freezer(head, items, footer):
         else:
             body.extend(_row("%d %s" % (n, item["name"]), frozen_on(item)))
     body += [RULE, footer]
-    buttons = [[{"text": "%d %s" % (n, icon),
-                 "callback_data": "frz:%s:%d" % (state, item["id"])}
-                for state, icon in FREEZER_BUTTONS]
-               for n, item in enumerate(items, 1)
-               if not item.get("freezer_outcome")]
-    return _html(head, body, None), (buttons or None)
+    numbered = [(n, i) for n, i in enumerate(items, 1)
+                if not i.get("freezer_outcome")]
+    return _html(head, body, None), keyboard(numbered, freezer=True, pick=pick)
 
 
 def tally(kind, items, more=0):

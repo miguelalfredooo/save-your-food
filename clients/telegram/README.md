@@ -256,6 +256,14 @@ asked in words, and corrections: "those are fridge" shows the fridge card,
 that confirms something reads **[Action] [Cancel]**, and the action names
 what it acts on: Save to Recipes, Wipe fridge and pantry, Delete my data.
 
+**Buttons only where there is a decision.** The nudge and `/freezer` give
+every item buttons. `/fridge` only gives them to what is past its date or
+due tonight or tomorrow, plus **Something else ›** for the rest. The card
+after adding food has none: you bought it a moment ago. Past four items with
+buttons, a card shows one row of numbers instead of a row of three buttons
+per item: tap a number, then ✅ Used / ❄️ Froze / 🗑 Tossed, or ‹ Back. A
+card keeps the layout it was sent with until it is finished.
+
 The bold heading sits outside the block, so it is kept short enough never to
 widen the card: a nudge whose items share one urgency is headed with that
 urgency ("Check before eating"), and a mixed one with a count ("1 tonight, 1
@@ -293,7 +301,7 @@ gets answered more often than a Reminders alert. Everything else is in the
 | `fridge.py` | Storage, list parsing, composing messages |
 | `card.py` | The fixed-width card the nudge, `/fridge` and `/freezer` are drawn as |
 | `shelf_life.py` | The use-by table and risk classes, ported from the skill |
-| `test_logic.py` | 504 tests. `python3 test_logic.py` |
+| `test_logic.py` | 515 tests. `python3 test_logic.py` |
 | `preview.py` | Renders the messages for any date, no token needed. `python3 preview.py 2026-09-26` |
 | `try_chat.py` | Chat with the real handlers in a terminal, no token. `tap 2 used` presses a card button. `python3 try_chat.py -i` |
 | `seed.json` | Real fridge contents as of Sep 23, so the test runs against real food |
@@ -351,7 +359,7 @@ The bot registers these with Telegram on startup, so they show in the `/` menu.
 
     python3 test_logic.py
 
-504 tests, no network needed. The interesting ones are the bucket collisions
+515 tests, no network needed. The interesting ones are the bucket collisions
 (`ground beef` vs `ground ginger`, `coconut milk` vs `oat milk`, `butternut
 squash` vs `peanut butter`) and the correction phrasings, including negation.
 

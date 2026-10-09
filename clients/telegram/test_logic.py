@@ -1216,6 +1216,7 @@ class FakeTG:
         self.buttons = []
         self.edits = []
         self.edit_buttons = []
+        self.keyboards = []
         self.answers = []
         self._photo_bytes = photo_bytes
 
@@ -1231,6 +1232,9 @@ class FakeTG:
     def edit(self, chat_id, message_id, text, buttons=None, html=False):
         self.edits.append(text)
         self.edit_buttons.append(buttons)
+
+    def set_buttons(self, chat_id, message_id, buttons):
+        self.keyboards.append(buttons)
 
     def download_photo(self, file_id):
         return self._photo_bytes
@@ -2918,7 +2922,9 @@ class Cards(unittest.TestCase):
         names = ["thing%d" % i for i in range(card.MAX_ITEMS + 4)]
         self._items(names)
         bot.send_fridge(self.tg, self.con, 1, self.day)
-        self.assertEqual(len(self.tg.buttons[0]), card.MAX_ITEMS)
+        picks = [b for row in self.tg.buttons[0] for b in row
+                 if b["callback_data"].startswith("pick:")]
+        self.assertEqual(len(picks), card.MAX_ITEMS)   # a number each, not rows
         self.assertIn("+4 more", self.tg.sent[0])
 
     def test_past_budget_items_are_noted_not_sent_separately(self):
@@ -4573,7 +4579,7 @@ class OneLookForLists(unittest.TestCase):
         html = self.tg.sent[-1]
         self.assertTrue(html.startswith("<b>Added to your fridge</b>\n<pre>"))
         self.assertIn("Pantry, no nudges: rice.", html.replace("\n", " "))
-        self.assertEqual(len(self.tg.buttons[-1]), 2)
+        self.assertIsNone(self.tg.buttons[-1])      # just bought: nothing to answer
 
     def test_a_capture_tap_edits_that_card(self):
         self._say("milk")
@@ -4722,7 +4728,7 @@ class CorrectionCards(unittest.TestCase):
         self._say("cumin, olive oil")
         self._say("those are fridge")
         self.assertTrue(self.tg.sent[-1].startswith("<b>Moved to your fridge</b>\n<pre>"))
-        self.assertEqual(len(self.tg.buttons[-1]), 2)
+        self.assertTrue(self.tg.buttons[-1])        # nothing at risk: "Something else"
 
     def test_undo_names_what_it_took_back(self):
         self._say("milk, cumin")
@@ -4825,6 +4831,104 @@ class MoreDelight(unittest.TestCase):
     def test_the_forbidden_moments_still_get_nothing(self):
         for moment in ("tossed", "nudge", "toss_prompt"):
             self.assertIsNone(bot.draw(self.con, 1, moment))
+
+
+class FewerButtons(unittest.TestCase):
+    """Buttons only where there is a decision, and past four of those, one
+    row of numbers: tap a number, then choose."""
+
+    def setUp(self):
+        self.con = fridge.connect(tempfile.mktemp(suffix=".db"))
+        self.tg = FakeTG()
+        bot.reset_rate_limits()
+        self.day = TODAY + timedelta(days=10)
+
+    def _cb(self, data, message_id=1):
+        bot.handle_callback(self.tg, self.con, {
+            "id": "cb", "data": data,
+            "message": {"chat": {"id": 1, "type": "private"},
+                        "message_id": message_id}}, CFG)
+
+    def _labels(self, buttons):
+        return [b["text"] for row in buttons for b in row]
+
+    def test_a_short_nudge_keeps_direct_rows(self):
+        fridge.add_items(self.con, 1, ["milk", "spinach"], TODAY)
+        bot.send_nudge(self.tg, self.con, 1, self.day)
+        self.assertEqual(len(self.tg.buttons[0]), 2)
+        self.assertEqual(len(self.tg.buttons[0][0]), 3)
+
+    def test_a_long_nudge_gets_one_row_of_numbers(self):
+        fridge.add_items(self.con, 1, ["milk", "spinach", "yogurt", "kale", "cream"], TODAY)
+        bot.send_nudge(self.tg, self.con, 1, self.day)
+        self.assertEqual(self._labels(self.tg.buttons[0]), ["1", "2", "3", "4", "5"])
+
+    def test_pick_then_choose_then_back_to_numbers(self):
+        fridge.add_items(self.con, 1, ["milk", "spinach", "yogurt", "kale", "cream"], TODAY)
+        bot.send_nudge(self.tg, self.con, 1, self.day)
+        third = self.tg.buttons[0][0][2]
+        self._cb(third["callback_data"])
+        choice = self.tg.keyboards[-1]
+        self.assertEqual(self._labels(choice)[:3], ["✅ Used 3", "❄️ Froze 3", "\U0001f5d1 Tossed 3"])
+        self._cb(choice[0][0]["callback_data"])           # Used 3
+        self.assertIn("1 of 5 handled", self.tg.edits[-1])
+        self.assertEqual(self._labels(self.tg.edit_buttons[-1]), ["1", "2", "4", "5"])
+
+    def test_a_short_card_keeps_rows_as_it_empties(self):
+        fridge.add_items(self.con, 1, ["milk", "spinach", "yogurt"], TODAY)
+        bot.send_nudge(self.tg, self.con, 1, self.day)
+        self._cb(self.tg.buttons[0][0][0]["callback_data"])
+        self.assertEqual(len(self.tg.edit_buttons[-1][0]), 3)   # still a row
+
+    def test_back_restores_the_numbers(self):
+        fridge.add_items(self.con, 1, ["milk", "spinach", "yogurt", "kale", "cream"], TODAY)
+        bot.send_nudge(self.tg, self.con, 1, self.day)
+        self._cb(self.tg.buttons[0][0][0]["callback_data"])
+        self._cb("unpick:0")
+        self.assertEqual(self._labels(self.tg.keyboards[-1]), ["1", "2", "3", "4", "5"])
+
+    def test_fridge_only_asks_about_what_is_at_risk(self):
+        fridge.add_items(self.con, 1, ["milk"], TODAY)              # past by self.day
+        fridge.add_items(self.con, 1, ["cheddar"], self.day)       # weeks left
+        bot.send_fridge(self.tg, self.con, 1, self.day)
+        labels = self._labels(self.tg.buttons[0])
+        self.assertTrue(any(l.startswith("1 ") for l in labels))
+        self.assertFalse(any(l.startswith("2 ") for l in labels))
+        self.assertIn("Something else \u203a", labels)
+
+    def test_something_else_reaches_every_item(self):
+        fridge.add_items(self.con, 1, ["milk"], TODAY)
+        fridge.add_items(self.con, 1, ["cheddar"], self.day)
+        bot.send_fridge(self.tg, self.con, 1, self.day)
+        self._cb("pickall:0")
+        self.assertEqual(self._labels(self.tg.keyboards[-1]), ["1", "2", "\u2039 Back"])
+        cheddar = [i for i in fridge.open_items(self.con, 1) if i["name"] == "cheddar"][0]
+        self._cb("pick:%d" % cheddar["id"])
+        self._cb("used:%d" % cheddar["id"])
+        self.assertEqual(fridge.items_by_ids(self.con, 1, [cheddar["id"]])[0]["state"], "used")
+
+    def test_nothing_at_risk_still_has_something_else(self):
+        fridge.add_items(self.con, 1, ["cheddar"], self.day)
+        bot.send_fridge(self.tg, self.con, 1, self.day)
+        self.assertEqual(self._labels(self.tg.buttons[0]), ["Something else \u203a"])
+
+    def test_the_added_card_has_no_buttons(self):
+        bot.handle_message(self.tg, self.con, {"chat": {"id": 1, "type": "private"},
+                                               "text": "milk, spinach"}, CFG)
+        self.assertIsNone(self.tg.buttons[-1])
+
+    def test_a_long_freezer_gets_numbers_with_two_choices(self):
+        fridge.add_items(self.con, 1, ["milk", "spinach", "yogurt", "kale", "cream"], TODAY)
+        for i in fridge.open_items(self.con, 1):
+            fridge.close_item(self.con, 1, i["id"], "frozen", TODAY)
+        bot.send_freezer(self.tg, self.con, 1, TODAY)
+        self.assertEqual(self._labels(self.tg.buttons[0]), ["1", "2", "3", "4", "5"])
+        self._cb(self.tg.buttons[0][0][0]["callback_data"])
+        self.assertEqual(self._labels(self.tg.keyboards[-1])[:2], ["✅ Used 1", "\U0001f5d1 Tossed 1"])
+
+    def test_a_stale_pick_says_so(self):
+        self._cb("pick:999", message_id=42)
+        self.assertIn("out of date", self.tg.answers[-1])
 
 
 class MonthSummaryTool(unittest.TestCase):

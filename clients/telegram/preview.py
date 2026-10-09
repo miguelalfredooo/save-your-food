@@ -31,6 +31,11 @@ class PrintTG:
     def edit(self, chat_id, message_id, text, buttons=None, html=False):
         self._show(text, buttons)
 
+    def set_buttons(self, chat_id, message_id, buttons):
+        for row in buttons or ():
+            print("  ".join("[ %s ]" % b["text"] for b in row))
+        print()
+
     def answer(self, callback_id, text=None):
         print("  (popup: %s)\n" % text)
 
