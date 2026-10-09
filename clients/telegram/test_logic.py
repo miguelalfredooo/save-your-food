@@ -1,6 +1,9 @@
 """Everything that can be checked without Telegram. Run: python3 test_logic.py"""
 
 import base64
+import contextlib
+import email.message
+import io
 import json
 import re
 import os
@@ -9,6 +12,8 @@ import sqlite3
 import subprocess
 import tempfile
 import unittest
+import urllib.error
+import urllib.request
 from datetime import date, datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -1701,6 +1706,133 @@ class RecipeNoteWrite(unittest.TestCase):
         self.assertIn("make new note", s)
         for forbidden in ("set body", "set name", "delete", "move"):
             self.assertNotIn(forbidden, s)
+
+
+class FakePage:
+    def __init__(self, body, charset="utf-8"):
+        self.body = body
+        self.headers = email.message.Message()
+        self.headers["Content-Type"] = "text/html; charset=%s" % charset
+
+    def read(self, n=-1):
+        return self.body if n is None or n < 0 else self.body[:n]
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class FakeOpener:
+    def __init__(self, page):
+        self.page, self.opened = page, []
+
+    def open(self, req, timeout=None):
+        self.opened.append(req.full_url)
+        return self.page
+
+
+class RecipePageFetch(unittest.TestCase):
+    """A link becomes a draft only through what the page actually says:
+    schema.org Recipe data when the site has it, the page's text when not.
+    Only https, only public hosts, redirects included."""
+
+    LD = ('<html><head><script type="application/ld+json">%s</script></head>'
+          '<body><p>Story about grandma.</p></body></html>')
+
+    def setUp(self):
+        self._orig_public = llm_agent._is_public_host
+        llm_agent._is_public_host = lambda host: True
+
+    def tearDown(self):
+        llm_agent._is_public_host = self._orig_public
+
+    def test_reads_a_plain_recipe_block(self):
+        data = {"@context": "https://schema.org", "@type": "Recipe",
+                "name": "Tostones &amp; Mojo",
+                "recipeIngredient": ["2 green plantains", " oil "],
+                "recipeInstructions": [
+                    {"@type": "HowToStep", "text": "Slice the plantains."},
+                    {"@type": "HowToStep", "text": "Fry, smash, <b>fry again</b>."}]}
+        r = llm_agent.parse_recipe_page(self.LD % json.dumps(data), "https://e.com/t")
+        self.assertEqual(r, {"title": "Tostones & Mojo",
+                             "ingredients": ["2 green plantains", "oil"],
+                             "steps": ["Slice the plantains.", "Fry, smash, fry again ."],
+                             "source_url": "https://e.com/t"})
+
+    def test_finds_the_recipe_inside_a_graph_with_sections(self):
+        data = {"@graph": [
+            {"@type": "WebPage", "name": "not it"},
+            {"@type": ["Recipe", "Thing"], "name": "Sofrito",
+             "recipeIngredient": ["ají dulce"],
+             "recipeInstructions": [
+                 {"@type": "HowToSection", "name": "Prep",
+                  "itemListElement": [{"@type": "HowToStep", "text": "Chop."}]},
+                 {"@type": "HowToSection", "name": "Blend",
+                  "itemListElement": [{"@type": "HowToStep", "text": "Blend."}]}]}]}
+        r = llm_agent.parse_recipe_page(self.LD % json.dumps(data), "https://e.com/s")
+        self.assertEqual(r["title"], "Sofrito")
+        self.assertEqual(r["steps"], ["Chop.", "Blend."])
+
+    def test_a_single_string_of_instructions_splits_on_lines(self):
+        data = {"@type": "Recipe", "name": "Rice",
+                "recipeIngredient": ["rice"],
+                "recipeInstructions": "Rinse.\nBoil.\n\nRest."}
+        r = llm_agent.parse_recipe_page(self.LD % json.dumps(data), "https://e.com/r")
+        self.assertEqual(r["steps"], ["Rinse.", "Boil.", "Rest."])
+
+    def test_broken_json_is_skipped_and_the_page_text_comes_back(self):
+        page = ('<script type="application/ld+json">{not json</script>'
+                '<style>p{}</style><h1>Pernil</h1><p>Garlic &amp; oregano.</p>'
+                '<script>var x = 1;</script>')
+        r = llm_agent.parse_recipe_page(page, "https://e.com/p")
+        self.assertEqual(r, {"text": "Pernil\nGarlic & oregano.",
+                             "source_url": "https://e.com/p"})
+
+    def test_page_text_is_capped(self):
+        page = "<p>%s</p>" % ("a" * (llm_agent.MAX_PAGE_TEXT_CHARS + 50))
+        r = llm_agent.parse_recipe_page(page, "https://e.com/long")
+        self.assertEqual(len(r["text"]), llm_agent.MAX_PAGE_TEXT_CHARS)
+
+    def test_only_https_is_fetched(self):
+        opener = FakeOpener(FakePage(b""))
+        r = llm_agent.fetch_recipe_page("http://e.com/x", opener=opener)
+        self.assertIn("error", r)
+        self.assertEqual(opener.opened, [])
+
+    def test_private_and_loopback_hosts_are_not_public(self):
+        llm_agent._is_public_host = self._orig_public
+        for host in ("127.0.0.1", "10.1.2.3", "192.168.1.20", "169.254.1.1", "::1"):
+            self.assertFalse(llm_agent._is_public_host(host), host)
+        self.assertTrue(llm_agent._is_public_host("8.8.8.8"))
+
+    def test_redirect_to_http_is_refused(self):
+        handler = llm_agent._SafeRedirect()
+        req = urllib.request.Request("https://e.com/a")
+        with self.assertRaises(urllib.error.URLError):
+            handler.redirect_request(req, None, 302, "Found", {}, "http://e.com/b")
+
+    def test_an_oversized_page_is_refused(self):
+        opener = FakeOpener(FakePage(b"x" * (llm_agent.MAX_PAGE_BYTES + 1)))
+        r = llm_agent.fetch_recipe_page("https://e.com/big", opener=opener)
+        self.assertIn("error", r)
+
+    def test_a_fetched_page_is_parsed_with_its_source(self):
+        data = {"@type": "Recipe", "name": "Flan", "recipeIngredient": ["eggs"],
+                "recipeInstructions": "Bake."}
+        opener = FakeOpener(FakePage((self.LD % json.dumps(data)).encode()))
+        r = llm_agent.fetch_recipe_page(" https://e.com/flan ", opener=opener)
+        self.assertEqual(r["title"], "Flan")
+        self.assertEqual(r["source_url"], "https://e.com/flan")
+
+    def test_a_network_failure_is_an_error_not_a_crash(self):
+        class Boom:
+            def open(self, req, timeout=None):
+                raise urllib.error.URLError("down")
+        with contextlib.redirect_stdout(io.StringIO()):  # the failure is logged to stdout
+            r = llm_agent.fetch_recipe_page("https://e.com/x", opener=Boom())
+        self.assertIn("error", r)
 
 
 class LLMAgentLoop(unittest.TestCase):

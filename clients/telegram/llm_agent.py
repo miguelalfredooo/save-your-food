@@ -14,13 +14,18 @@ Needs an OpenRouter API key in config.json (openrouter_api_key) and costs
 money per message, which is why it defaults to off.
 """
 
+import ipaddress
 import json
 import os
+import re
+import socket
 import subprocess
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import date, timedelta
 from html import escape as _escape
+from html import unescape as _unescape
 
 import fridge
 import shelf_life as sl
@@ -609,6 +614,132 @@ def create_recipe_note(draft, timeout=RECIPE_SAVE_TIMEOUT):
         return "failed"
     return {"CREATED": "created", "DUPLICATE": "duplicate",
             "NO_FOLDER": "no_folder"}.get(result.stdout.strip(), "failed")
+
+
+# --- recipes: reading one from a link ---------------------------------------
+#
+# The page is data for the model, never instructions to it. Most recipe
+# sites publish schema.org Recipe JSON-LD for search engines, which is the
+# recipe without the life story; when a page has none, the model gets the
+# page's text and drafts from that. Only https, and only hosts that resolve
+# to public addresses, checked again on every redirect: this runs on a
+# machine inside the home network.
+
+FETCH_PAGE_TIMEOUT = 15
+MAX_PAGE_BYTES = 2 * 1024 * 1024
+MAX_PAGE_TEXT_CHARS = 6000
+
+_LD_JSON_RE = re.compile(
+    r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
+    re.S | re.I)
+
+
+def _is_public_host(host):
+    try:
+        infos = socket.getaddrinfo(host, 443)
+    except OSError:
+        return False
+    for info in infos:
+        if not ipaddress.ip_address(info[4][0].split("%")[0]).is_global:
+            return False
+    return bool(infos)
+
+
+def _url_allowed(url):
+    parts = urllib.parse.urlsplit(url)
+    return (parts.scheme == "https" and bool(parts.hostname)
+            and _is_public_host(parts.hostname))
+
+
+class _SafeRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not _url_allowed(newurl):
+            raise urllib.error.URLError("redirect to a link I won't open")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _strip_tags(s):
+    s = _unescape(re.sub(r"<[^>]+>", " ", s))
+    return "\n".join(" ".join(line.split()) for line in s.splitlines()).strip()
+
+
+def _page_text(page_html):
+    s = re.sub(r"(?is)<(script|style|noscript)\b[^>]*>.*?</\1>", " ", page_html)
+    s = re.sub(r"(?i)<(br|/p|/div|/li|/h\d)\b[^>]*>", "\n", s)
+    return "\n".join(line for line in _strip_tags(s).splitlines() if line)
+
+
+def _find_recipe_node(node):
+    if isinstance(node, list):
+        for n in node:
+            found = _find_recipe_node(n)
+            if found:
+                return found
+        return None
+    if isinstance(node, dict):
+        types = node.get("@type")
+        if "Recipe" in (types if isinstance(types, list) else [types]):
+            return node
+        if "@graph" in node:
+            return _find_recipe_node(node["@graph"])
+    return None
+
+
+def _instruction_steps(raw):
+    if isinstance(raw, str):
+        return [line for line in _strip_tags(raw).splitlines() if line]
+    steps = []
+    for item in raw if isinstance(raw, list) else []:
+        if isinstance(item, str):
+            steps += _instruction_steps(item)
+        elif isinstance(item, dict):
+            if "itemListElement" in item:
+                steps += _instruction_steps(item["itemListElement"])
+            elif isinstance(item.get("text"), str):
+                text = _strip_tags(item["text"])
+                if text:
+                    steps.append(" ".join(text.split()))
+    return steps
+
+
+def parse_recipe_page(page_html, source_url):
+    for block in _LD_JSON_RE.findall(page_html):
+        try:
+            data = json.loads(block.strip())
+        except ValueError:
+            continue
+        node = _find_recipe_node(data)
+        if node:
+            ingredients = [_strip_tags(i) for i in node.get("recipeIngredient") or []
+                           if isinstance(i, str) and i.strip()]
+            return {"title": _strip_tags(str(node.get("name") or "")),
+                    "ingredients": ingredients,
+                    "steps": _instruction_steps(node.get("recipeInstructions")),
+                    "source_url": source_url}
+    return {"text": _page_text(page_html)[:MAX_PAGE_TEXT_CHARS],
+            "source_url": source_url}
+
+
+def fetch_recipe_page(url, timeout=FETCH_PAGE_TIMEOUT, opener=None):
+    url = (url or "").strip()
+    if not _url_allowed(url):
+        return {"error": "I can only open https links to public websites."}
+    opener = opener or urllib.request.build_opener(_SafeRedirect)
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    try:
+        with opener.open(req, timeout=timeout) as r:
+            raw = r.read(MAX_PAGE_BYTES + 1)
+            charset = r.headers.get_content_charset() or "utf-8"
+    except Exception as e:
+        print("! recipe page fetch failed: %s" % e)
+        return {"error": "Couldn't open that page."}
+    if len(raw) > MAX_PAGE_BYTES:
+        return {"error": "That page is too big for me to read."}
+    return parse_recipe_page(raw.decode(charset, errors="replace"), url)
+
+
+def exec_fetch_recipe_page(con, chat_id, args, today):
+    return fetch_recipe_page(args.get("url"))
 
 
 TOOL_EXECUTORS = {
