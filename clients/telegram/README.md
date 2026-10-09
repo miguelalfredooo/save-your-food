@@ -102,7 +102,8 @@ gets a short note on what is kept, where, and who can see it, plus, only if
 AI mode is on for them, that their messages go to OpenRouter (or a model on
 the same machine, with Ollama). `/privacy` shows it again.
 
-`/deleteme` deletes everything about the person who sends it, after a
+`/deleteme` works even for someone you have removed, as long as the bot still
+holds data about them. It deletes everything about the person who sends it, after a
 confirm button: food, pantry, freezer, settings, saved cards, AI usage and
 membership. A member who does this has left, and needs a new invite to come
 back. `/clear` is the lighter one: it wipes the food and keeps settings. Neither touches Notes: recipes you saved stay in
@@ -177,6 +178,12 @@ household chat on the allow-list still can't write to your Notes. On an
 open bot, with no owner, nobody gets them. A recipe link is only opened over
 https, and never to a home-network or loopback address, redirects included.
 `/invite` and `/members` still work for the owner with AI mode on.
+
+**Limits.** Anyone but the owner gets at most 200 model calls a day (roughly
+50 to 100 messages); past that, the regular bot until tomorrow. The bot
+won't start with `llm_mode` on and an empty `allowed_chat_ids`, since that
+would let anyone spend your API money. A link inside a fetched page is never
+opened: only links you typed are, and page text is never kept in memory.
 
 **It remembers briefly.** The last 3 exchanges from the past 30 minutes go
 with each message, so a follow-up like "add as a recipe" or "yes" knows what
@@ -304,7 +311,7 @@ gets answered more often than a Reminders alert. Everything else is in the
 | `fridge.py` | Storage, list parsing, composing messages |
 | `card.py` | The fixed-width card the nudge, `/fridge` and `/freezer` are drawn as |
 | `shelf_life.py` | The use-by table and risk classes, ported from the skill |
-| `test_logic.py` | 529 tests. `python3 test_logic.py` |
+| `test_logic.py` | 539 tests. `python3 test_logic.py` |
 | `preview.py` | Renders the messages for any date, no token needed. `python3 preview.py 2026-09-26` |
 | `try_chat.py` | Chat with the real handlers in a terminal, no token. `tap 2 used` presses a card button. `python3 try_chat.py -i` |
 | `redate.py` | One-time fix for dates saved as guesses before the table came first. Dry run by default; `--apply` backs up `fridge.db` first |
@@ -363,7 +370,7 @@ The bot registers these with Telegram on startup, so they show in the `/` menu.
 
     python3 test_logic.py
 
-529 tests, no network needed. The interesting ones are the bucket collisions
+539 tests, no network needed. The interesting ones are the bucket collisions
 (`ground beef` vs `ground ginger`, `coconut milk` vs `oat milk`, `butternut
 squash` vs `peanut butter`) and the correction phrasings, including negation.
 

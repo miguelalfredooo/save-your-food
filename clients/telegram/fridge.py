@@ -837,6 +837,19 @@ def record_usage(con, chat_id, usage, day=None):
     con.commit()
 
 
+def calls_today(con, chat_id, day=None):
+    row = con.execute("SELECT calls FROM ai_usage WHERE chat_id=? AND day=?",
+                      (chat_id, (day or date.today()).isoformat())).fetchone()
+    return row["calls"] if row else 0
+
+
+def has_data(con, chat_id):
+    """Whether anything about this chat is stored, so /deleteme has work."""
+    return any(con.execute("SELECT 1 FROM %s WHERE chat_id=? LIMIT 1" % t,
+                           (chat_id,)).fetchone()
+               for t in ("items", "pantry", "meta", "ai_usage", "members"))
+
+
 def usage_since(con, day):
     """Totals per chat from `day` on, busiest first."""
     return [dict(r) for r in con.execute(

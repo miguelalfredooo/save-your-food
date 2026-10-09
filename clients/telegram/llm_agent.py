@@ -1086,8 +1086,11 @@ def _remember(con, chat_id, user_text, reply, now):
                     json.dumps(turns[-HISTORY_TURNS:]))
 
 
+_LINK_RE = re.compile(r"https://[^\s<>\"')\]]+")
+
+
 def run_agent(con, chat_id, text, cfg, today=None, caller=None, image_b64=None,
-              recipes=True, now=None):
+              recipes=True, now=None, user_text=None):
     """caller lets tests substitute a fake model instead of the real API, the
     same shape FakeTG substitutes for the real Telegram class.
 
@@ -1100,12 +1103,19 @@ def run_agent(con, chat_id, text, cfg, today=None, caller=None, image_b64=None,
     fetch for or draft into the owner's Apple Notes, so they are left off
     the tool list, the prompt says so, and a call to one is refused anyway in
     case the model tries.
+
+    user_text is what the person actually typed, when `text` carries more
+    than that (a fetched page's text, say). Only links in it may be opened,
+    and only it is remembered: a page must not choose where the bot connects
+    next, or ride along into the next three turns.
     """
     now = now or datetime.now()
     today = today or now.date()
     call = caller or _default_caller(cfg, tools_for(recipes))
     # A photo is remembered by its caption, never its bytes.
-    remembered = ((text or "") + (" [photo]" if image_b64 else "")).strip()
+    own = text if user_text is None else user_text
+    remembered = ((own or "") + (" [photo]" if image_b64 else "")).strip()
+    own_links = set(_LINK_RE.findall(own or ""))
 
     user_content = text
     if image_b64:
@@ -1162,7 +1172,7 @@ def run_agent(con, chat_id, text, cfg, today=None, caller=None, image_b64=None,
             if not recipes and name in RECIPE_TOOLS:
                 result = {"error": "recipes are not available in this chat"}
             elif name == "fetch_recipe_page" and \
-                    str(args.get("url") or "").strip() not in (text or ""):
+                    str(args.get("url") or "").strip() not in own_links:
                 # A fetched page is data and must not choose where the bot
                 # connects next, or a page could send things out in a URL.
                 result = {"error": "I only open links the user sent in this message."}
