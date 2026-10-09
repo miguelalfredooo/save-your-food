@@ -97,7 +97,15 @@ someone ends their access and their daily nudge. Their data stays in
 in the owner's `/` menu.
 
 Everyone shares one `fridge.db` on the machine running the bot, and whoever
-runs it can read it. Worth saying to anyone you invite.
+runs it can read it. The bot says so itself: anyone starting setup first
+gets a short note on what is kept, where, and who can see it, plus, only if
+AI mode is on for them, that their messages go to OpenRouter (or a model on
+the same machine, with Ollama). `/privacy` shows it again.
+
+`/deleteme` deletes everything about the person who sends it, after a
+confirm button: food, pantry, freezer, settings, saved cards, AI usage and
+membership. A member who does this has left, and needs a new invite to come
+back. `/clear` is the lighter one: it wipes the food and keeps settings.
 
 The bot only ever replies in a private chat. In a group, anyone in it could
 wipe the shared fridge with `/clear`, and the daily nudge would go out to
@@ -248,7 +256,7 @@ typed lists only for now.
 | `fridge.py` | Storage, list parsing, composing messages |
 | `card.py` | The fixed-width card the nudge, `/fridge` and `/freezer` are drawn as |
 | `shelf_life.py` | The use-by table and risk classes, ported from the skill |
-| `test_logic.py` | 369 tests. `python3 test_logic.py` |
+| `test_logic.py` | 376 tests. `python3 test_logic.py` |
 | `preview.py` | Renders the messages for any date, no token needed. `python3 preview.py 2026-09-26` |
 | `try_chat.py` | Chat with the real handlers in a terminal, no token. `tap 2 used` presses a card button. `python3 try_chat.py -i` |
 | `seed.json` | Real fridge contents as of Sep 23, so the test runs against real food |
@@ -306,7 +314,7 @@ The bot registers these with Telegram on startup, so they show in the `/` menu.
 
     python3 test_logic.py
 
-369 tests, no network needed. The interesting ones are the bucket collisions
+376 tests, no network needed. The interesting ones are the bucket collisions
 (`ground beef` vs `ground ginger`, `coconut milk` vs `oat milk`, `butternut
 squash` vs `peanut butter`) and the correction phrasings, including negation.
 
