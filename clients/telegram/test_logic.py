@@ -3363,6 +3363,93 @@ class AIUsage(unittest.TestCase):
         self.assertEqual(bot._pick_photo(sizes), "m")
 
 
+class Privacy(unittest.TestCase):
+    """A new person is told what is kept and who can see it, and can delete
+    all of it themselves."""
+
+    OWNER, FRIEND = 1, 2
+    CFG = dict(CFG, allowed_chat_ids=[1], bot_username="fridgebot")
+
+    def setUp(self):
+        self.con = fridge.connect(tempfile.mktemp(suffix=".db"))
+        self.tg = FakeTG()
+        bot.reset_rate_limits()
+
+    def _say(self, chat_id, text, cfg=None):
+        bot.handle_message(self.tg, self.con, {
+            "chat": {"id": chat_id, "type": "private", "first_name": "Ana"},
+            "text": text}, cfg or self.CFG)
+
+    def _join(self):
+        code = fridge.create_invite(self.con)
+        self._say(self.FRIEND, "/start " + code)
+
+    def _confirm_delete(self, chat_id, answer="yes", cfg=None):
+        bot.handle_callback(self.tg, self.con, {
+            "id": "cb", "data": "deleteme:%s" % answer,
+            "message": {"chat": {"id": chat_id, "type": "private"},
+                        "message_id": 1}}, cfg or self.CFG)
+
+    def test_a_new_person_sees_the_note_before_setup(self):
+        self._join()
+        self.assertEqual(self.tg.sent[0], bot.privacy_note(self.con, self.CFG, self.FRIEND))
+        self.assertIn("/deleteme", self.tg.sent[0])
+        self.assertTrue(onb.started(self.con, self.FRIEND))
+
+    def test_the_note_mentions_ai_only_when_it_is_on_for_them(self):
+        cfg = dict(self.CFG, llm_mode=True, openrouter_api_key="k")
+        self.assertIn("OpenRouter", bot.privacy_note(self.con, cfg, self.OWNER))
+        self.assertNotIn("OpenRouter", bot.privacy_note(self.con, self.CFG, self.OWNER))
+        local = dict(cfg, llm_provider="ollama")
+        self.assertIn("same computer", bot.privacy_note(self.con, local, self.OWNER))
+
+    def test_slash_privacy_works_with_ai_on(self):
+        cfg = dict(self.CFG, llm_mode=True, openrouter_api_key="k")
+        orig = llm_agent.run_agent
+        llm_agent.run_agent = lambda *a, **k: "ai reply"
+        try:
+            self._say(self.OWNER, "/privacy", cfg)
+            self._say(self.OWNER, "/deleteme", cfg)
+        finally:
+            llm_agent.run_agent = orig
+        self.assertNotIn("ai reply", self.tg.sent)
+
+    def test_deleteme_asks_first(self):
+        fridge.add_items(self.con, self.OWNER, ["milk"], TODAY)
+        self._say(self.OWNER, "/deleteme")
+        self.assertTrue(self.tg.buttons[-1])
+        self.assertEqual(len(fridge.open_items(self.con, self.OWNER)), 1)
+        self._confirm_delete(self.OWNER, "no")
+        self.assertEqual(len(fridge.open_items(self.con, self.OWNER)), 1)
+
+    def test_deleteme_removes_everything_for_that_person_only(self):
+        self._join()
+        for chat in (self.OWNER, self.FRIEND):
+            fridge.add_items(self.con, chat, ["milk", "cumin"], TODAY)
+            fridge.set_pref(self.con, chat, "nudge_hour", 9)
+            fridge.record_usage(self.con, chat, {"prompt_tokens": 5})
+        self._confirm_delete(self.FRIEND)
+        for table in ("items", "pantry", "meta", "ai_usage", "members"):
+            n = self.con.execute("SELECT COUNT(*) FROM %s WHERE chat_id=?" % table,
+                                 (self.FRIEND,)).fetchone()[0]
+            self.assertEqual(n, 0, table)
+        self.assertEqual(len(fridge.open_items(self.con, self.OWNER)), 1)
+        self.assertEqual(fridge.get_pref(self.con, self.OWNER, "nudge_hour"), "9")
+
+    def test_a_member_who_deletes_has_left(self):
+        self._join()
+        self._confirm_delete(self.FRIEND)
+        self.assertFalse(bot.allowed(self.con, self.CFG, self.FRIEND))
+        self.assertIn("new invite", self.tg.edits[-1])
+
+    def test_the_owner_who_deletes_keeps_access_and_starts_fresh(self):
+        fridge.add_items(self.con, self.OWNER, ["milk"], TODAY)
+        onb.set_step(self.con, self.OWNER, onb.DONE)
+        self._confirm_delete(self.OWNER)
+        self.assertTrue(bot.allowed(self.con, self.CFG, self.OWNER))
+        self.assertFalse(onb.started(self.con, self.OWNER))
+
+
 class MonthSummaryTool(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
