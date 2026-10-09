@@ -1148,7 +1148,7 @@ def handle_message(tg, con, msg, cfg):
         send_pantry(tg, con, chat_id)
         return
     if low.startswith("/undo"):
-        tg.send(chat_id, fridge.undo_last(con, chat_id))
+        send_undo(tg, con, chat_id)
         return
     if low.startswith("/clear"):
         tg.send(chat_id, CLEAR_ASK, buttons=[[
@@ -1188,8 +1188,7 @@ def handle_message(tg, con, msg, cfg):
         # happen.
         fix = fridge.correction(text)
         if fix:
-            _, reply = fridge.reclassify_last(con, chat_id, fix)
-            tg.send(chat_id, reply)
+            send_correction(tg, con, chat_id, fix)
             return
 
         # Any other sentence is prose. Logging it produces a dated fridge item
@@ -1258,6 +1257,41 @@ def send_capture(tg, con, chat_id, tracked, stable, outside, again):
         tg.send(chat_id, card.render_pantry(
             "Added to your pantry", _capped_names(stable), _capped_names(outside)),
             html=True)
+
+
+def send_correction(tg, con, chat_id, target):
+    """"Those are pantry" or "those are fridge", answered with the card for
+    where things went. Nothing moved means an explanation, which stays text."""
+    r = fridge.reclassify(con, chat_id, target)
+    if not r["moved"]:
+        tg.send(chat_id, r["message"])
+        return
+    if target == "fridge":
+        moved = set(r["moved"])
+        items = [i for i in fridge.open_items(con, chat_id) if i["name"] in moved]
+        send_card(tg, con, chat_id, "fridge", "Moved to your fridge", items,
+                  date.today())
+        return
+    notes = []
+    if r["held"]:
+        notes.append("Kept %s in the fridge. Raw meat and fish stay "
+                     "watched; /undo removes it." % ", ".join(r["held"]))
+    tg.send(chat_id, card.render_pantry("Moved to your pantry",
+                                        _capped_names(r["moved"]), [], notes),
+            html=True)
+
+
+def send_undo(tg, con, chat_id):
+    """/undo, answered with a card naming what was taken back."""
+    r = fridge.undo(con, chat_id)
+    if not (r["tracked"] or r["pantry"]):
+        tg.send(chat_id, r["message"])
+        return
+    tg.send(chat_id, card.render_list(
+        "Took back your last list",
+        [("TRACKED", _capped_names(r["tracked"])),
+         ("PANTRY", _capped_names(r["pantry"]))],
+        "Removed. Nothing kept."), html=True)
 
 
 def handle_callback(tg, con, cb, cfg):

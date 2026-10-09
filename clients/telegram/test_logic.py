@@ -4663,6 +4663,61 @@ class AIVoiceAndListings(unittest.TestCase):
         self.assertIn("at most one question", p)
 
 
+class CorrectionCards(unittest.TestCase):
+    """"Those are pantry", "those are fridge" and /undo answer with the same
+    cards as everything else that lists food."""
+
+    def setUp(self):
+        self.con = fridge.connect(tempfile.mktemp(suffix=".db"))
+        self.tg = FakeTG()
+        bot.reset_rate_limits()
+        onb.set_step(self.con, 1, onb.DONE)
+
+    def _say(self, text):
+        bot.handle_message(self.tg, self.con, {
+            "chat": {"id": 1, "type": "private"}, "text": text}, CFG)
+
+    def test_those_are_pantry_shows_the_pantry_card(self):
+        self._say("spinach, yogurt")
+        self._say("those are pantry")
+        html = self.tg.sent[-1]
+        self.assertTrue(html.startswith("<b>Moved to your pantry</b>\n<pre>"))
+        self.assertIn("spinach", html)
+        self.assertIn("yogurt", html)
+
+    def test_raw_meat_kept_is_a_note_on_the_card(self):
+        self._say("spinach, chicken thighs")
+        self._say("those are pantry")
+        html = self.tg.sent[-1].replace("\n", " ")
+        self.assertIn("Moved to your pantry", html)
+        self.assertIn("Kept chicken thighs", html)
+
+    def test_those_are_fridge_shows_the_fridge_card_with_buttons(self):
+        self._say("cumin, olive oil")
+        self._say("those are fridge")
+        self.assertTrue(self.tg.sent[-1].startswith("<b>Moved to your fridge</b>\n<pre>"))
+        self.assertEqual(len(self.tg.buttons[-1]), 2)
+
+    def test_undo_names_what_it_took_back(self):
+        self._say("milk, cumin")
+        self._say("/undo")
+        html = self.tg.sent[-1]
+        self.assertTrue(html.startswith("<b>Took back your last list</b>\n<pre>"))
+        self.assertIn("TRACKED (1)", html)
+        self.assertIn("PANTRY (1)", html)
+        self.assertEqual(fridge.open_items(self.con, 1), [])
+
+    def test_explanations_stay_plain(self):
+        self._say("/undo")
+        self.assertEqual(self.tg.sent[-1], "Nothing to undo.")
+        self._say("those are pantry")
+        self.assertNotIn("<pre>", self.tg.sent[-1])
+
+    def test_the_prose_versions_are_unchanged_for_the_model(self):
+        fridge.add_items(self.con, 1, ["milk"], TODAY)
+        self.assertEqual(fridge.undo_last(self.con, 1), "Took back 1 tracked thing.")
+
+
 class MonthSummaryTool(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
