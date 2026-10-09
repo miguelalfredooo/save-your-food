@@ -716,6 +716,62 @@ def send_pending_recipe(tg, con, chat_id):
         llm_agent.mark_recipe_shown(con, chat_id)
 
 
+_LINK_RE = re.compile(r"https://\S+")
+RECIPE_LINK_MAX_WORDS = 4
+
+
+def recipe_link(text):
+    """The one https link in a message that is mostly that link ("save this
+    <link>"), or None. A link inside a longer message is a conversation
+    about it, and stays with the model."""
+    links = _LINK_RE.findall(text)
+    if len(links) != 1:
+        return None
+    rest = _LINK_RE.sub(" ", text).split()
+    return links[0] if len(rest) <= RECIPE_LINK_MAX_WORDS else None
+
+
+def handle_recipe_link(tg, con, chat_id, text, cfg):
+    """Draft a recipe from a link in code, before the model sees it. True if
+    handled.
+
+    Left to the model, a small one would often not call fetch_recipe_page
+    at all and reply that it can't open links. Most recipe sites carry the
+    recipe as structured data, which needs no model to read: this drafts it
+    directly and shows the same Save and Cancel preview. A page with no
+    structured recipe goes to the model with its text, when AI is on.
+    Owner only, like every recipe action: the Notes are theirs.
+    """
+    if not recipes_for(cfg, chat_id):
+        return False
+    url = recipe_link(text)
+    if not url:
+        return False
+    page = llm_agent.fetch_recipe_page(url)
+    if page.get("error"):
+        tg.send(chat_id, "%s Paste the ingredients and steps instead and I'll "
+                         "draft it from those." % page["error"])
+        return True
+    if page.get("title"):
+        result = llm_agent.exec_draft_recipe(con, chat_id, page, date.today())
+        if result.get("error"):
+            tg.send(chat_id, "I couldn't make a draft from that page: it's "
+                             "either too long to show in one message or has no "
+                             "ingredients I can read. Paste the recipe instead.")
+            return True
+        send_pending_recipe(tg, con, chat_id)
+        return True
+    if ai_for(con, cfg, chat_id):
+        send_llm_reply(tg, chat_id, run_ai(
+            con, chat_id, "Draft this recipe for me to save. It's from %s, and "
+            "the page says:\n\n%s" % (url, page.get("text", "")), cfg))
+        send_pending_recipe(tg, con, chat_id)
+        return True
+    tg.send(chat_id, "I couldn't find a recipe on that page that I can read "
+                     "reliably. Paste the ingredients and steps instead.")
+    return True
+
+
 MAX_PHOTO_BYTES = 10 * 1024 * 1024
 # Telegram keeps a 2560px copy of newer photos. A vision model is billed by
 # pixels, and that copy costs about four times the 1280px one, which still
@@ -957,6 +1013,8 @@ def handle_message(tg, con, msg, cfg):
     # or the privacy note.
     in_setup = (text.lower().startswith(("/start", "/setup", "/skip"))
                 or (onb.active(con, chat_id) and not text.startswith("/")))
+    if not in_setup and handle_recipe_link(tg, con, chat_id, text, cfg):
+        return
     if ai_for(con, cfg, chat_id) and not in_setup:
         send_llm_reply(tg, chat_id, run_ai(con, chat_id, text, cfg))
         send_pending_recipe(tg, con, chat_id)

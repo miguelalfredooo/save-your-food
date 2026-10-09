@@ -4316,6 +4316,79 @@ class AIMemory(unittest.TestCase):
         self.assertIn("earlier in the conversation", p)
 
 
+class RecipeLinks(unittest.TestCase):
+    """A message that is just a recipe link is drafted by the bot itself,
+    not left to the model, which on a small model often won't call the
+    fetch tool and says it can't open links."""
+
+    OWNER, OTHER = 1, 2
+    CFG = dict(CFG, allowed_chat_ids=[1, 2], llm_mode=True, openrouter_api_key="k")
+    PAGE = {"title": "Vanilla Berry Protein Smoothie",
+            "ingredients": ["1 cup strawberry, frozen", "1 scoop protein powder"],
+            "steps": ["Blend until smooth."],
+            "source_url": "https://tasty.co/recipe/vanilla-berry-protein-smoothie"}
+
+    def setUp(self):
+        self.con = fridge.connect(tempfile.mktemp(suffix=".db"))
+        self.tg = FakeTG()
+        bot.reset_rate_limits()
+        for chat in (self.OWNER, self.OTHER):
+            onb.set_step(self.con, chat, onb.DONE)
+        self.fetched, self.ai = [], []
+        self.page = dict(self.PAGE)
+        self.orig_fetch = llm_agent.fetch_recipe_page
+        self.orig_run = llm_agent.run_agent
+        llm_agent.fetch_recipe_page = lambda url, **k: self.fetched.append(url) or self.page
+        llm_agent.run_agent = lambda con, chat_id, text, cfg, **k: self.ai.append(text) or "ai reply"
+
+    def tearDown(self):
+        llm_agent.fetch_recipe_page = self.orig_fetch
+        llm_agent.run_agent = self.orig_run
+
+    def _say(self, chat_id, text, cfg=None):
+        bot.handle_message(self.tg, self.con, {
+            "chat": {"id": chat_id, "type": "private"}, "text": text}, cfg or self.CFG)
+
+    def test_a_bare_link_becomes_a_draft_without_the_model(self):
+        self._say(self.OWNER, "https://tasty.co/recipe/vanilla-berry-protein-smoothie")
+        self.assertEqual(self.ai, [])
+        self.assertEqual(self.fetched, [self.PAGE["source_url"]])
+        self.assertIn("Vanilla Berry Protein Smoothie", self.tg.sent[-1])
+        self.assertEqual(self.tg.buttons[-1][0][0]["text"], "Save to Notes")
+
+    def test_a_link_with_a_few_words_still_counts(self):
+        self._say(self.OWNER, "save this https://tasty.co/recipe/x")
+        self.assertEqual(self.fetched, ["https://tasty.co/recipe/x"])
+        self.assertEqual(self.ai, [])
+
+    def test_it_works_with_ai_off_too(self):
+        self._say(self.OWNER, "https://tasty.co/recipe/x", dict(self.CFG, llm_mode=False))
+        self.assertEqual(self.tg.buttons[-1][0][0]["text"], "Save to Notes")
+
+    def test_only_the_owner(self):
+        self._say(self.OTHER, "https://tasty.co/recipe/x")
+        self.assertEqual(self.fetched, [])
+
+    def test_a_page_without_recipe_data_goes_to_the_model_with_its_text(self):
+        self.page = {"text": "Smoothie. You need berries and milk. Blend.",
+                     "source_url": "https://example.com/s"}
+        self._say(self.OWNER, "https://example.com/s")
+        self.assertEqual(len(self.ai), 1)
+        self.assertIn("berries and milk", self.ai[0])
+
+    def test_a_failed_fetch_says_so_plainly(self):
+        self.page = {"error": "That page took too long to load."}
+        self._say(self.OWNER, "https://tasty.co/recipe/x")
+        self.assertIn("took too long", self.tg.sent[-1])
+        self.assertEqual(self.ai, [])
+
+    def test_a_link_inside_a_longer_message_is_left_to_the_model(self):
+        self._say(self.OWNER, "I tried https://tasty.co/recipe/x last night and "
+                              "it was too sweet, what can I swap?")
+        self.assertEqual(self.fetched, [])
+        self.assertEqual(len(self.ai), 1)
+
+
 class MonthSummaryTool(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
