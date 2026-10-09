@@ -11,6 +11,7 @@ import sys
 import sqlite3
 import subprocess
 import tempfile
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -1833,6 +1834,56 @@ class RecipePageFetch(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()):  # the failure is logged to stdout
             r = llm_agent.fetch_recipe_page("https://e.com/x", opener=Boom())
         self.assertIn("error", r)
+
+    def test_a_hostile_page_is_parsed_in_linear_time(self):
+        for page in ("<script>" * 200000, "<br" * 200000, "<" * 200000):
+            t = time.monotonic()
+            r = llm_agent.parse_recipe_page(page, "https://e.com/x")
+            self.assertLess(time.monotonic() - t, 2)
+            self.assertIsInstance(r, dict)
+
+    def test_a_bogus_charset_still_parses(self):
+        data = {"@type": "Recipe", "name": "Flan", "recipeIngredient": ["eggs"],
+                "recipeInstructions": "Bake."}
+        opener = FakeOpener(FakePage((self.LD % json.dumps(data)).encode(), charset="bogus"))
+        r = llm_agent.fetch_recipe_page("https://e.com/b", opener=opener)
+        self.assertEqual(r["title"], "Flan")
+
+    def test_a_non_list_ingredient_field_does_not_raise(self):
+        data = {"@type": "Recipe", "name": 5, "recipeIngredient": 5,
+                "recipeInstructions": "Bake."}
+        r = llm_agent.parse_recipe_page(self.LD % json.dumps(data), "https://e.com/n")
+        self.assertEqual(r["ingredients"], [])
+        self.assertEqual(r["title"], "")
+
+    def test_deeply_nested_json_does_not_raise(self):
+        opener = FakeOpener(FakePage((self.LD % ("[" * 100000)).encode()))
+        r = llm_agent.fetch_recipe_page("https://e.com/deep", opener=opener)
+        self.assertIsInstance(r, dict)
+        self.assertIn("text", r)
+
+    def test_a_redirect_to_a_non_public_host_is_refused(self):
+        llm_agent._is_public_host = lambda h: h != "internal.example"
+        handler = llm_agent._SafeRedirect()
+        req = urllib.request.Request("https://e.com/a")
+        with self.assertRaises(urllib.error.URLError):
+            handler.redirect_request(req, None, 302, "Found", {},
+                                     "https://internal.example/x")
+
+    def test_the_default_opener_installs_the_safe_redirect_handler(self):
+        calls = []
+
+        def recorder(*handlers):
+            calls.append(handlers)
+            return FakeOpener(FakePage(b"<p>hi</p>"))
+        original = urllib.request.build_opener
+        urllib.request.build_opener = recorder
+        try:
+            r = llm_agent.fetch_recipe_page("https://e.com/x")
+        finally:
+            urllib.request.build_opener = original
+        self.assertIn(llm_agent._SafeRedirect, calls[0])
+        self.assertEqual(r["text"], "hi")
 
 
 class LLMAgentLoop(unittest.TestCase):

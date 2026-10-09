@@ -14,6 +14,7 @@ Needs an OpenRouter API key in config.json (openrouter_api_key) and costs
 money per message, which is why it defaults to off.
 """
 
+import codecs
 import ipaddress
 import json
 import os
@@ -629,9 +630,39 @@ FETCH_PAGE_TIMEOUT = 15
 MAX_PAGE_BYTES = 2 * 1024 * 1024
 MAX_PAGE_TEXT_CHARS = 6000
 
-_LD_JSON_RE = re.compile(
-    r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
-    re.S | re.I)
+def _blocks(page_html, tag):
+    """(start, lowercased open tag, body, end) for each <tag>...</tag>.
+    One forward pass with str.find, never a regex: a page of unclosed
+    <script> tags would make a backtracking pattern rescan to the end for
+    each one. An open tag with no close ends the scan."""
+    lower = page_html.lower()
+    open_s, close_s = "<" + tag, "</" + tag
+    out, pos = [], 0
+    while True:
+        start = lower.find(open_s, pos)
+        if start < 0:
+            break
+        gt = lower.find(">", start)
+        if gt < 0:
+            break
+        close = lower.find(close_s, gt + 1)
+        if close < 0:
+            break
+        close_gt = lower.find(">", close)
+        if close_gt < 0:
+            break
+        out.append((start, lower[start:gt], page_html[gt + 1:close], close_gt + 1))
+        pos = close_gt + 1
+    return out
+
+
+def _drop_blocks(page_html, tag):
+    pieces, pos = [], 0
+    for start, _, _, end in _blocks(page_html, tag):
+        pieces += [page_html[pos:start], " "]
+        pos = end
+    pieces.append(page_html[pos:])
+    return "".join(pieces)
 
 
 def _is_public_host(host):
@@ -659,13 +690,17 @@ class _SafeRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def _strip_tags(s):
-    s = _unescape(re.sub(r"<[^>]+>", " ", s))
+    # [^<>] rather than [^>]: a stray "<" then can't make the match run
+    # to the end of the page, which would be quadratic on a hostile page.
+    s = _unescape(re.sub(r"<[^<>]*>", " ", s))
     return "\n".join(" ".join(line.split()) for line in s.splitlines()).strip()
 
 
 def _page_text(page_html):
-    s = re.sub(r"(?is)<(script|style|noscript)\b[^>]*>.*?</\1>", " ", page_html)
-    s = re.sub(r"(?i)<(br|/p|/div|/li|/h\d)\b[^>]*>", "\n", s)
+    s = page_html
+    for tag in ("script", "style", "noscript"):
+        s = _drop_blocks(s, tag)
+    s = re.sub(r"(?i)<(br|/p|/div|/li|/h\d)\b[^<>]*>", "\n", s)
     return "\n".join(line for line in _strip_tags(s).splitlines() if line)
 
 
@@ -703,16 +738,23 @@ def _instruction_steps(raw):
 
 
 def parse_recipe_page(page_html, source_url):
-    for block in _LD_JSON_RE.findall(page_html):
+    for _, open_tag, body, _ in _blocks(page_html, "script"):
+        if "application/ld+json" not in open_tag:
+            continue
         try:
-            data = json.loads(block.strip())
-        except ValueError:
+            data = json.loads(body.strip())
+        except (ValueError, RecursionError):
+            # Nesting past the parser's limit is hostile, not a recipe.
             continue
         node = _find_recipe_node(data)
         if node:
-            ingredients = [_strip_tags(i) for i in node.get("recipeIngredient") or []
+            raw_ingredients = node.get("recipeIngredient")
+            if not isinstance(raw_ingredients, list):
+                raw_ingredients = []
+            ingredients = [_strip_tags(i) for i in raw_ingredients
                            if isinstance(i, str) and i.strip()]
-            return {"title": _strip_tags(str(node.get("name") or "")),
+            name = node.get("name")
+            return {"title": _strip_tags(name) if isinstance(name, str) else "",
                     "ingredients": ingredients,
                     "steps": _instruction_steps(node.get("recipeInstructions")),
                     "source_url": source_url}
@@ -735,7 +777,17 @@ def fetch_recipe_page(url, timeout=FETCH_PAGE_TIMEOUT, opener=None):
         return {"error": "Couldn't open that page."}
     if len(raw) > MAX_PAGE_BYTES:
         return {"error": "That page is too big for me to read."}
-    return parse_recipe_page(raw.decode(charset, errors="replace"), url)
+    try:
+        try:
+            codecs.lookup(charset)
+        except LookupError:
+            charset = "utf-8"  # the page named a charset Python doesn't know
+        return parse_recipe_page(raw.decode(charset, errors="replace"), url)
+    except Exception as e:
+        # Remote content must never take the bot down; the user just gets
+        # a plain refusal.
+        print("! recipe page parse failed: %s" % " ".join(str(e).split()))
+        return {"error": "Couldn't read a recipe from that page."}
 
 
 def exec_fetch_recipe_page(con, chat_id, args, today):
