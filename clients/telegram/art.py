@@ -271,6 +271,47 @@ BANNER = _f(
     " /\\  /\\  /\\  /\\ ",
     "/  \\/  \\/  \\/  \\")
 
+# Warm, not sad: each of these is a place with room in it, never a failure
+# state. Used for "empty" lists, so none may look like an error or a ruin.
+OPEN_FRIDGE = _f(
+    "  .-----------.",
+    "  |           |",
+    "  |-----------|",
+    "  |           |",
+    "  |-----------|",
+    "  |    \\|/    |",
+    "  |_____Y_____|")
+
+EMPTY_BASKET = _f(
+    "      ,-----.",
+    "     /       \\",
+    "  .-------------.",
+    "  \\ ~ ~ ~ ~ ~ ~ /",
+    "   \\___________/")
+
+SPROUT_SHELF = _f(
+    "       \\|/",
+    "      .-|-.",
+    "      \\___/",
+    "  ===============")
+
+# A recipe was just filed away. Distinct objects so a second save in a row
+# looks different from the first.
+OPEN_BOOK = _f(
+    "  .---------.---------.",
+    " / ------    | ------- \\",
+    " | -------   | ------  |",
+    " | ----      | ------- |",
+    " '-----------'---------'")
+
+RECIPE_CARD = _f(
+    "  .-----------------.",
+    "  |=================|",
+    "  | --------------- |",
+    "  | --------------- |",
+    "  | ----------      |",
+    "  '-----------------'")
+
 MOMENT_ART = {
     "used": (PLATE, CUTLERY),
     "frozen": (FLAKE,),
@@ -278,6 +319,8 @@ MOMENT_ART = {
     "welcome": (ICEBOX, MUG, CUPBOARD),
     "milestone": (STARS, CROWN, CAKE, BANNER),
     "scorecard": (CROWN, BASKET, CAKE, BANNER),
+    "empty": (OPEN_FRIDGE, EMPTY_BASKET, SPROUT_SHELF),
+    "recipe_saved": (OPEN_BOOK, RECIPE_CARD),
 }
 
 # Deliberately no coins/wallet/piggy-bank frame anywhere above. This system
