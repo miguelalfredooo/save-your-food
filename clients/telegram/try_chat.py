@@ -13,6 +13,9 @@ Cards show their buttons. Press one by typing, for the most recent card:
 
     tap 2 used          (or frozen, tossed)
 
+On a long card that shows numbers first, this presses the number and then
+the choice, and it goes through "Something else" for items without buttons.
+
 Ported from claude/pull-latest-reo66c, where it drove llm.py; on main the
 conversational mode is llm_agent.py, switched on by llm_mode.
 """
@@ -62,6 +65,12 @@ class PrintTG:
         if self.last_card and self.last_card[0] == message_id:
             self.last_card = (message_id, buttons)
 
+    def set_buttons(self, chat_id, message_id, buttons):
+        for row in buttons or ():
+            print("      " + "  ".join("[ %s ]" % b["text"] for b in row))
+        if self.last_card and self.last_card[0] == message_id:
+            self.last_card = (message_id, buttons)
+
     def answer(self, callback_id, text=None):
         if text:
             print("      (popup: %s)" % text)
@@ -78,14 +87,35 @@ def tap(tg, con, cfg, n, state):
     if not tg.last_card or not tg.last_card[1]:
         print("      (no card with buttons to tap)")
         return
-    message_id, buttons = tg.last_card
-    for row in buttons:
-        for b in row:
-            if b["text"].split()[0] == n and state in b["callback_data"].split(":"):
-                bot.handle_callback(tg, con, {
-                    "id": "tap", "data": b["callback_data"],
-                    "message": {"chat": CHAT, "message_id": message_id}}, cfg)
-                return
+    def press(data):
+        bot.handle_callback(tg, con, {
+            "id": "tap", "data": data,
+            "message": {"chat": CHAT, "message_id": tg.last_card[0]}}, cfg)
+
+    def find(want_pick):
+        for row in tg.last_card[1] or ():
+            for b in row:
+                words = b["text"].split()
+                if want_pick and b["callback_data"].startswith("pick:") and words == [n]:
+                    return b
+                if (not want_pick and n in words
+                        and state in b["callback_data"].split(":")):
+                    return b
+        return None
+
+    # A long card shows numbers first: press the number, then the choice.
+    # Items with no buttons of their own sit behind "Something else".
+    for step in ("direct", "number", "something else"):
+        if step == "number" and find(True):
+            press(find(True)["callback_data"])
+        if step == "something else":
+            press("pickall:0")
+            if find(True):
+                press(find(True)["callback_data"])
+        b = find(False)
+        if b:
+            press(b["callback_data"])
+            return
     print("      (no %s button on line %s)" % (state, n))
 
 
