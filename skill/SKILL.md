@@ -380,6 +380,15 @@ The inverse failure is worse than the duplicate it prevents: a wrong "you alread
 
 **`frozen` counts at full value, with one caveat.** If that item later leaves `FREEZER_LIST` as `tossed`, the rescue reverses in the month it's tossed. Freezing only to delay the bin isn't a save.
 
+**How a reversal reads, and where it lands.** The toss counts in the month of the toss, on both sides of the ledger: it goes onto thrown-away, and the rescue reverses.
+
+- **The month the rescue was earned keeps it.** Don't rewrite an earlier month. The freeze and the toss are two events with their own dates, and the figures follow the dates.
+- **The rescued figure never goes negative, and never hides the reversal.** It gets its own clause rather than being quietly subtracted:
+
+> **Used before it went off:** about $20 across 6 items. 1 item frozen earlier was tossed this month (about $7).
+
+- **All-time totals: a reversed rescue isn't a rescue.** It counts once, as a toss. The month-by-month view and the all-time view disagree on purpose, because a month reports what happened in it and a total reports how things ended.
+
 **Never claim the counterfactual.** "Rescued" means it reached the edge and got used. It doesn't mean he would have thrown it away otherwise. Say "used before it went off", never "saved you $X". The first is a fact and the second is a guess.
 
 ### Volume

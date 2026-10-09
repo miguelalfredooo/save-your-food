@@ -234,6 +234,7 @@ HELP = (
     "/pantry: what I remember but don't track\n"
     "/nudge: what's at risk right now\n"
     "/freezer: what you froze, and how it ended up\n"
+    "/month: what you used in time, and what went in the bin\n"
     "/undo: take back the last list I added\n"
     "\"those are pantry\": move the last list out of tracking\n"
     "/clear: wipe everything and start over\n"
@@ -679,6 +680,9 @@ def handle_message(tg, con, msg, cfg):
     if low.startswith("/fridge"):
         tg.send(chat_id, fridge.compose_inventory(fridge.open_items(con, chat_id)))
         return
+    if low.startswith("/month"):
+        tg.send(chat_id, fridge.month_summary(con, chat_id))
+        return
     if low.startswith("/freezer"):
         send_freezer(tg, con, chat_id)
         return
@@ -833,14 +837,16 @@ def handle_callback(tg, con, cb, cfg):
             tg.edit(chat_id, msg["message_id"],
                     "%s: used out of the freezer." % row["name"])
             return
-        # A reversal. No drawing and no cheer: the food was wasted in the end,
-        # and the saying-so is the point (SKILL §19, art.FORBIDDEN).
+        # A reversal. No drawing: the food was wasted in the end (§19,
+        # art.FORBIDDEN). And no verdict on it either: "freezing only to bin it
+        # later is not a save" is doctrine written for the model, not a line to
+        # say to the person, and as a message it is guilt, which §20 forbids
+        # outright. State what happened to the figure and stop.
         tg.edit(chat_id, msg["message_id"],
                 "%s: tossed out of the freezer." % row["name"])
         if fridge.is_rescue("frozen", row["tier"]):
             tg.send(chat_id, "Noted. That one had counted as used in time, so "
-                             "it comes back off this month's figure. Freezing "
-                             "only to bin it later is not a save.")
+                             "it comes off this month's figure.")
         else:
             tg.send(chat_id, "Noted. Logged so the monthly count is honest.")
         return

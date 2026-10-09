@@ -11,6 +11,7 @@ clients/telegram/fridge.db
 clients/telegram/seed.json
 clients/telegram/.bot.lock
 clients/telegram/recipes_cache.md
+clients/telegram/*.db.bak*
 
 # Python
 __pycache__/
@@ -18,4 +19,3 @@ __pycache__/
 
 # macOS
 .DS_Store
-clients/telegram/*.db.bak*

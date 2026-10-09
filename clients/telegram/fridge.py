@@ -9,6 +9,7 @@ import re
 import sqlite3
 from datetime import date, datetime
 
+import prices
 import shelf_life as sl
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fridge.db")
@@ -624,6 +625,8 @@ def open_items(con, chat_id):
 def close_item(con, chat_id, item_id, state, today=None):
     """Close an item out, recording the tier it was in at that moment.
 
+    Returns True if it closed, False if there was no open item to close.
+
     Tiers are computed and never stored (SKILL §1, §5), so this row is the only
     place that moment survives, and it is what makes a rescue countable later.
 
@@ -631,17 +634,23 @@ def close_item(con, chat_id, item_id, state, today=None):
     one place the tier can be missed and it is this one.
     """
     now = datetime.now()
-    row = con.execute("SELECT use_by FROM items WHERE id=? AND chat_id=?",
+    row = con.execute("SELECT use_by FROM items WHERE id=? AND chat_id=?"
+                      " AND state='open'",
                       (item_id, chat_id)).fetchone()
-    t = None
-    if row:
-        t = sl.tier(date.fromisoformat(row["use_by"]), today or now.date())
+    if not row:
+        return False
+    t = sl.tier(date.fromisoformat(row["use_by"]), today or now.date())
+    # Only an open item closes. Without this an inline button tapped twice, or
+    # a stale one tapped weeks later, would overwrite the close date and the
+    # tier of a close that already happened, moving a rescue into the wrong
+    # month or out of being a rescue at all.
     con.execute(
         "UPDATE items SET state=?, closed=?, tier=?, tier_source='recorded'"
-        " WHERE id=? AND chat_id=?",
+        " WHERE id=? AND chat_id=? AND state='open'",
         (state, now.isoformat(timespec="seconds"), t, item_id, chat_id),
     )
     con.commit()
+    return True
 
 
 RESCUE_TIERS = (0, 1)
@@ -721,6 +730,174 @@ def reversed_rescues(con, chat_id):
         (chat_id,),
     ).fetchall()
     return [dict(r) for r in rows if is_rescue("frozen", r["tier"])]
+
+
+# --- the monthly figures ---------------------------------------------------
+#
+# Two numbers, side by side, rescued first because it is the one the system
+# affects (SKILL §17). Everything here is counted from this bot's own SQLite
+# store and nothing else: it cannot read Apple Reminders or Restock.md, so the
+# text says where the numbers come from rather than letting them be mistaken
+# for the Mac side's.
+#
+# A reversal is the awkward case. A frozen rescue that later goes in the bin
+# counts in the month of the toss, on both sides: the toss goes onto thrown
+# away, and the rescue reverses. But the month the rescue was earned keeps it,
+# because the freeze and the toss are two events with their own dates. So the
+# reversal is shown as its own clause and never subtracted into a smaller
+# rescued figure, which would be a negative number wearing a disguise.
+
+def _month_of(stamp):
+    return (stamp or "")[:7]
+
+
+def month_figures(con, chat_id, today=None):
+    """The raw counts behind a monthly report. All from this bot's store."""
+    today = today or date.today()
+    month = today.isoformat()[:7]
+    rows = [dict(r) for r in con.execute(
+        "SELECT * FROM items WHERE chat_id=? AND state != 'open'", (chat_id,))]
+
+    rescued, tossed, reversals = [], [], []
+    for r in rows:
+        if _month_of(r["closed"]) == month and is_rescue(r["state"], r["tier"]):
+            rescued.append(r)
+        if _month_of(r["closed"]) == month and r["state"] == "tossed":
+            tossed.append(r)
+        # A frozen rescue binned this month: a toss here, and a reversal here,
+        # whichever month the freeze happened in.
+        if (r["state"] == "frozen" and r["freezer_outcome"] == "tossed"
+                and _month_of(r["freezer_at"]) == month):
+            if is_rescue("frozen", r["tier"]):
+                reversals.append(r)
+            tossed.append(r)
+
+    counts = tier_counts(con, chat_id)
+    return {
+        "month": month,
+        "rescued": rescued,
+        "tossed": tossed,
+        "reversals": reversals,
+        "reconstructed": counts["reconstructed"],
+    }
+
+
+def _price_side(items):
+    """(rounded total, n_items, {source label: count}) for one side of the ledger.
+
+    Unpriced items still count in the tally and stay out of the money, which is
+    the whole reason the report says how many were priced.
+    """
+    total, by_source = 0.0, {}
+    for i in items:
+        amount, src = prices.price_for(i["name"])
+        if amount is None:
+            continue
+        total += amount
+        label = prices.source_label(src)
+        by_source[label] = by_source.get(label, 0) + 1
+    return int(round(total)), len(items), by_source
+
+
+def _side_clause(total, n, by_source):
+    """One side of the ledger as a sentence.
+
+    With nothing priced there is no dollar figure at all. "about $0 across 1
+    item" reads as "it cost nothing", which is a confident claim built from no
+    data -- the item counts in the tally and stays out of the money, which is
+    the whole reason the priced count is printed next to it.
+    """
+    if not n:
+        return "nothing yet."
+    plural = "" if n == 1 else "s"
+    if not sum(by_source.values()):
+        return "%d item%s, none of them priced." % (n, plural)
+    return "about $%d across %d item%s (%s)." % (
+        total, n, plural, _priced_clause(by_source, n))
+
+
+def _priced_clause(by_source, n_total):
+    n_priced = sum(by_source.values())
+    if not n_priced:
+        return "none of them priced"
+    split = ", ".join("%d %s" % (n, label)
+                      for label, n in sorted(by_source.items()))
+    if n_priced == n_total:
+        return "all %d priced: %s" % (n_priced, split)
+    return "%d of %d priced: %s" % (n_priced, n_total, split)
+
+
+def _month_name(month):
+    y, m = month.split("-")
+    return date(int(y), int(m), 1).strftime("%B %Y")
+
+
+def compose_month(fig):
+    """The monthly text. One shape, used by /month and by the LLM tool alike.
+
+    No net figure, ever: rescued minus thrown away would present a ledger as a
+    verdict, and the two are not the same kind of number (SKILL §17). And never
+    "saved you" -- rescued means it reached the edge and got used, not that it
+    would otherwise have been binned.
+    """
+    r_total, r_n, r_src = _price_side(fig["rescued"])
+    t_total, t_n, t_src = _price_side(fig["tossed"])
+    name = _month_name(fig["month"])
+
+    if not r_n and not t_n:
+        return ("Nothing closed out in %s yet, so there is no figure to give. "
+                "This counts only what you have told me here." % name)
+
+    lines = ["%s, from what you have told me here." % name, ""]
+
+    used = "Used before it went off: " + _side_clause(r_total, r_n, r_src)
+    if fig["reversals"]:
+        rev_total, rev_n, rev_src = _price_side(fig["reversals"])
+        # Same rule for the reversal clause: no figure when nothing is priced.
+        money = (" (about $%d)" % rev_total
+                 if sum(rev_src.values()) else "")
+        used += (" %d item%s frozen earlier %s tossed this month%s."
+                 % (rev_n, "" if rev_n == 1 else "s",
+                    "was" if rev_n == 1 else "were", money))
+    lines.append(used)
+
+    lines.append("Thrown away: " + _side_clause(t_total, t_n, t_src))
+
+    notes = []
+    # Only caveat a figure that was actually shown.
+    if sum(r_src.values()) or sum(t_src.values()):
+        notes.append("Every price is a rough estimate, not what you actually "
+                     "paid.")
+    if fig["reconstructed"]:
+        notes.append("%d tier%s reconstructed from before I recorded them."
+                     % (fig["reconstructed"],
+                        "" if fig["reconstructed"] == 1 else "s"))
+    if notes:
+        lines += ["", " ".join(notes)]
+    return "\n".join(lines)
+
+
+def month_summary(con, chat_id, today=None):
+    return compose_month(month_figures(con, chat_id, today))
+
+
+def all_time_figures(con, chat_id):
+    """Totals, where a reversed rescue is not a rescue.
+
+    It counts once, as a toss. A month reports what happened in it; a total
+    reports how things ended, so the two disagree on purpose (SKILL §15).
+    """
+    rows = [dict(r) for r in con.execute(
+        "SELECT * FROM items WHERE chat_id=? AND state != 'open'", (chat_id,))]
+    rescued, tossed = [], []
+    for r in rows:
+        binned = (r["state"] == "tossed"
+                  or (r["state"] == "frozen" and r["freezer_outcome"] == "tossed"))
+        if binned:
+            tossed.append(r)
+        elif is_rescue(r["state"], r["tier"]):
+            rescued.append(r)
+    return {"rescued": rescued, "tossed": tossed}
 
 
 # --- the nudge -------------------------------------------------------------
