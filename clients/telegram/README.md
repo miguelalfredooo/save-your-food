@@ -186,6 +186,12 @@ each bubble sizing itself to its longest line. A long list shows the soonest
 🗑 if it ended up in the bin. Binning something that had counted as used in
 time marks its line `off this month's count`.
 
+`/month` is a card with no buttons: what was used before it went off, then
+what was thrown away, each with how much of it could be priced and from
+where. Never a net figure between the two, and no dollar amount on a side
+where nothing was priced. A month with nothing closed yet stays a plain
+line.
+
 Items that sit past their date longer than their risk class allows — 1 day for
 raw meat, 3 for dairy and greens, 7 for hard cheese and root veg — are marked
 `long gone, toss it?` on their line. They used to get a separate message too.
@@ -208,7 +214,7 @@ typed lists only for now.
 | `fridge.py` | Storage, list parsing, composing messages |
 | `card.py` | The fixed-width card the nudge, `/fridge` and `/freezer` are drawn as |
 | `shelf_life.py` | The use-by table and risk classes, ported from the skill |
-| `test_logic.py` | 331 tests. `python3 test_logic.py` |
+| `test_logic.py` | 344 tests. `python3 test_logic.py` |
 | `preview.py` | Renders the messages for any date, no token needed. `python3 preview.py 2026-09-26` |
 | `try_chat.py` | Chat with the real handlers in a terminal, no token. `tap 2 used` presses a card button. `python3 try_chat.py -i` |
 | `seed.json` | Real fridge contents as of Sep 23, so the test runs against real food |
@@ -245,7 +251,7 @@ The bot registers these with Telegram on startup, so they show in the `/` menu.
 | `/fridge` | what is tracked, soonest first |
 | `/pantry` | what is remembered but never nudged |
 | `/freezer` | what you froze, as a card: finished or binned |
-| `/month` | what you used in time, and what went in the bin |
+| `/month` | what you used in time, and what went in the bin, as a card |
 | `/nudge` | what is at risk right now |
 | `/undo` | take back the last captured list, whole |
 | `/clear` | wipe everything, with a confirmation |
@@ -266,7 +272,7 @@ The bot registers these with Telegram on startup, so they show in the `/` menu.
 
     python3 test_logic.py
 
-331 tests, no network needed. The interesting ones are the bucket collisions
+344 tests, no network needed. The interesting ones are the bucket collisions
 (`ground beef` vs `ground ginger`, `coconut milk` vs `oat milk`, `butternut
 squash` vs `peanut butter`) and the correction phrasings, including negation.
 

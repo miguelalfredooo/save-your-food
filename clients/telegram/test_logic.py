@@ -2982,6 +2982,102 @@ class MonthlyText(unittest.TestCase):
         self.assertIn("across 2 items", two)
 
 
+class MonthCard(unittest.TestCase):
+    """/month as a fixed-width card. Same rules as the text: no net figure,
+    no counterfactual, prices called estimates, unpriced means no dollars."""
+
+    # The fixture only: subclassing would run every MonthlyText test twice.
+    setUp = MonthlyText.setUp
+    tearDown = MonthlyText.tearDown
+    _closed = MonthlyText._closed
+
+    DAY = date(2026, 10, 8)
+
+    def _card(self):
+        return card.render_month(fridge.month_figures(self.con, 1, self.DAY))
+
+    def _pre(self, html):
+        body = html.split("<pre>", 1)[1].split("</pre>", 1)[0]
+        return [l.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+                for l in body.split("\n")]
+
+    def test_every_line_fits_the_card(self):
+        self._closed("milk", "used", 1, "2026-10-02T09:00:00")
+        self._closed("cilantro", "used", 1, "2026-10-02T10:00:00")
+        self._closed("chicken breast", "tossed", 0, "2026-10-03T09:00:00")
+        for line in self._pre(self._card()):
+            self.assertLessEqual(len(line), card.WIDTH, line)
+        self.assertIn(card.RULE, self._pre(self._card()))
+
+    def test_the_heading_is_the_month(self):
+        self._closed("milk", "used", 1, "2026-10-02T09:00:00")
+        self.assertTrue(self._card().startswith("<b>October 2026</b>"))
+
+    def test_used_comes_first_then_thrown_away(self):
+        self._closed("milk", "used", 1, "2026-10-02T09:00:00")
+        self._closed("cilantro", "tossed", 0, "2026-10-03T09:00:00")
+        lines = self._pre(self._card())
+        self.assertLess(lines.index("USED BEFORE IT WENT OFF"),
+                        lines.index("THROWN AWAY"))
+
+    def test_it_says_how_many_were_priced_and_from_where(self):
+        self._closed("milk", "used", 1, "2026-10-02T09:00:00")        # priced
+        self._closed("cilantro", "used", 1, "2026-10-02T10:00:00")    # unpriced
+        text = "\n".join(self._pre(self._card()))
+        self.assertIn("1 of 2 priced", text)
+        self.assertIn("1 BLS", text)
+
+    def test_an_unpriced_side_shows_no_dollar_figure(self):
+        self._closed("cilantro", "tossed", 0, "2026-10-03T09:00:00")
+        html = self._card()
+        self.assertNotIn("$", html)
+        self.assertIn("unpriced", html)
+        self.assertNotIn("rough estimate", html)
+
+    def test_it_never_shows_a_net_or_a_counterfactual(self):
+        self._closed("ground beef", "used", 1, "2026-10-02T09:00:00")
+        self._closed("milk", "tossed", 0, "2026-10-03T09:00:00")
+        html = self._card().lower().replace("\n", " ")   # notes wrap
+        for banned in ("net", "minus", "difference", "saved you", "you saved",
+                       "savings", "would have", "-$"):
+            self.assertNotIn(banned, html, banned)
+        self.assertIn("rough estimate", html)
+
+    def test_a_reversal_is_its_own_line_never_a_negative(self):
+        self.con.execute(
+            "INSERT INTO items (chat_id,name,use_by,risk,estimated,added,state,"
+            "closed,tier,tier_source,freezer_outcome,freezer_at) VALUES "
+            "(1,'chicken breast','2026-09-20','red',0,'2026-09-18','frozen',"
+            "'2026-09-20T09:00:00',1,'recorded','tossed','2026-10-05T09:00:00')")
+        self.con.commit()
+        html = self._card()
+        self.assertIn("frozen earlier", html)
+        self.assertNotIn("-$", html)
+
+    def test_reconstructed_tiers_are_declared(self):
+        self.con.execute(
+            "INSERT INTO items (chat_id,name,use_by,risk,estimated,added,state,"
+            "closed,tier,tier_source) VALUES (1,'milk','2026-10-02','yellow',0,"
+            "'2026-10-01','used','2026-10-02T09:00:00',1,'reconstructed')")
+        self.con.commit()
+        self.assertIn("reconstructed", self._card())
+
+    def test_slash_month_sends_the_card(self):
+        self._closed("milk", "used", 1, date.today().isoformat() + "T09:00:00")
+        tg = FakeTG()
+        bot.handle_message(tg, self.con, {"chat": {"id": 1, "type": "private"},
+                                          "text": "/month"}, CFG)
+        self.assertEqual(len(tg.sent), 1)
+        self.assertIn("<pre>", tg.sent[0])
+
+    def test_an_empty_month_stays_plain_text(self):
+        tg = FakeTG()
+        bot.handle_message(tg, self.con, {"chat": {"id": 1, "type": "private"},
+                                          "text": "/month"}, CFG)
+        self.assertIn("no figure to give", tg.sent[0])
+        self.assertNotIn("<pre>", tg.sent[0])
+
+
 class MonthSummaryTool(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
