@@ -2005,6 +2005,121 @@ class RecipeDraft(unittest.TestCase):
         self.assertEqual(fetched, [None])
 
 
+class RecipeSaveFlow(unittest.TestCase):
+    """The confirmation lives in code: a draft is shown with buttons, and
+    only a Save tap on that exact draft calls create_recipe_note."""
+
+    ARGS = {"title": "Arroz con Pollo", "ingredients": ["chicken", "rice"],
+            "steps": ["Cook it."], "source_url": ""}
+
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.tmp.close()
+        self.con = fridge.connect(self.tmp.name)
+        self.tg = FakeTG()
+        bot.reset_rate_limits()
+        self.created = []
+        self.outcome = "created"
+        self._orig_create = llm_agent.create_recipe_note
+        llm_agent.create_recipe_note = lambda d, **k: self.created.append(d["title"]) or self.outcome
+
+    def tearDown(self):
+        llm_agent.create_recipe_note = self._orig_create
+        self.con.close()
+        os.unlink(self.tmp.name)
+
+    def _draft(self, **over):
+        llm_agent.exec_draft_recipe(self.con, 1, dict(self.ARGS, **over), TODAY)
+        return llm_agent.pending_recipe(self.con, 1)
+
+    def _tap(self, data):
+        cb = {"id": "cb", "data": data,
+              "message": {"message_id": 7, "chat": {"id": 1, "type": "private"}}}
+        bot.handle_callback(self.tg, self.con, cb, CFG)
+
+    def test_a_new_draft_is_shown_once_with_its_buttons(self):
+        d = self._draft()
+        bot.send_pending_recipe(self.tg, self.con, 1)
+        self.assertEqual(self.tg.sent[-1], llm_agent.recipe_note_text(d))
+        datas = [b["callback_data"] for b in self.tg.buttons[-1][0]]
+        self.assertEqual(datas, ["recipe:save:%s" % d["id"], "recipe:cancel:%s" % d["id"]])
+        bot.send_pending_recipe(self.tg, self.con, 1)
+        self.assertEqual(len(self.tg.sent), 1)
+
+    def test_nothing_is_shown_without_a_draft(self):
+        bot.send_pending_recipe(self.tg, self.con, 1)
+        self.assertEqual(self.tg.sent, [])
+
+    def test_an_llm_reply_that_drafted_is_followed_by_the_preview(self):
+        cfg = dict(CFG, llm_mode=True)
+        def fake_run_agent(con, chat_id, text, cfg, **kw):
+            llm_agent.exec_draft_recipe(con, chat_id, self.ARGS, TODAY)
+            return "Check this over."
+        original = llm_agent.run_agent
+        llm_agent.run_agent = fake_run_agent
+        try:
+            bot.handle_message(self.tg, self.con, {"chat": {"id": 1, "type": "private"},
+                               "text": "add my arroz con pollo"}, cfg)
+        finally:
+            llm_agent.run_agent = original
+        self.assertEqual(self.tg.sent[0], "Check this over.")
+        self.assertTrue(self.tg.sent[1].startswith("Arroz con Pollo"))
+        self.assertEqual(self.created, [])
+
+    def test_save_creates_the_note_and_clears_the_draft(self):
+        d = self._draft()
+        self._tap("recipe:save:%s" % d["id"])
+        self.assertEqual(self.created, ["Arroz con Pollo"])
+        self.assertIsNone(llm_agent.pending_recipe(self.con, 1))
+        self.assertIn("Saved to Notes", self.tg.edits[-1])
+
+    def test_cancel_saves_nothing(self):
+        d = self._draft()
+        self._tap("recipe:cancel:%s" % d["id"])
+        self.assertEqual(self.created, [])
+        self.assertIsNone(llm_agent.pending_recipe(self.con, 1))
+        self.assertIn("Not saved", self.tg.edits[-1])
+
+    def test_an_old_preview_cannot_save_a_newer_draft(self):
+        old = self._draft()
+        self._draft(title="Flan")
+        self._tap("recipe:save:%s" % old["id"])
+        self.assertEqual(self.created, [])
+        self.assertEqual(llm_agent.pending_recipe(self.con, 1)["title"], "Flan")
+        self.assertIn("gone", self.tg.edits[-1])
+
+    def test_a_second_tap_after_saving_does_nothing(self):
+        d = self._draft()
+        self._tap("recipe:save:%s" % d["id"])
+        self._tap("recipe:save:%s" % d["id"])
+        self.assertEqual(self.created, ["Arroz con Pollo"])
+
+    def test_a_duplicate_title_writes_nothing_and_says_so(self):
+        self.outcome = "duplicate"
+        d = self._draft()
+        self._tap("recipe:save:%s" % d["id"])
+        self.assertIn("already have", self.tg.edits[-1])
+        self.assertIsNone(llm_agent.pending_recipe(self.con, 1))
+
+    def test_a_notes_failure_keeps_the_draft_for_a_retry(self):
+        self.outcome = "failed"
+        d = self._draft()
+        self._tap("recipe:save:%s" % d["id"])
+        self.assertIsNotNone(llm_agent.pending_recipe(self.con, 1))
+        self.assertIn("Couldn't reach Notes", self.tg.edits[-1])
+        self.assertIsNotNone(self.tg.edit_buttons[-1])
+        self.outcome = "created"
+        self._tap("recipe:save:%s" % d["id"])
+        self.assertIsNone(llm_agent.pending_recipe(self.con, 1))
+
+    def test_no_recipes_folder_keeps_the_draft_and_says_what_to_do(self):
+        self.outcome = "no_folder"
+        d = self._draft()
+        self._tap("recipe:save:%s" % d["id"])
+        self.assertIsNotNone(llm_agent.pending_recipe(self.con, 1))
+        self.assertIn("folder called Recipes", self.tg.edits[-1])
+
+
 class LLMAgentLoop(unittest.TestCase):
     """The tool-calling loop, driven with a fake model (the `caller`
     injection point) so no network or API key is needed."""
