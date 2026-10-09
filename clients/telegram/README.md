@@ -145,21 +145,38 @@ understanding problem, so the model never touches them.
 | You send | It does |
 |---|---|
 | `milk, spinach, chicken thighs` | Logs them, works out roughly when each turns, tells you which to watch |
-| `/fridge` | Everything open, soonest first, grouped by urgency |
+| `/fridge` | Everything open, soonest first, grouped by urgency, as a card you can tap |
 | `/nudge` | The at-risk message on demand, rather than waiting for the daily one |
 | `/seed` | Loads `seed.json` once. Refuses if you already have things logged |
 | `/help` | The above |
 
-Once a day at 16:30 (change `nudge_hour` in `config.json`) it sends one message
-naming what needs using, then one tappable line per item:
+Once a day at 16:30 (change `nudge_hour` in `config.json`) it sends **one**
+message, a card, with a numbered line per item and a row of buttons for each:
 
-    [ ✅ Used it ]  [ ❄️ Froze it ]  [ 🗑 Tossed it ]
+    1 TO USE TONIGHT, 1 TO CHECK
+    ────────────────────────
+    CHECK BEFORE EATING
+    1 cilantro       1d past
 
-Tapping any of the three closes that item. Nothing nags after that.
+    TONIGHT OR FREEZE IT
+    2 chicken thighs   today
+    ────────────────────────
+    0 of 2 handled
+    [ 1 ✅ ] [ 1 ❄️ ] [ 1 🗑 ]
+    [ 2 ✅ ] [ 2 ❄️ ] [ 2 🗑 ]
+
+A tap edits the same card: the line becomes `✓ cilantro  used`, its buttons
+go, the footer counts up. When every line is handled the card closes with one
+drawing (none if everything was tossed). No extra messages arrive.
+
+The card body is a monospace block padded to exactly 24 columns, the same
+canvas the drawings use, so every card is the same width on a phone instead of
+each bubble sizing itself to its longest line. A long list shows the soonest
+15 and says how many it left out. `card.py` has the reasoning.
 
 Items that sit past their date longer than their risk class allows — 1 day for
-raw meat, 3 for dairy and greens, 7 for hard cheese and root veg — get one
-disposal prompt and then stop.
+raw meat, 3 for dairy and greens, 7 for hard cheese and root veg — are marked
+`long gone, toss it?` on their line. They used to get a separate message too.
 
 ## What it deliberately doesn't do
 
@@ -177,8 +194,9 @@ typed lists only for now.
 |---|---|
 | `bot.py` | Telegram transport and conversation. The only file that touches the network |
 | `fridge.py` | Storage, list parsing, composing messages |
+| `card.py` | The fixed-width card the nudge and `/fridge` are drawn as |
 | `shelf_life.py` | The use-by table and risk classes, ported from the skill |
-| `test_logic.py` | 21 tests. `python3 test_logic.py` |
+| `test_logic.py` | 253 tests. `python3 test_logic.py` |
 | `preview.py` | Renders the messages for any date, no token needed. `python3 preview.py 2026-09-26` |
 | `seed.json` | Real fridge contents as of Sep 23, so the test runs against real food |
 | `fridge.db` | Created on first run. Your data. Not synced anywhere |
@@ -202,6 +220,8 @@ parser splits on commas and newlines and strips quantities, so
 isn't in `shelf_life.py`. Add it to the table there.
 
 ## Commands
+
+The bot registers these with Telegram on startup, so they show in the `/` menu.
 
 | | |
 |---|---|
@@ -231,7 +251,7 @@ isn't in `shelf_life.py`. Add it to the table there.
 
     python3 test_logic.py
 
-88 tests, no network needed. The interesting ones are the bucket collisions
+253 tests, no network needed. The interesting ones are the bucket collisions
 (`ground beef` vs `ground ginger`, `coconut milk` vs `oat milk`, `butternut
 squash` vs `peanut butter`) and the correction phrasings, including negation.
 
@@ -266,6 +286,10 @@ list, the end of setup, a milestone (10, 25, 50, 100, 250, 500 uses).
 | A frame **must not** | or it is not a surprise |
 
 Two cartons in a row is correct: it means two dairy items.
+
+A card gets at most one drawing, when its last line is handled, edited into
+the same message. Drawing after every tap turned a three-item nudge back into
+six messages.
 
 Where drawings never appear, and why:
 

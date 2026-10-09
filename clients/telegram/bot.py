@@ -45,6 +45,7 @@ import fridge          # noqa: E402
 import shelf_life as sl  # noqa: E402
 import onboarding as onb  # noqa: E402
 import art  # noqa: E402
+import card  # noqa: E402
 import llm_agent  # noqa: E402
 
 CONFIG_PATH = os.path.join(HERE, "config.json")
@@ -193,9 +194,15 @@ class Telegram:
         self.call("answerCallbackQuery", callback_query_id=callback_id,
                   **({"text": text} if text else {}))
 
-    def edit(self, chat_id, message_id, text):
-        self.call("editMessageText", chat_id=chat_id,
-                  message_id=message_id, text=text)
+    def edit(self, chat_id, message_id, text, buttons=None, html=False):
+        """Leaving buttons out removes the keyboard, which is how a closed
+        item loses its row."""
+        params = {"chat_id": chat_id, "message_id": message_id, "text": text}
+        if html:
+            params["parse_mode"] = "HTML"
+        if buttons:
+            params["reply_markup"] = {"inline_keyboard": buttons}
+        self.call("editMessageText", **params)
 
     def download_photo(self, file_id, timeout=REQUEST_DOWNLOAD_TIMEOUT):
         """The actual image bytes for a photo, or None on any failure.
@@ -245,14 +252,6 @@ CLEAR_ASK = ("This wipes everything: what's tracked and what's in your pantry. "
              "There is no getting it back.")
 
 
-def item_buttons(item_id):
-    return [[
-        {"text": "✅ Used it", "callback_data": "used:%d" % item_id},
-        {"text": "❄️ Froze it", "callback_data": "frozen:%d" % item_id},
-        {"text": "\U0001f5d1 Tossed it", "callback_data": "tossed:%d" % item_id},
-    ]]
-
-
 def handle_seed(tg, con, chat_id):
     """Load seed.json into this chat. Refuses if the chat already has anything,
     so a stray /seed can't quietly duplicate a real fridge.
@@ -295,23 +294,92 @@ def handle_seed(tg, con, chat_id):
             + fridge.compose_inventory(fridge.open_items(con, chat_id)) + tail)
 
 
-def send_nudge(tg, con, chat_id, today=None):
-    """One message naming what's at risk, then one buttoned line per item.
+COMMANDS = [
+    ("fridge", "What's tracked, soonest first"),
+    ("nudge", "What needs using right now"),
+    ("pantry", "What I remember but don't track"),
+    ("freezer", "What you froze, and how it ended up"),
+    ("month", "What you used in time, and what got tossed"),
+    ("undo", "Take back the last list"),
+    ("setup", "Run the setup again"),
+    ("clear", "Wipe everything"),
+    ("help", "What I can do"),
+]
 
-    The buttons sit on their own short messages on purpose: a single message
-    with twelve buttons is unreadable on a phone, and you want to answer for
-    one thing at a time.
+
+def send_card(tg, con, chat_id, kind, head, items, today):
+    """One card for these items, remembered so a tap can redraw it.
+
+    This used to be one summary plus one buttoned message per item: three
+    things at risk was four notifications. See card.py for the shape.
     """
+    shown, more = items[:card.MAX_ITEMS], max(0, len(items) - card.MAX_ITEMS)
+    spec = {"kind": kind, "head": head, "day": today.isoformat(),
+            "ids": [i["id"] for i in shown], "more": more,
+            "used_before": fridge.count_closed(con, chat_id, "used")}
+    html, buttons = card.render(head, shown, today,
+                                card.tally(kind, shown, more))
+    res = tg.send(chat_id, html, buttons=buttons, html=True)
+    msg_id = ((res or {}).get("result") or {}).get("message_id")
+    if msg_id is not None:
+        fridge.save_card(con, chat_id, msg_id, spec)
+    return len(shown)
+
+
+def close_card(con, chat_id, spec, items):
+    """The drawing that closes a finished card, or None.
+
+    One per card, not one per tap: a drawing after every button turned a
+    three-item nudge back into six messages. A card that ends all tossed
+    gets none, for the same reason a toss never did.
+    """
+    states = {i["state"] for i in items}
+    if states == {"tossed"}:
+        return None
+    used_now = fridge.count_closed(con, chat_id, "used")
+    crossed = [m for m in MILESTONES if spec["used_before"] < m <= used_now]
+    if crossed:
+        moment, caption = "milestone", milestone_line(crossed[-1])
+    else:
+        moment = "used" if "used" in states else "frozen"
+        caption = CLOSE_LINES[moment]
+    frame = art.choose(moment, avoid=fridge.last_art(con, chat_id))
+    if not frame:
+        return None
+    fridge.note_art(con, chat_id, frame)
+    return art.render(frame, caption)
+
+
+def refresh_card(tg, con, chat_id, message_id, spec):
+    """Redraw a card after a tap: the line flips, its buttons go."""
+    items = fridge.items_by_ids(con, chat_id, spec["ids"])
+    today = date.fromisoformat(spec["day"])
+    closing = None
+    if items and all(i["state"] != "open" for i in items):
+        closing = close_card(con, chat_id, spec, items)
+    html, buttons = card.render(spec["head"], items, today,
+                                card.tally(spec["kind"], items, spec["more"]),
+                                closing)
+    tg.edit(chat_id, message_id, html, buttons=buttons, html=True)
+
+
+def send_nudge(tg, con, chat_id, today=None):
+    """What's at risk, as one card. Returns how many items it shows."""
     today = today or date.today()
     items = fridge.at_risk(con, chat_id, today)
-    body = fridge.compose_nudge(items, today)
-    if not body:
+    if not items:
         return 0
-    tg.send(chat_id, body)
-    for i in items:
-        tg.send(chat_id, "%s: %s" % (i["name"], sl.when(i["use_by_date"], today)),
-                buttons=item_buttons(i["id"]))
-    return len(items)
+    return send_card(tg, con, chat_id, "nudge",
+                     fridge.nudge_head(items, today), items, today)
+
+
+def send_fridge(tg, con, chat_id, today=None):
+    today = today or date.today()
+    items = fridge.open_items(con, chat_id)
+    if not items:
+        tg.send(chat_id, fridge.compose_inventory(items))
+        return
+    send_card(tg, con, chat_id, "fridge", "In your fridge", items, today)
 
 
 def _capped_item_list(names, max_chars=MAX_CAPTION_LIST_CHARS):
@@ -405,7 +473,7 @@ def answer_question(tg, con, chat_id, text):
     useful than the glossary line for the word itself."""
     n = text.lower()
     if any(p in n for p in FRIDGE_LISTING_PHRASES):
-        tg.send(chat_id, fridge.compose_inventory(fridge.open_items(con, chat_id)))
+        send_fridge(tg, con, chat_id)
         return
     if any(p in n for p in PANTRY_LISTING_PHRASES):
         items = fridge.pantry_items(con, chat_id)
@@ -479,10 +547,9 @@ def send_sample_nudge(tg, con, chat_id, today=None):
                          "nudge to show you. Send a perishable and you will get "
                          "one tomorrow.")
         return
-    soonest = items[0]
-    tg.send(chat_id, "%s: %s" % (soonest["name"],
-                                    sl.when(soonest["use_by_date"], today)),
-            buttons=item_buttons(soonest["id"]))
+    today = today or date.today()
+    send_card(tg, con, chat_id, "nudge", fridge.nudge_head(items[:1], today),
+              items[:1], today)
 
 
 # --- rendering an LLM reply -------------------------------------------------
@@ -678,7 +745,7 @@ def handle_message(tg, con, msg, cfg):
         tg.send(chat_id, HELP)
         return
     if low.startswith("/fridge"):
-        tg.send(chat_id, fridge.compose_inventory(fridge.open_items(con, chat_id)))
+        send_fridge(tg, con, chat_id)
         return
     if low.startswith("/month"):
         tg.send(chat_id, fridge.month_summary(con, chat_id))
@@ -905,6 +972,13 @@ def handle_callback(tg, con, cb, cfg):
 
     fridge.close_item(con, chat_id, item_id, state)
     tg.answer(cb["id"], STATE_LABELS[state])
+
+    spec = fridge.load_card(con, chat_id, msg["message_id"])
+    if spec and item_id in spec["ids"]:
+        refresh_card(tg, con, chat_id, msg["message_id"], spec)
+        return
+
+    # A message sent before cards existed: one item, its own buttons.
     tg.edit(chat_id, msg["message_id"], "%s: %s" % (row["name"], STATE_LABELS[state].lower()))
 
     # Used or froze: a small drawing, matched to the food where there is one.
@@ -952,14 +1026,9 @@ def sweep(tg, con, cfg, now=None):
             continue
         if not due_today(con, chat_id, cfg, now):
             continue
-        for i in fridge.expired_past_budget(con, chat_id, today):
-            tg.send(chat_id,
-                    "%s has been past its best for a while now. Safe to assume it's "
-                    "gone?" % i["name"],
-                    buttons=[[
-                        {"text": "\U0001f5d1 Tossed it", "callback_data": "tossed:%d" % i["id"]},
-                        {"text": "✅ Used it", "callback_data": "used:%d" % i["id"]},
-                    ]])
+        # Anything past its budget is past its date too, so it is already a
+        # line on the nudge card, marked "long gone". It used to get its own
+        # message as well, on top of its line in the nudge.
         send_nudge(tg, con, chat_id, today)
         mark_nudged(con, chat_id, today)
 
@@ -978,6 +1047,8 @@ def main():
     me = tg.call("getMe")
     if not me or not me.get("ok"):
         sys.exit("! Couldn't reach Telegram. Check the token and your connection.")
+    tg.call("setMyCommands", commands=[
+        {"command": c, "description": d} for c, d in COMMANDS])
     print("Fridge Loop running as @%s. Nudging at %02d:%02d. Ctrl-C to stop."
           % (me["result"]["username"], cfg["nudge_hour"], cfg["nudge_minute"]))
 

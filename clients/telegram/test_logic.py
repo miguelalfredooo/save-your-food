@@ -8,7 +8,7 @@ import sqlite3
 import subprocess
 import tempfile
 import unittest
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fridge
@@ -17,6 +17,7 @@ import shelf_life as sl
 import onboarding as onb
 import art
 import bot
+import card
 import llm_agent
 
 TODAY = date(2026, 9, 23)   # a Wednesday, so weekday names are checkable
@@ -1163,19 +1164,24 @@ class FakeTG:
 
     def __init__(self, photo_bytes=b"fake-jpeg-bytes"):
         self.sent = []
+        self.buttons = []
         self.edits = []
+        self.edit_buttons = []
         self.answers = []
         self._photo_bytes = photo_bytes
 
     def send(self, chat_id, text, buttons=None, html=False):
         self.sent.append(text)
-        return {"ok": True}   # real Telegram.send() returns a dict on success, None on failure
+        self.buttons.append(buttons)
+        # real Telegram.send() returns a dict on success, None on failure
+        return {"ok": True, "result": {"message_id": len(self.sent)}}
 
     def answer(self, callback_id, text=None):
         self.answers.append(text)
 
-    def edit(self, chat_id, message_id, text):
+    def edit(self, chat_id, message_id, text, buttons=None, html=False):
         self.edits.append(text)
+        self.edit_buttons.append(buttons)
 
     def download_photo(self, file_id):
         return self._photo_bytes
@@ -2080,6 +2086,120 @@ class BotHandlers(unittest.TestCase):
                            "text": "is there anything in my fridge"}, CFG)
         self.assertIn("milk", self.tg.sent[-1])
 
+
+class Cards(unittest.TestCase):
+    """The nudge and /fridge are one fixed-width message that edits itself."""
+
+    def setUp(self):
+        self.con = fridge.connect(tempfile.mktemp(suffix=".db"))
+        self.tg = FakeTG()
+        self.day = TODAY + timedelta(days=10)
+
+    def _items(self, names):
+        fridge.add_items(self.con, 1, names, TODAY)
+        return fridge.open_items(self.con, 1)
+
+    def _pre_lines(self, html):
+        body = html.split("<pre>", 1)[1].split("</pre>", 1)[0]
+        return [l.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+                for l in body.split("\n")]
+
+    def _tap(self, state, item_id, message_id=1):
+        cb = {"id": "cb", "data": "%s:%d" % (state, item_id),
+              "message": {"chat": {"id": 1, "type": "private"},
+                          "message_id": message_id}}
+        bot.handle_callback(self.tg, self.con, cb, CFG)
+
+    def test_every_line_is_exactly_card_width(self):
+        items = self._items(["milk", "chicken thighs", "a very long name for leftover curry"])
+        html, _ = card.render("head", items, self.day, card.tally("nudge", items))
+        for line in self._pre_lines(html):
+            if line:
+                self.assertLessEqual(len(line), card.WIDTH, line)
+        self.assertIn(card.RULE, self._pre_lines(html))
+
+    def test_item_lines_are_padded_to_the_full_width(self):
+        items = self._items(["milk"])
+        html, _ = card.render("head", items, self.day, card.tally("nudge", items))
+        row = [l for l in self._pre_lines(html) if l.startswith("1 milk")][0]
+        self.assertEqual(len(row), card.WIDTH)
+        self.assertTrue(row.endswith("past"))
+
+    def test_a_food_name_is_escaped(self):
+        items = self._items(["<3 cilantro"])
+        html, _ = card.render("<b>", items, self.day, "f")
+        self.assertIn("&lt;3 cilantro", html)
+        self.assertNotIn("<b><b>", html)
+
+    def test_one_button_row_per_open_item_numbered_to_match(self):
+        items = self._items(["milk", "spinach"])
+        _, buttons = card.render("h", items, self.day, "f")
+        self.assertEqual(len(buttons), 2)
+        self.assertEqual([b["text"][:1] for b in buttons[1]], ["2", "2", "2"])
+        self.assertEqual(buttons[0][0]["callback_data"], "used:%d" % items[0]["id"])
+
+    def test_the_nudge_is_one_message(self):
+        self._items(["milk", "spinach", "chicken thighs"])
+        n = bot.send_nudge(self.tg, self.con, 1, self.day)
+        self.assertEqual(n, 3)
+        self.assertEqual(len(self.tg.sent), 1)
+        self.assertEqual(len(self.tg.buttons[0]), 3)
+
+    def test_a_tap_edits_the_card_instead_of_sending(self):
+        items = self._items(["milk", "spinach"])
+        bot.send_nudge(self.tg, self.con, 1, self.day)
+        self._tap("used", items[0]["id"])
+        self.assertEqual(len(self.tg.sent), 1)
+        self.assertEqual(len(self.tg.edits), 1)
+        self.assertIn("1 of 2 handled", self.tg.edits[-1])
+        self.assertTrue(any(l.startswith("✓ " + items[0]["name"]) and l.endswith("used")
+                            for l in self._pre_lines(self.tg.edits[-1])))
+        self.assertEqual(len(self.tg.edit_buttons[-1]), 1)   # its row is gone
+
+    def test_finishing_a_card_draws_once_inside_it(self):
+        items = self._items(["milk", "spinach"])
+        bot.send_nudge(self.tg, self.con, 1, self.day)
+        self._tap("used", items[0]["id"])
+        self.assertEqual(self.tg.edits[-1].count("<pre>"), 1)   # no drawing yet
+        self._tap("frozen", items[1]["id"])
+        self.assertIn("All 2 handled", self.tg.edits[-1])
+        self.assertEqual(self.tg.edits[-1].count("<pre>"), 2)   # card + drawing
+        self.assertIsNone(self.tg.edit_buttons[-1])
+        self.assertEqual(len(self.tg.sent), 1)
+
+    def test_an_all_tossed_card_gets_no_drawing(self):
+        items = self._items(["milk"])
+        bot.send_nudge(self.tg, self.con, 1, self.day)
+        self._tap("tossed", items[0]["id"])
+        self.assertIn("All 1 handled", self.tg.edits[-1])
+        self.assertEqual(self.tg.edits[-1].count("<pre>"), 1)
+        self.assertEqual(len(self.tg.sent), 1)   # and no "Noted." either
+
+    def test_a_long_list_is_capped_and_says_so(self):
+        names = ["thing%d" % i for i in range(card.MAX_ITEMS + 4)]
+        self._items(names)
+        bot.send_fridge(self.tg, self.con, 1, self.day)
+        self.assertEqual(len(self.tg.buttons[0]), card.MAX_ITEMS)
+        self.assertIn("+4 more", self.tg.sent[0])
+
+    def test_past_budget_items_are_noted_not_sent_separately(self):
+        self._items(["chicken thighs", "milk"])
+        bot.sweep(self.tg, self.con, CFG,
+                  now=datetime.combine(self.day, datetime.min.time()).replace(hour=20))
+        self.assertEqual(len(self.tg.sent), 1)
+        self.assertIn("long gone", self.tg.sent[0])
+
+    def test_fridge_is_a_card_with_buttons(self):
+        self._items(["milk"])
+        bot.handle_message(self.tg, self.con,
+                           {"chat": {"id": 1, "type": "private"}, "text": "/fridge"}, CFG)
+        self.assertIn("<pre>", self.tg.sent[-1])
+        self.assertIn("1 tracked", self.tg.sent[-1])
+        self.assertTrue(self.tg.buttons[-1])
+
+    def test_rel_column_fits(self):
+        for d in (-30, -1, 0, 1, 3, 40):
+            self.assertLessEqual(len(card.rel(TODAY + timedelta(days=d), TODAY)), card.RIGHT)
 
 
 class TierAtClose(unittest.TestCase):
