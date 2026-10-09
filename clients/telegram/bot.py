@@ -757,7 +757,12 @@ def handle_message(tg, con, msg, cfg):
         send_fridge(tg, con, chat_id)
         return
     if low.startswith("/month"):
-        tg.send(chat_id, fridge.month_summary(con, chat_id))
+        fig = fridge.month_figures(con, chat_id)
+        html = card.render_month(fig)
+        if html:
+            tg.send(chat_id, html, html=True)
+        else:
+            tg.send(chat_id, fridge.compose_month(fig))
         return
     if low.startswith("/freezer"):
         send_freezer(tg, con, chat_id)

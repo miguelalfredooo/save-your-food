@@ -23,6 +23,7 @@ date and warning live in the text, and the buttons only carry its number.
 Pure functions only. Nothing here touches the network or the database.
 """
 
+import textwrap
 from datetime import date
 
 import art
@@ -198,3 +199,65 @@ def tally(kind, items, more=0):
         line += ("\n+%d more, see /fridge" % more if kind == "nudge"
                  else "\n+%d more not shown" % more)
     return line
+
+
+# --- /month -----------------------------------------------------------------
+
+def _wrap(text, indent=""):
+    return textwrap.wrap(text, width=WIDTH, initial_indent=indent,
+                         subsequent_indent=indent) or [indent]
+
+
+def _month_side(label, items):
+    """One side of the ledger: count and money on a line, then how much of it
+    was priced and from where. No dollar figure when nothing is priced, for
+    the same reason compose_month gives none: "$0" would claim it cost
+    nothing, from no data."""
+    total, n, by_source = fridge._price_side(items)
+    out = [label]
+    if not n:
+        return out + ["  nothing yet"]
+    count = "  %d item%s" % (n, "" if n == 1 else "s")
+    n_priced = sum(by_source.values())
+    out += _row(count, "about $%d" % total if n_priced else "unpriced")
+    if n_priced:
+        priced = "all priced" if n_priced == n else "%d of %d priced" % (n_priced, n)
+        split = ", ".join("%d %s" % (k, src.replace("your ", ""))
+                          for src, k in sorted(by_source.items()))
+        out += _wrap("%s: %s" % (priced, split), "  ")
+    return out
+
+
+def render_month(fig):
+    """The monthly report as a card, or None for a month with nothing in it.
+
+    The same ledger compose_month writes as prose, and the same rules (SKILL
+    §17): two figures side by side, used first, and never a net between them
+    or a claim about what was "saved". No buttons: nothing here needs an
+    answer.
+    """
+    if not fig["rescued"] and not fig["tossed"]:
+        return None
+    body = [RULE]
+    body += _month_side("USED BEFORE IT WENT OFF", fig["rescued"])
+    if fig["reversals"]:
+        total, n, by_source = fridge._price_side(fig["reversals"])
+        money = " (about $%d)" % total if sum(by_source.values()) else ""
+        body += _wrap("%d frozen earlier %s tossed this month%s."
+                      % (n, "was" if n == 1 else "were", money), "  ")
+    body.append("")
+    body += _month_side("THROWN AWAY", fig["tossed"])
+    body.append(RULE)
+
+    notes = []
+    priced = any(fridge._price_side(fig[k])[2] for k in ("rescued", "tossed"))
+    if priced:
+        notes.append("Prices are rough estimates, not what you paid.")
+    if fig["reconstructed"]:
+        k = fig["reconstructed"]
+        notes.append("%d tier%s reconstructed from before I recorded %s."
+                     % (k, "" if k == 1 else "s", "it" if k == 1 else "them"))
+    notes.append("Counts only what you've told me here.")
+    for i, note in enumerate(notes):
+        body += ([""] if i else []) + _wrap(note)
+    return _html(fridge._month_name(fig["month"]), body, None)
