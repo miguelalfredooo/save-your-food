@@ -4612,6 +4612,57 @@ class OneLookForLists(unittest.TestCase):
             self.assertFalse(labels[0].lower().startswith(("yes", "no")), cmd)
 
 
+class AIVoiceAndListings(unittest.TestCase):
+    """The model sounds like the bot, and a plain "what's in my fridge"
+    gets the card, not the model's prose version of it."""
+
+    CFG = dict(CFG, allowed_chat_ids=[1], llm_mode=True, openrouter_api_key="k")
+
+    def setUp(self):
+        self.con = fridge.connect(tempfile.mktemp(suffix=".db"))
+        self.tg = FakeTG()
+        bot.reset_rate_limits()
+        onb.set_step(self.con, 1, onb.DONE)
+        fridge.add_items(self.con, 1, ["milk", "cumin"], TODAY)
+        self.ai = []
+        self.orig = llm_agent.run_agent
+        llm_agent.run_agent = lambda con, chat_id, text, cfg, **k: self.ai.append(text) or "ok"
+
+    def tearDown(self):
+        llm_agent.run_agent = self.orig
+
+    def _say(self, text):
+        bot.handle_message(self.tg, self.con, {
+            "chat": {"id": 1, "type": "private"}, "text": text}, self.CFG)
+
+    def test_listing_questions_get_the_card(self):
+        for q, marker in (("what's in my fridge?", "In your fridge"),
+                          ("What is in the fridge", "In your fridge"),
+                          ("show me my pantry", "PANTRY"),
+                          ("what do I have in the freezer?", "freezer")):
+            self._say(q)
+            self.assertIn(marker, self.tg.sent[-1], q)
+        self.assertEqual(self.ai, [])
+
+    def test_questions_about_the_contents_still_go_to_the_model(self):
+        for q in ("is the milk in the fridge still ok?",
+                  "what can I make with what's in my fridge?",
+                  "what's in my fridge that I should use first?"):
+            self._say(q)
+        self.assertEqual(len(self.ai), 3)
+
+    def test_emoji_are_stripped_from_ai_replies(self):
+        tg = FakeTG()
+        bot.send_llm_reply(tg, 1, "Got it! 😊 Berries 🍓🫐 are in.")
+        self.assertEqual(tg.sent[-1], "Got it! Berries are in.")
+
+    def test_the_prompt_rules_out_emoji_and_sign_offs(self):
+        p = " ".join(llm_agent.SYSTEM_PROMPT.lower().split())
+        self.assertIn("no emoji", p)
+        self.assertIn("i'm here to help", p)
+        self.assertIn("at most one question", p)
+
+
 class MonthSummaryTool(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)

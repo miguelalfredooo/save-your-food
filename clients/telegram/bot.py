@@ -518,6 +518,33 @@ def _capped_names(names, max_chars=MAX_CAPTION_LIST_CHARS):
     return kept.split(", ") + ["and " + more]
 
 
+# "What's in my fridge?" and nothing more: a request for the list, which is
+# a card. Anything after the place ("...that I should use first?") or any
+# other opening ("is the milk in the fridge ok?") is a question about the
+# contents, and stays with the model.
+_LISTING_RE = re.compile(
+    r"^\s*(what'?s|what is|what do i have|what have i got|show(\s+me)?|list)"
+    r"\s+(in\s+)?(my|the)\s+(fridge|freezer|pantry|cupboard)\s*[?.!]*\s*$",
+    re.I)
+
+
+def handle_listing_question(tg, con, chat_id, text):
+    """Answer "what's in my fridge?" with the card, as /fridge does. True if
+    handled. With AI on, the model used to answer in prose, so the same
+    question looked different from the command."""
+    m = _LISTING_RE.match(text)
+    if not m:
+        return False
+    place = m.group(5).lower()
+    if place == "fridge":
+        send_fridge(tg, con, chat_id)
+    elif place == "freezer":
+        send_freezer(tg, con, chat_id)
+    else:
+        send_pantry(tg, con, chat_id)
+    return True
+
+
 FRIDGE_LISTING_PHRASES = ("in my fridge", "in the fridge")
 PANTRY_LISTING_PHRASES = ("in my pantry", "in the pantry", "in my cupboard",
                           "in the cupboard")
@@ -687,10 +714,23 @@ def _markdown_to_html(text):
     return "\n".join(blocks)
 
 
+_EMOJI_RE = re.compile(
+    "[\U0001F000-\U0001FAFF\U00002600-\U000027BF\U0000FE0F\U0000200D]+")
+
+
+def _strip_emoji(text):
+    """The bot's own messages carry no emoji, so the model's don't either.
+    Asking the model is not enough with a small one; this makes it so."""
+    text = _EMOJI_RE.sub("", text)
+    return "\n".join(re.sub(r" {2,}", " ", line).rstrip()
+                     for line in text.split("\n")).strip()
+
+
 def send_llm_reply(tg, chat_id, text):
     """Falls back to the original, unformatted plain text if the converted
     HTML ever fails to send: a malformed tag from an imperfect conversion of
     free-form model text must never mean the user gets nothing back."""
+    text = _strip_emoji(text) or text
     if tg.send(chat_id, _markdown_to_html(text), html=True) is None:
         tg.send(chat_id, text)
 
@@ -1041,7 +1081,8 @@ def handle_message(tg, con, msg, cfg):
     in_setup = (text.lower().startswith(("/start", "/setup", "/skip"))
                 or (onb.active(con, chat_id) and not text.startswith("/")))
     if not in_setup and (handle_recipe_link(tg, con, chat_id, text, cfg)
-                         or handle_pasted_recipe(tg, con, chat_id, text, cfg)):
+                         or handle_pasted_recipe(tg, con, chat_id, text, cfg)
+                         or handle_listing_question(tg, con, chat_id, text)):
         return
     # Commands are the bot's, always. They used to go to the model with AI
     # on, so a tap on /fridge in the menu got prose instead of the card, and
