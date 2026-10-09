@@ -2494,7 +2494,47 @@ class MonthlyFigures(unittest.TestCase):
              freezer_outcome, freezer_at))
         self.con.commit()
 
+    def test_the_reconstructed_count_is_this_months_rows_only(self):
+        # An all-time count under a monthly figure reads as a claim about that
+        # month. Two reconstructed rows, in different months: each month must
+        # own up to one.
+        for name, when in (("milk", "2026-09-20T09:00:00"),
+                           ("cilantro", "2026-10-03T09:00:00")):
+            self.con.execute(
+                "INSERT INTO items (chat_id,name,use_by,risk,estimated,added,"
+                "state,closed) VALUES (1,?,?,'yellow',1,?,'tossed',?)",
+                (name, when[:10], when[:10], when))
+        self.con.commit()
+        self.assertEqual(fridge.backfill_tiers(self.con), 2)
+        self.assertEqual(
+            fridge.month_figures(self.con, 1, date(2026, 9, 30))["reconstructed"], 1)
+        self.assertEqual(
+            fridge.month_figures(self.con, 1, date(2026, 10, 8))["reconstructed"], 1)
+        self.assertEqual(
+            fridge.month_figures(self.con, 1, date(2026, 11, 2))["reconstructed"], 0)
+
+    def test_a_recorded_close_is_not_counted_as_reconstructed(self):
+        fridge.add_items(self.con, 1, ["milk"], TODAY)
+        item = fridge.open_items(self.con, 1)[0]
+        fridge.close_item(self.con, 1, item["id"], "used", today=TODAY)
+        self.assertEqual(fridge.month_figures(self.con, 1, TODAY)["reconstructed"], 0)
+
+    def test_a_reversal_is_not_counted_twice(self):
+        # The reversal row is appended to tossed as well, so a naive count
+        # would report it in both.
+        self.con.execute(
+            "INSERT INTO items (chat_id,name,use_by,risk,estimated,added,state,"
+            "closed,freezer_outcome,freezer_at) VALUES (1,'chicken breast',"
+            "'2026-09-21','yellow',1,'2026-09-18','frozen','2026-09-20T09:00:00',"
+            "'tossed','2026-10-05T09:00:00')")
+        self.con.commit()
+        fridge.backfill_tiers(self.con)
+        fig = fridge.month_figures(self.con, 1, date(2026, 10, 8))
+        self.assertEqual(len(fig["reversals"]), 1)
+        self.assertEqual(fig["reconstructed"], 1)
+
     def test_a_rescue_is_counted_in_the_month_it_closed(self):
+
         self._closed("milk", "used", 1, "2026-10-03T09:00:00")
         fig = fridge.month_figures(self.con, 1, date(2026, 10, 8))
         self.assertEqual([i["name"] for i in fig["rescued"]], ["milk"])
@@ -2643,7 +2683,7 @@ class MonthlyText(unittest.TestCase):
             "'used','2026-10-02T09:00:00')")
         self.con.commit()
         fridge.backfill_tiers(self.con)
-        self.assertIn("1 tier reconstructed",
+        self.assertIn("1 tier reconstructed from before I recorded it.",
                       fridge.month_summary(self.con, 1, date(2026, 10, 8)))
 
     def test_singular_and_plural_agree(self):

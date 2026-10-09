@@ -772,13 +772,21 @@ def month_figures(con, chat_id, today=None):
                 reversals.append(r)
             tossed.append(r)
 
-    counts = tier_counts(con, chat_id)
+    # Scoped to the rows this month's figures are built from, not the whole
+    # store. An all-time count sitting under a monthly figure reads as a claim
+    # about that month: September said "6 tiers reconstructed" when only 5 of
+    # its rows were in September at all.
+    counted = {}
+    for r in rescued + tossed + reversals:
+        counted[r["id"]] = r
+    reconstructed = sum(1 for r in counted.values()
+                        if r["tier_source"] == "reconstructed")
     return {
         "month": month,
         "rescued": rescued,
         "tossed": tossed,
         "reversals": reversals,
-        "reconstructed": counts["reconstructed"],
+        "reconstructed": reconstructed,
     }
 
 
@@ -869,9 +877,9 @@ def compose_month(fig):
         notes.append("Every price is a rough estimate, not what you actually "
                      "paid.")
     if fig["reconstructed"]:
-        notes.append("%d tier%s reconstructed from before I recorded them."
-                     % (fig["reconstructed"],
-                        "" if fig["reconstructed"] == 1 else "s"))
+        n = fig["reconstructed"]
+        notes.append("%d tier%s reconstructed from before I recorded %s."
+                     % (n, "" if n == 1 else "s", "it" if n == 1 else "them"))
     if notes:
         lines += ["", " ".join(notes)]
     return "\n".join(lines)
