@@ -21,6 +21,11 @@ including a chat with Claude.
 
 Replace `PUT_YOUR_BOTFATHER_TOKEN_HERE` with the token. Save and close.
 
+Where there is no file to edit, such as a cloud session holding the token as
+a secret, set `TELEGRAM_BOT_TOKEN` instead. A real token in `config.json`
+still wins over it. The launchd service below doesn't see your shell's
+environment, so it still needs `config.json`.
+
 **3. Start it.**
 
     python3 bot.py
@@ -51,6 +56,9 @@ and boots out any earlier copy of the service before installing fresh.
 Logs live in `~/Library/Logs/fridge-loop/bot.log` and `bot.err.log`, rotated
 to `.old` by `install.sh` once either passes 5 MB.
 
+The service runs the bot under `caffeinate -i`, so the Mac doesn't idle-sleep
+while it's up and the daily nudge still goes out. The display can still sleep.
+
 **Two Mac settings launchd can't handle, both needed for this to survive a
 power cut:**
 
@@ -58,9 +66,9 @@ power cut:**
   Turn on automatic login for this user (System Settings > Users & Groups >
   Login Options), or the bot stays off after a restart until someone logs in
   by hand.
-- **Don't let the Mac sleep.** System Settings > Energy: turn on "Prevent
-  automatic sleeping when the display is off" and "Start up automatically
-  after a power failure".
+- **Start up after a power failure.** System Settings > Energy: turn on
+  "Start up automatically after a power failure". `caffeinate` keeps a
+  running Mac awake, but it can't turn a Mac back on.
 
 ## Who can use it
 
@@ -200,8 +208,9 @@ typed lists only for now.
 | `fridge.py` | Storage, list parsing, composing messages |
 | `card.py` | The fixed-width card the nudge, `/fridge` and `/freezer` are drawn as |
 | `shelf_life.py` | The use-by table and risk classes, ported from the skill |
-| `test_logic.py` | 321 tests. `python3 test_logic.py` |
+| `test_logic.py` | 331 tests. `python3 test_logic.py` |
 | `preview.py` | Renders the messages for any date, no token needed. `python3 preview.py 2026-09-26` |
+| `try_chat.py` | Chat with the real handlers in a terminal, no token. `tap 2 used` presses a card button. `python3 try_chat.py -i` |
 | `seed.json` | Real fridge contents as of Sep 23, so the test runs against real food |
 | `fridge.db` | Created on first run. Your data. Not synced anywhere |
 
@@ -257,7 +266,7 @@ The bot registers these with Telegram on startup, so they show in the `/` menu.
 
     python3 test_logic.py
 
-321 tests, no network needed. The interesting ones are the bucket collisions
+331 tests, no network needed. The interesting ones are the bucket collisions
 (`ground beef` vs `ground ginger`, `coconut milk` vs `oat milk`, `butternut
 squash` vs `peanut butter`) and the correction phrasings, including negation.
 

@@ -12,12 +12,14 @@ RED, YELLOW, GREEN = "red", "yellow", "green"
 # (match substrings, days, risk class)
 # Order matters — the first match wins, so put specific before general.
 SHELF_LIFE = [
+    # Cooked food first: "chicken soup" and "butter chicken (leftovers)" are
+    # three-day leftovers, not one-day raw chicken.
+    (("leftover", "cooked", "soup", "stew", "guiso"), 3, YELLOW),
     (("ground beef", "ground chicken", "ground turkey", "ground pork"), 1, RED),
     (("chicken breast", "chicken thigh", "chicken", "turkey"), 1, RED),
     (("fish", "salmon", "tilapia", "shrimp", "prawn", "shellfish", "scallop"), 1, RED),
     (("steak", "chops", "roast", "pork belly", "beef", "pork", "lamb"), 3, RED),
     (("bacon",), 7, RED),
-    (("leftover", "cooked rice", "soup", "stew", "guiso"), 3, YELLOW),
     (("deli meat", "ham", "turkey slices"), 3, YELLOW),
     (("tofu",), 3, YELLOW),
     (("cut fruit", "melon", "pineapple"), 3, YELLOW),
@@ -71,6 +73,7 @@ NEVER_STABLE = (
     "ground lamb", "ground meat", "cooked", "leftover", "fresh ",
     # "butter" is a pantry keyword, and these are not butter.
     "butter lettuce", "butterhead", "buttermilk", "butternut",
+    "butter chicken", "butter paneer",
     # "minced" is a pantry modifier; minced meat is a one-day red item.
     "minced beef", "minced meat", "minced pork", "minced lamb",
     "minced chicken", "minced turkey",

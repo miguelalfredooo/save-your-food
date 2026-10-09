@@ -240,6 +240,14 @@ FRIDGE_WORDS = ("fridge", "refrigerator", "perishable", "goes bad", "go bad",
 # "none of these go bad" means the opposite of "these go bad", and a person
 # correcting me is quite likely to phrase it that way. Bare "no" is deliberately
 # absent: in "no, those go off quickly" it is a discourse marker, not a negation.
+# A correction is about the list I just sorted, so it points back at it:
+# "those are pantry", "none of these go bad", "they are all dry goods".
+# Without one of these, "I put butter chicken in the fridge" read as a
+# correction on the word "fridge" and moved the previous list, or answered
+# "I don't have a recent list to move" to someone adding leftovers.
+REFERENTS = {"these", "those", "they", "them", "this", "that", "it",
+             "everything", "none", "nothing"}
+
 NEGATORS = ("none", "not", "never", "nothing", "dont", "doesnt", "wont",
             "cant", "isnt", "arent", "without")
 
@@ -309,6 +317,8 @@ def correction(text):
     # short enough to be a correction, so let the keywords decide.
     if "," in text or "\n" in text:
         return None
+    if not any(w in REFERENTS for w in _words(n)):
+        return None
     hits_pantry = any(k in n for k in PANTRY_WORDS)
     hits_fridge = any(k in n for k in FRIDGE_WORDS)
     negated = any(w in NEGATORS for w in _words(n))
@@ -320,6 +330,34 @@ def correction(text):
     if hits_fridge and not hits_pantry:
         return "fridge"
     return None
+
+
+# "I put butter chicken in the fridge as leftovers". The one sentence shape
+# that is plainly a capture: a put-away verb, a food, and the fridge.
+_PUT_AWAY = re.compile(
+    r"^(?:i\s+)?(?:just\s+)?(?:put|stuck|popped|placed|stored|added|threw)\s+"
+    r"(?:some\s+|the\s+|my\s+|a\s+)?(?P<food>.+?)\s+(?:in|into|to)\s+"
+    r"(?:the|my)\s+(?:fridge|refrigerator)"
+    r"(?:\s+as\s+(?:a\s+)?(?P<left>leftovers?))?\s*[.!]*$", re.I)
+
+
+def put_away(text):
+    """The food name from a put-away sentence, or None.
+
+    "as leftovers" becomes part of the name, so it gets the short cooked-food
+    window rather than whatever the raw ingredient would get. "put them in
+    the fridge" is not a capture: it points back at the last list, so it is
+    left for correction() to read.
+    """
+    m = _PUT_AWAY.match(text.strip())
+    if not m:
+        return None
+    food = m.group("food").strip()
+    if not food or all(w in REFERENTS or w in FUNCTION_WORDS for w in _words(food)):
+        return None
+    if m.group("left") and "leftover" not in food.lower():
+        food += " (leftovers)"
+    return food
 
 
 def last_batch(con, chat_id):

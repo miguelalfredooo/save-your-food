@@ -39,6 +39,15 @@ class ShelfLife(unittest.TestCase):
         self.assertEqual(sl.lookup("oat milk")[0], 7)
         self.assertEqual(sl.lookup("chocolate milk")[0], 7)
 
+    def test_cooked_food_is_not_raw_meat(self):
+        for name in ("butter chicken (leftovers)", "chicken soup", "beef stew",
+                     "cooked chicken", "leftover rice"):
+            days, cls, _ = sl.lookup(name)
+            self.assertEqual((days, cls), (3, sl.YELLOW), name)
+            self.assertEqual(sl.not_tracked(name), (False, None), name)
+        self.assertEqual(sl.not_tracked("butter chicken"), (False, None))
+        self.assertEqual(sl.not_tracked("butter"), (True, "stable"))
+
     def test_unknown_is_flagged_estimated(self):
         days, cls, est = sl.lookup("dragonfruit curd")
         self.assertTrue(est)
@@ -630,6 +639,29 @@ class Corrections(unittest.TestCase):
                      "please track these"):
             self.assertEqual(fridge.correction(text), "fridge", text)
 
+    def test_a_correction_has_to_point_back_at_the_list(self):
+        # "fridge" alone used to make this a correction: it moved the previous
+        # list, or with none said "I don't have a recent list to move".
+        for text in ("I put butter chicken in the fridge as leftover",
+                     "chicken goes in the fridge",
+                     "my pantry is a mess"):
+            self.assertIsNone(fridge.correction(text), text)
+
+    def test_put_away_sentences_are_captures(self):
+        cases = {
+            "I put butter chicken in the fridge as leftover": "butter chicken (leftovers)",
+            "I put butter chicken in the fridge as leftovers": "butter chicken (leftovers)",
+            "just put some leftover rice in the fridge": "leftover rice",
+            "put the yogurt in the fridge": "yogurt",
+            "popped a lasagna into the fridge.": "lasagna",
+        }
+        for text, name in cases.items():
+            self.assertEqual(fridge.put_away(text), name, text)
+        for text in ("put them in the fridge", "put it in the fridge",
+                     "those are fridge", "milk, spinach",
+                     "I put butter chicken in the freezer"):
+            self.assertIsNone(fridge.put_away(text), text)
+
     def test_a_plain_list_is_not_a_correction(self):
         for text in ("milk, spinach", "ground beef", "cumin, oregano",
                      "milk\nspinach"):
@@ -1201,9 +1233,14 @@ class CrashLoopMessages(unittest.TestCase):
     def setUp(self):
         self.tmp_dir = tempfile.mkdtemp()
         self.orig_config_path = bot.CONFIG_PATH
+        # A token in the shell running the tests must not change what they see.
+        self.orig_env_token = os.environ.pop("TELEGRAM_BOT_TOKEN", None)
 
     def tearDown(self):
         bot.CONFIG_PATH = self.orig_config_path
+        os.environ.pop("TELEGRAM_BOT_TOKEN", None)
+        if self.orig_env_token is not None:
+            os.environ["TELEGRAM_BOT_TOKEN"] = self.orig_env_token
 
     def _fatal_message(self):
         with self.assertRaises(SystemExit) as ctx:
@@ -1223,6 +1260,34 @@ class CrashLoopMessages(unittest.TestCase):
         msg = self._fatal_message()
         self.assertTrue(msg.startswith("!"))
         self.assertNotIn("\n", msg)
+
+    def test_the_env_token_stands_in_for_a_missing_config(self):
+        bot.CONFIG_PATH = os.path.join(self.tmp_dir, "does-not-exist.json")
+        os.environ["TELEGRAM_BOT_TOKEN"] = "123:env"
+        cfg = bot.load_config()
+        self.assertEqual(cfg["token"], "123:env")
+        self.assertEqual(cfg["nudge_hour"], 16)        # defaults still applied
+
+    def test_the_env_token_fills_a_placeholder(self):
+        bot.CONFIG_PATH = os.path.join(self.tmp_dir, "config.json")
+        with open(bot.CONFIG_PATH, "w") as f:
+            f.write('{"token": "PUT_YOUR_BOTFATHER_TOKEN_HERE", "nudge_hour": 9}')
+        os.environ["TELEGRAM_BOT_TOKEN"] = "123:env"
+        cfg = bot.load_config()
+        self.assertEqual(cfg["token"], "123:env")
+        self.assertEqual(cfg["nudge_hour"], 9)          # the file still counts
+
+    def test_a_real_config_token_wins_over_the_env(self):
+        bot.CONFIG_PATH = os.path.join(self.tmp_dir, "config.json")
+        with open(bot.CONFIG_PATH, "w") as f:
+            f.write('{"token": "456:file"}')
+        os.environ["TELEGRAM_BOT_TOKEN"] = "123:env"
+        self.assertEqual(bot.load_config()["token"], "456:file")
+
+    def test_defaults_need_no_token(self):
+        cfg = bot.with_defaults({})
+        self.assertFalse(cfg["llm_mode"])
+        self.assertEqual(cfg["allowed_chat_ids"], [])
 
 
 class SingleInstanceLock(unittest.TestCase):
@@ -2080,6 +2145,26 @@ class BotHandlers(unittest.TestCase):
                            "text": "do I have anything in my pantry"}, CFG)
         self.assertTrue(any(i["name"] == "milk" for i in fridge.open_items(self.con, 1)))
 
+    def test_leftovers_sentence_tracks_the_leftovers(self):
+        # A list went in first, so a misread correction would have moved it.
+        bot.handle_message(self.tg, self.con, {"chat": {"id": 1, "type": "private"}, "text": "cumin, milk"}, CFG)
+        bot.handle_message(self.tg, self.con, {"chat": {"id": 1, "type": "private"},
+                           "text": "I put butter chicken in the fridge as leftover"}, CFG)
+        by_name = {i["name"]: i for i in fridge.open_items(self.con, 1)}
+        self.assertIn("milk", by_name)
+        self.assertEqual([p["name"] for p in fridge.pantry_items(self.con, 1)], ["cumin"])
+        self.assertIn("butter chicken (leftovers)", by_name)
+        self.assertEqual(by_name["butter chicken (leftovers)"]["risk"], sl.YELLOW)
+        self.assertIn("butter chicken (leftovers)", self.tg.sent[-1])
+
+    def test_put_them_in_the_fridge_still_corrects(self):
+        # A pronoun instead of a food: this is about the last list, not a capture.
+        bot.handle_message(self.tg, self.con, {"chat": {"id": 1, "type": "private"}, "text": "cumin"}, CFG)
+        bot.handle_message(self.tg, self.con, {"chat": {"id": 1, "type": "private"},
+                           "text": "put them in the fridge"}, CFG)
+        self.assertEqual([i["name"] for i in fridge.open_items(self.con, 1)], ["cumin"])
+        self.assertEqual(fridge.pantry_items(self.con, 1), [])
+
     def test_a_fridge_question_gets_the_real_listing(self):
         fridge.add_items(self.con, 1, ["milk"], TODAY)
         bot.handle_message(self.tg, self.con, {"chat": {"id": 1, "type": "private"},
@@ -2249,6 +2334,16 @@ class Cards(unittest.TestCase):
         bot.send_nudge(self.tg, self.con, 1, self.day)
         self._tap("frozen", items[0]["id"])
         self.assertIn("All 1 handled", self.tg.edits[-1])
+
+    def test_try_chat_runs_and_can_tap_a_card(self):
+        out = subprocess.run(
+            [sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                          "try_chat.py"), "milk", "/fridge", "tap 1 used"],
+            capture_output=True, text=True, timeout=30,
+            env=dict(os.environ, TELEGRAM_BOT_TOKEN=""))
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("popup: Used it", out.stdout)
+        self.assertIn("1 closed", out.stdout)
 
     def test_rel_column_fits(self):
         for d in (-30, -1, 0, 1, 3, 40):
