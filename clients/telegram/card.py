@@ -12,8 +12,11 @@ Why monospace and a fixed width
 The body sits in a <pre> block padded to exactly WIDTH columns, framed by a
 rule of the same width. Monospace makes every character the same width, so
 every card is the same width on a given phone, and the rule pins it even when
-every line is short. WIDTH is art.MAX_WIDTH on purpose: the drawings are drawn
-to the same canvas, so a card and the frame that closes it line up.
+every line is short. WIDTH is 32: on a current phone at the default text size
+a code block fits about 38 columns, so 32 keeps item names and dates on one
+line far more often than the old 24, with room to spare. It was 24 to match
+the drawings' canvas, which is sized for the narrowest phones; the drawings
+stay 24 and sit inside the wider card.
 
 Names, not buttons, carry the item
 ----------------------------------
@@ -30,7 +33,7 @@ import art
 import fridge
 import shelf_life as sl
 
-WIDTH = art.MAX_WIDTH
+WIDTH = 32
 RULE = "─" * WIDTH
 RIGHT = 8                 # the date column: "14d past", "tomorrow", "Oct 14"
 MAX_ITEMS = 15            # 3 buttons each stays well under Telegram's 100

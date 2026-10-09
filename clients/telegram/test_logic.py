@@ -4599,10 +4599,13 @@ class OneLookForLists(unittest.TestCase):
         self.assertIn("ON THE COUNTER (1)", html)
 
     def test_pantry_names_wrap_between_names(self):
-        lines = card._wrap_names(["cumin", "rice", "olive oil", "chicken bouillon"], "  ")
-        self.assertIn("  olive oil,", lines)
+        names = ["cumin", "rice", "olive oil", "chicken bouillon",
+                 "smoked paprika", "extra virgin olive oil", "basmati rice"]
+        lines = card._wrap_names(names, "  ")
         for line in lines:
             self.assertLessEqual(len(line), card.WIDTH)
+        for name in names:        # each whole name sits on a single line
+            self.assertTrue(any(name in line for line in lines), name)
 
     def test_a_long_name_wraps_instead_of_being_cut(self):
         rows = card._row("1 butter chicken (leftovers)", "in 3d")
