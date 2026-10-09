@@ -161,6 +161,10 @@ def render(head, items, today, footer, closing=None, label_one_tier=True,
             if labelled:
                 body.append(sl.TIERS[t].upper())
             seen = t
+        elif n > 1:
+            # A blank line between items: a name, its date and its warning
+            # read as one unit, and the eye can find item 7 without counting.
+            body.append("")
         body.extend(lines_for(n, item, today))
     body += [RULE, footer]
     for note in notes or ():
@@ -199,6 +203,8 @@ def render_freezer(head, items, footer):
     date stops meaning anything, so the right column is when it went in."""
     body = [RULE, "FROZEN ON".rjust(WIDTH)]
     for n, item in enumerate(items, 1):
+        if n > 1:
+            body.append("")
         outcome = item.get("freezer_outcome")
         if outcome:
             body.extend(_row("%s %s" % (MARK[outcome], item["name"]),
