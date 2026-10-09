@@ -132,7 +132,7 @@ def _html(head, body, closing):
 
 
 def render(head, items, today, footer, closing=None, label_one_tier=True,
-           notes=None):
+           notes=None, top=None):
     """(html, buttons) for a card.
 
     `items` keep their order for the life of the card, closed or not, so an
@@ -140,6 +140,8 @@ def render(head, items, today, footer, closing=None, label_one_tier=True,
     tier each item was in on the day the card went out, not today, for the
     same reason. `closing` is an already-rendered art block, or None.
     `notes` are short sentences under the footer, wrapped to the card.
+    `top` is a drawing for the head of the card, inside the same block: the
+    drawings are drawn to the card's width, so it costs no extra message.
 
     A nudge's heading already names its tier when there is only one ("2
     things past their best: check before eating"), so label_one_tier=False
@@ -147,7 +149,7 @@ def render(head, items, today, footer, closing=None, label_one_tier=True,
     """
     tiers = {sl.tier(i["use_by_date"], today) for i in items}
     labelled = label_one_tier or len(tiers) > 1
-    body, seen = [RULE], None
+    body, seen = (top.split("\n") + [""] if top else []) + [RULE], None
     for n, item in enumerate(items, 1):
         t = sl.tier(item["use_by_date"], today)
         if t != seen:

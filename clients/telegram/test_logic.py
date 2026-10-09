@@ -4722,15 +4722,98 @@ class CorrectionCards(unittest.TestCase):
         self.assertIn("PANTRY (1)", html)
         self.assertEqual(fridge.open_items(self.con, 1), [])
 
-    def test_explanations_stay_plain(self):
+    def test_explanations_are_not_cards(self):
         self._say("/undo")
-        self.assertEqual(self.tg.sent[-1], "Nothing to undo.")
+        self.assertIn("Nothing to undo.", self.tg.sent[-1])
+        self.assertNotIn("<b>", self.tg.sent[-1])     # maybe a drawing, never a card
         self._say("those are pantry")
         self.assertNotIn("<pre>", self.tg.sent[-1])
 
     def test_the_prose_versions_are_unchanged_for_the_model(self):
         fridge.add_items(self.con, 1, ["milk"], TODAY)
         self.assertEqual(fridge.undo_last(self.con, 1), "Took back 1 tracked thing.")
+
+
+class MoreDelight(unittest.TestCase):
+    """Drawings at the head of the capture card, on empty lists and on a
+    saved recipe, with at most three a day per person."""
+
+    CFG = dict(CFG, allowed_chat_ids=[1])
+
+    def setUp(self):
+        self.con = fridge.connect(tempfile.mktemp(suffix=".db"))
+        self.tg = FakeTG()
+        bot.reset_rate_limits()
+        onb.set_step(self.con, 1, onb.DONE)
+
+    def _say(self, text):
+        bot.handle_message(self.tg, self.con, {
+            "chat": {"id": 1, "type": "private"}, "text": text}, self.CFG)
+
+    def _pre(self, html):
+        return html.split("<pre>", 1)[1].split("</pre>", 1)[0]
+
+    def test_the_capture_card_opens_with_the_foods_glyph(self):
+        self._say("chicken thighs, milk")
+        glyph = art.for_item("chicken thighs")
+        self.assertTrue(self._pre(self.tg.sent[-1]).startswith(art.esc(glyph)))
+
+    def test_a_tap_keeps_the_glyph(self):
+        self._say("chicken thighs, milk")
+        item = fridge.open_items(self.con, 1)[0]
+        bot.handle_callback(self.tg, self.con, {
+            "id": "cb", "data": "used:%d" % item["id"],
+            "message": {"chat": {"id": 1, "type": "private"}, "message_id": 1}},
+            self.CFG)
+        self.assertTrue(self._pre(self.tg.edits[-1]).startswith(
+            art.esc(art.for_item("chicken thighs"))))
+
+    def test_an_empty_fridge_gets_a_drawing(self):
+        self._say("/fridge")
+        self.assertIn("<pre>", self.tg.sent[-1])
+        self.assertIn("Nothing tracked yet", self.tg.sent[-1])
+
+    def test_a_saved_recipe_gets_a_drawing(self):
+        llm_agent.exec_draft_recipe(self.con, 1, {"title": "Pozole",
+            "ingredients": ["1 lb pork", "2 cups hominy", "1 onion"], "steps": []},
+            TODAY)
+        draft = llm_agent.pending_recipe(self.con, 1)
+        orig = llm_agent.create_recipe_note
+        llm_agent.create_recipe_note = lambda d, **k: "created"
+        try:
+            bot.handle_callback(self.tg, self.con, {
+                "id": "cb", "data": "recipe:save:%s" % draft["id"],
+                "message": {"chat": {"id": 1, "type": "private"}, "message_id": 1}},
+                self.CFG)
+        finally:
+            llm_agent.create_recipe_note = orig
+        self.assertIn("<pre>", self.tg.edits[-1])
+        self.assertIn("Saved to Recipes: Pozole", self.tg.edits[-1])
+
+    def test_three_drawings_a_day_then_plain(self):
+        for _ in range(fridge.ART_DAILY_CAP):
+            self._say("/fridge")
+            self.assertIn("<pre>", self.tg.sent[-1])
+        self._say("/fridge")
+        self.assertNotIn("<pre>", self.tg.sent[-1])
+        self.assertIn("Nothing tracked yet", self.tg.sent[-1])
+
+    def test_the_cap_resets_the_next_day(self):
+        for _ in range(fridge.ART_DAILY_CAP):
+            fridge.spend_art(self.con, 1, TODAY)
+        self.assertEqual(fridge.art_left(self.con, 1, TODAY), 0)
+        self.assertEqual(fridge.art_left(self.con, 1, TODAY + timedelta(days=1)),
+                         fridge.ART_DAILY_CAP)
+
+    def test_milestones_ignore_the_cap(self):
+        for _ in range(fridge.ART_DAILY_CAP):
+            fridge.spend_art(self.con, 1)
+        self.assertIsNotNone(bot.draw(self.con, 1, "milestone"))
+        self.assertIsNone(bot.draw(self.con, 1, "empty"))
+
+    def test_the_forbidden_moments_still_get_nothing(self):
+        for moment in ("tossed", "nudge", "toss_prompt"):
+            self.assertIsNone(bot.draw(self.con, 1, moment))
 
 
 class MonthSummaryTool(unittest.TestCase):

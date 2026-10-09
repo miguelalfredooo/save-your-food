@@ -699,6 +699,25 @@ def note_art(con, chat_id, frame):
         set_pref(con, chat_id, "last_art", frame)
 
 
+# A drawing everywhere stops being delight and turns into furniture, so each
+# person gets a few a day. Milestones don't count: they're rare by design.
+ART_DAILY_CAP = 3
+
+
+def art_left(con, chat_id, today=None):
+    """Drawings this chat may still get today."""
+    today = (today or date.today()).isoformat()
+    day, _, n = (get_pref(con, chat_id, "art_day") or "").partition(" ")
+    used = int(n) if day == today and n.isdigit() else 0
+    return max(0, ART_DAILY_CAP - used)
+
+
+def spend_art(con, chat_id, today=None):
+    today = (today or date.today()).isoformat()
+    used = ART_DAILY_CAP - art_left(con, chat_id, date.fromisoformat(today))
+    set_pref(con, chat_id, "art_day", "%s %d" % (today, used + 1))
+
+
 def set_pref(con, chat_id, key, value):
     con.execute("INSERT OR REPLACE INTO meta (chat_id,key,value) VALUES (?,?,?)",
                 (chat_id, key, str(value)))

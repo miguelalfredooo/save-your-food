@@ -376,7 +376,7 @@ OWNER_COMMANDS = [
 ]
 
 
-def send_card(tg, con, chat_id, kind, head, items, today, notes=None):
+def send_card(tg, con, chat_id, kind, head, items, today, notes=None, top=None):
     """One card for these items, remembered so a tap can redraw it.
 
     This used to be one summary plus one buttoned message per item: three
@@ -386,8 +386,8 @@ def send_card(tg, con, chat_id, kind, head, items, today, notes=None):
     spec = {"kind": kind, "head": head, "day": today.isoformat(),
             "ids": [i["id"] for i in shown], "more": more,
             "used_before": fridge.count_closed(con, chat_id, "used"),
-            "notes": notes or []}
-    html, buttons = _render(kind, head, shown, today, more, notes=notes)
+            "notes": notes or [], "top": top}
+    html, buttons = _render(kind, head, shown, today, more, notes=notes, top=top)
     res = tg.send(chat_id, html, buttons=buttons, html=True)
     msg_id = ((res or {}).get("result") or {}).get("message_id")
     if msg_id is not None:
@@ -412,19 +412,18 @@ def close_card(con, chat_id, spec, items):
     else:
         moment = "used" if "used" in states else "frozen"
         caption = CLOSE_LINES[moment]
-    frame = art.choose(moment, avoid=fridge.last_art(con, chat_id))
+    frame = draw(con, chat_id, moment)
     if not frame:
         return None
-    fridge.note_art(con, chat_id, frame)
     return art.render(frame, caption)
 
 
-def _render(kind, head, items, today, more, closing=None, notes=None):
+def _render(kind, head, items, today, more, closing=None, notes=None, top=None):
     footer = card.tally(kind, items, more)
     if kind == "freezer":
         return card.render_freezer(head, items, footer)
     return card.render(head, items, today, footer, closing,
-                       label_one_tier=(kind != "nudge"), notes=notes)
+                       label_one_tier=(kind != "nudge"), notes=notes, top=top)
 
 
 def refresh_card(tg, con, chat_id, message_id, spec):
@@ -438,7 +437,8 @@ def refresh_card(tg, con, chat_id, message_id, spec):
             and all(card.settled(spec["kind"], i) for i in items)):
         closing = close_card(con, chat_id, spec, items)
     html, buttons = _render(spec["kind"], spec["head"], items, today,
-                            spec["more"], closing, notes=spec.get("notes"))
+                            spec["more"], closing, notes=spec.get("notes"),
+                            top=spec.get("top"))
     tg.edit(chat_id, message_id, html, buttons=buttons, html=True)
 
 
@@ -456,7 +456,8 @@ def send_fridge(tg, con, chat_id, today=None):
     today = today or date.today()
     items = fridge.open_items(con, chat_id)
     if not items:
-        tg.send(chat_id, fridge.compose_inventory(items))
+        send_delight(tg, con, chat_id, "empty",
+                     caption=fridge.compose_inventory(items))
         return
     send_card(tg, con, chat_id, "fridge", "In your fridge", items, today)
 
@@ -490,8 +491,9 @@ def send_freezer(tg, con, chat_id, today=None):
     today = today or date.today()
     items = fridge.frozen_items(con, chat_id)
     if not items:
-        tg.send(chat_id, "Nothing in the freezer that I know about. Freezing "
-                         "something from a nudge puts it here.")
+        send_delight(tg, con, chat_id, "empty",
+                     caption="Nothing in the freezer that I know about. "
+                             "Freezing something from a nudge puts it here.")
         return 0
     return send_card(tg, con, chat_id, "freezer", "In the freezer", items, today)
 
@@ -501,7 +503,8 @@ def send_pantry(tg, con, chat_id, head="In your pantry"):
     be the one list drawn differently: big ASCII drawings over comma runs."""
     items = fridge.pantry_items(con, chat_id)
     if not items:
-        tg.send(chat_id, fridge.compose_pantry(items))
+        send_delight(tg, con, chat_id, "empty",
+                     caption=fridge.compose_pantry(items))
         return
     tg.send(chat_id, card.render_pantry(
         head, _capped_names([i["name"] for i in items if i["kind"] == "stable"]),
@@ -565,20 +568,39 @@ def answer_question(tg, con, chat_id, text):
     tg.send(chat_id, fridge.answer_question(text))
 
 
-def send_delight(tg, con, chat_id, moment, item=None, caption=None):
-    """One place every drawing goes through, so the rules hold everywhere.
+def draw(con, chat_id, moment, item=None, frame=None):
+    """The drawing for this moment, or None. Every drawing comes through here.
 
-    Returns True if something was drawn. A forbidden moment sends the caption
-    on its own rather than nothing: the outcome still needs acknowledging, it
-    just does not get a picture over it.
+    art.choose holds the rules about where art may go (never a nudge needing
+    a decision, a toss or a question) and keeps frames from repeating. This
+    adds the daily cap, which milestones are exempt from. `frame` passes a
+    drawing already picked, such as a food's glyph, through the same cap.
     """
-    frame = art.choose(moment, item=item, avoid=fridge.last_art(con, chat_id))
+    frame = frame or art.choose(moment, item=item,
+                                avoid=fridge.last_art(con, chat_id))
+    if not frame:
+        return None
+    if moment != "milestone":
+        if not fridge.art_left(con, chat_id):
+            return None
+        fridge.spend_art(con, chat_id)
+    fridge.note_art(con, chat_id, frame)
+    return frame
+
+
+def send_delight(tg, con, chat_id, moment, item=None, caption=None):
+    """A moment with a drawing over its caption, or the caption alone.
+
+    Returns True if something was drawn. A forbidden moment, or one past the
+    day's cap, sends the caption on its own rather than nothing: the outcome
+    still needs acknowledging, it just does not get a picture over it.
+    """
+    frame = draw(con, chat_id, moment, item=item)
     if not frame:
         if caption:
             tg.send(chat_id, caption)
         return False
     tg.send(chat_id, art.render(frame, caption), html=True)
-    fridge.note_art(con, chat_id, frame)
     return True
 
 
@@ -1258,8 +1280,13 @@ def send_capture(tg, con, chat_id, tracked, stable, outside, again):
     added = {name for name, _, _, _ in tracked} | set(again)
     items = [i for i in fridge.open_items(con, chat_id) if i["name"] in added]
     if items:
+        # The glyph for what came in, over the card: a hen for chicken, a
+        # carton for milk. The evergreen vocabulary, where it is seen daily.
+        glyph = next((g for g in (art.for_item(i["name"]) for i in items) if g),
+                     None)
+        top = draw(con, chat_id, "capture", frame=glyph) if glyph else None
         send_card(tg, con, chat_id, "fridge", "Added to your fridge", items,
-                  date.today(), notes=notes)
+                  date.today(), notes=notes, top=top)
     elif stable or outside:
         tg.send(chat_id, card.render_pantry(
             "Added to your pantry", _capped_names(stable), _capped_names(outside)),
@@ -1292,7 +1319,7 @@ def send_undo(tg, con, chat_id):
     """/undo, answered with a card naming what was taken back."""
     r = fridge.undo(con, chat_id)
     if not (r["tracked"] or r["pantry"]):
-        tg.send(chat_id, r["message"])
+        send_delight(tg, con, chat_id, "empty", caption=r["message"])
         return
     tg.send(chat_id, card.render_list(
         "Took back your last list",
@@ -1508,7 +1535,14 @@ def handle_recipe_callback(tg, con, chat_id, cb, msg, raw, cfg):
     if outcome == "created":
         llm_agent.clear_pending_recipe(con, chat_id)
         tg.answer(cb["id"], "Saved.")
-        tg.edit(chat_id, msg["message_id"], "Saved to Recipes ✓ %s" % draft["title"])
+        frame = draw(con, chat_id, "recipe_saved")
+        if frame:
+            tg.edit(chat_id, msg["message_id"],
+                    art.render(frame, "Saved to Recipes: %s" % draft["title"]),
+                    html=True)
+        else:
+            tg.edit(chat_id, msg["message_id"],
+                    "Saved to Recipes ✓ %s" % draft["title"])
     elif outcome == "duplicate":
         llm_agent.clear_pending_recipe(con, chat_id)
         tg.answer(cb["id"], "Already in Notes.")
