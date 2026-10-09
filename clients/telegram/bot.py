@@ -46,6 +46,7 @@ import shelf_life as sl  # noqa: E402
 import onboarding as onb  # noqa: E402
 import art  # noqa: E402
 import card  # noqa: E402
+import recipe_text  # noqa: E402
 import llm_agent  # noqa: E402
 
 CONFIG_PATH = os.path.join(HERE, "config.json")
@@ -375,7 +376,7 @@ OWNER_COMMANDS = [
 ]
 
 
-def send_card(tg, con, chat_id, kind, head, items, today):
+def send_card(tg, con, chat_id, kind, head, items, today, notes=None):
     """One card for these items, remembered so a tap can redraw it.
 
     This used to be one summary plus one buttoned message per item: three
@@ -384,8 +385,9 @@ def send_card(tg, con, chat_id, kind, head, items, today):
     shown, more = items[:card.MAX_ITEMS], max(0, len(items) - card.MAX_ITEMS)
     spec = {"kind": kind, "head": head, "day": today.isoformat(),
             "ids": [i["id"] for i in shown], "more": more,
-            "used_before": fridge.count_closed(con, chat_id, "used")}
-    html, buttons = _render(kind, head, shown, today, more)
+            "used_before": fridge.count_closed(con, chat_id, "used"),
+            "notes": notes or []}
+    html, buttons = _render(kind, head, shown, today, more, notes=notes)
     res = tg.send(chat_id, html, buttons=buttons, html=True)
     msg_id = ((res or {}).get("result") or {}).get("message_id")
     if msg_id is not None:
@@ -417,12 +419,12 @@ def close_card(con, chat_id, spec, items):
     return art.render(frame, caption)
 
 
-def _render(kind, head, items, today, more, closing=None):
+def _render(kind, head, items, today, more, closing=None, notes=None):
     footer = card.tally(kind, items, more)
     if kind == "freezer":
         return card.render_freezer(head, items, footer)
     return card.render(head, items, today, footer, closing,
-                       label_one_tier=(kind != "nudge"))
+                       label_one_tier=(kind != "nudge"), notes=notes)
 
 
 def refresh_card(tg, con, chat_id, message_id, spec):
@@ -436,7 +438,7 @@ def refresh_card(tg, con, chat_id, message_id, spec):
             and all(card.settled(spec["kind"], i) for i in items)):
         closing = close_card(con, chat_id, spec, items)
     html, buttons = _render(spec["kind"], spec["head"], items, today,
-                            spec["more"], closing)
+                            spec["more"], closing, notes=spec.get("notes"))
     tg.edit(chat_id, message_id, html, buttons=buttons, html=True)
 
 
@@ -494,28 +496,53 @@ def send_freezer(tg, con, chat_id, today=None):
     return send_card(tg, con, chat_id, "freezer", "In the freezer", items, today)
 
 
-def compose_pantry_html(items):
-    """The pantry, with a can over the pantry and an onion over the counter.
-
-    This is where the evergreen glyphs earn their keep. "Pantry" and "counter"
-    are the distinction people get wrong, and two drawings make the split
-    visible instead of leaving it to be read. Same can every time, on purpose.
-    """
+def send_pantry(tg, con, chat_id, head="In your pantry"):
+    """The pantry as a card, the same shape as every other list. It used to
+    be the one list drawn differently: big ASCII drawings over comma runs."""
+    items = fridge.pantry_items(con, chat_id)
     if not items:
-        return fridge.compose_pantry(items)
+        tg.send(chat_id, fridge.compose_pantry(items))
+        return
+    tg.send(chat_id, card.render_pantry(
+        head, _capped_names([i["name"] for i in items if i["kind"] == "stable"]),
+        _capped_names([i["name"] for i in items if i["kind"] == "outside"])),
+        html=True)
 
-    stable = [i["name"] for i in items if i["kind"] == "stable"]
-    outside = [i["name"] for i in items if i["kind"] == "outside"]
-    parts = []
-    if stable:
-        parts.append(art.render(art.glyph("pantry"),
-                                "Pantry (%d)\n%s" % (len(stable), _capped_item_list(stable))))
-    if outside:
-        parts.append(art.render(art.glyph("counter"),
-                                "On the counter (%d)\n%s"
-                                % (len(outside), _capped_item_list(outside))))
-    head = "Not tracked, but I remember you have it."
-    return art.esc(head) + "\n\n" + "\n\n".join(parts)
+
+def _capped_names(names, max_chars=MAX_CAPTION_LIST_CHARS):
+    """_capped_item_list's cap, as a list of names for a card."""
+    capped = _capped_item_list(names, max_chars)
+    if capped == ", ".join(names):
+        return names
+    kept, _, more = capped.rpartition(", and ")
+    return kept.split(", ") + ["and " + more]
+
+
+# "What's in my fridge?" and nothing more: a request for the list, which is
+# a card. Anything after the place ("...that I should use first?") or any
+# other opening ("is the milk in the fridge ok?") is a question about the
+# contents, and stays with the model.
+_LISTING_RE = re.compile(
+    r"^\s*(what'?s|what is|what do i have|what have i got|show(\s+me)?|list)"
+    r"\s+(in\s+)?(my|the)\s+(fridge|freezer|pantry|cupboard)\s*[?.!]*\s*$",
+    re.I)
+
+
+def handle_listing_question(tg, con, chat_id, text):
+    """Answer "what's in my fridge?" with the card, as /fridge does. True if
+    handled. With AI on, the model used to answer in prose, so the same
+    question looked different from the command."""
+    m = _LISTING_RE.match(text)
+    if not m:
+        return False
+    place = m.group(5).lower()
+    if place == "fridge":
+        send_fridge(tg, con, chat_id)
+    elif place == "freezer":
+        send_freezer(tg, con, chat_id)
+    else:
+        send_pantry(tg, con, chat_id)
+    return True
 
 
 FRIDGE_LISTING_PHRASES = ("in my fridge", "in the fridge")
@@ -533,8 +560,7 @@ def answer_question(tg, con, chat_id, text):
         send_fridge(tg, con, chat_id)
         return
     if any(p in n for p in PANTRY_LISTING_PHRASES):
-        items = fridge.pantry_items(con, chat_id)
-        tg.send(chat_id, compose_pantry_html(items), html=bool(items))
+        send_pantry(tg, con, chat_id)
         return
     tg.send(chat_id, fridge.answer_question(text))
 
@@ -688,10 +714,23 @@ def _markdown_to_html(text):
     return "\n".join(blocks)
 
 
+_EMOJI_RE = re.compile(
+    "[\U0001F000-\U0001FAFF\U00002600-\U000027BF\U0000FE0F\U0000200D]+")
+
+
+def _strip_emoji(text):
+    """The bot's own messages carry no emoji, so the model's don't either.
+    Asking the model is not enough with a small one; this makes it so."""
+    text = _EMOJI_RE.sub("", text)
+    return "\n".join(re.sub(r" {2,}", " ", line).rstrip()
+                     for line in text.split("\n")).strip()
+
+
 def send_llm_reply(tg, chat_id, text):
     """Falls back to the original, unformatted plain text if the converted
     HTML ever fails to send: a malformed tag from an imperfect conversion of
     free-form model text must never mean the user gets nothing back."""
+    text = _strip_emoji(text) or text
     if tg.send(chat_id, _markdown_to_html(text), html=True) is None:
         tg.send(chat_id, text)
 
@@ -753,13 +792,7 @@ def handle_recipe_link(tg, con, chat_id, text, cfg):
                          "draft it from those." % page["error"])
         return True
     if page.get("title"):
-        result = llm_agent.exec_draft_recipe(con, chat_id, page, date.today())
-        if result.get("error"):
-            tg.send(chat_id, "I couldn't make a draft from that page: it's "
-                             "either too long to show in one message or has no "
-                             "ingredients I can read. Paste the recipe instead.")
-            return True
-        send_pending_recipe(tg, con, chat_id)
+        show_recipe_draft(tg, con, chat_id, page)
         return True
     if ai_for(con, cfg, chat_id):
         send_llm_reply(tg, chat_id, run_ai(
@@ -769,6 +802,40 @@ def handle_recipe_link(tg, con, chat_id, text, cfg):
         return True
     tg.send(chat_id, "I couldn't find a recipe on that page that I can read "
                      "reliably. Paste the ingredients and steps instead.")
+    return True
+
+
+def show_recipe_draft(tg, con, chat_id, recipe):
+    """The one way a recipe reaches the Save and Cancel preview from code,
+    whether it came from a link or a paste, so both look and act the same."""
+    result = llm_agent.exec_draft_recipe(con, chat_id, recipe, date.today())
+    if result.get("error"):
+        tg.send(chat_id, "I couldn't make a draft from that: it's either too "
+                         "long to show in one message or has no ingredients I "
+                         "can read. Try a shorter version.")
+        return
+    send_pending_recipe(tg, con, chat_id)
+
+
+def handle_pasted_recipe(tg, con, chat_id, text, cfg):
+    """A pasted recipe, or "save to notes" right after one, straight to the
+    preview. True if handled.
+
+    Left to the model, a pasted recipe got an ingredient check or a question,
+    and "save to notes" got the recipe written back as chat text: never the
+    buttons a link gets. Owner only, like every recipe action.
+    """
+    if not recipes_for(cfg, chat_id):
+        return False
+    recipe = recipe_text.parse(text)
+    if recipe is None and recipe_text.is_save_request(text):
+        for earlier in reversed(llm_agent.recent_messages(con, chat_id)):
+            recipe = recipe_text.parse(earlier)
+            if recipe:
+                break
+    if recipe is None:
+        return False
+    show_recipe_draft(tg, con, chat_id, recipe)
     return True
 
 
@@ -907,8 +974,8 @@ def handle_account_command(tg, con, chat_id, text, cfg):
         return True
     if low.startswith("/deleteme"):
         tg.send(chat_id, DELETE_ASK, buttons=[[
-            {"text": "Yes, delete it all", "callback_data": "deleteme:yes"},
-            {"text": "No, keep it", "callback_data": "deleteme:no"},
+            {"text": "Delete it all", "callback_data": "deleteme:yes"},
+            {"text": "Cancel", "callback_data": "deleteme:no"},
         ]])
         return True
     return False
@@ -1013,9 +1080,14 @@ def handle_message(tg, con, msg, cfg):
     # or the privacy note.
     in_setup = (text.lower().startswith(("/start", "/setup", "/skip"))
                 or (onb.active(con, chat_id) and not text.startswith("/")))
-    if not in_setup and handle_recipe_link(tg, con, chat_id, text, cfg):
+    if not in_setup and (handle_recipe_link(tg, con, chat_id, text, cfg)
+                         or handle_pasted_recipe(tg, con, chat_id, text, cfg)
+                         or handle_listing_question(tg, con, chat_id, text)):
         return
-    if ai_for(con, cfg, chat_id) and not in_setup:
+    # Commands are the bot's, always. They used to go to the model with AI
+    # on, so a tap on /fridge in the menu got prose instead of the card, and
+    # the same tap looked different depending on a setting.
+    if ai_for(con, cfg, chat_id) and not in_setup and not text.startswith("/"):
         send_llm_reply(tg, chat_id, run_ai(con, chat_id, text, cfg))
         send_pending_recipe(tg, con, chat_id)
         return
@@ -1073,17 +1145,15 @@ def handle_message(tg, con, msg, cfg):
         send_freezer(tg, con, chat_id)
         return
     if low.startswith("/pantry"):
-        items = fridge.pantry_items(con, chat_id)
-        body = compose_pantry_html(items)
-        tg.send(chat_id, body, html=bool(items))
+        send_pantry(tg, con, chat_id)
         return
     if low.startswith("/undo"):
         tg.send(chat_id, fridge.undo_last(con, chat_id))
         return
     if low.startswith("/clear"):
         tg.send(chat_id, CLEAR_ASK, buttons=[[
-            {"text": "Yes, wipe it", "callback_data": "clear:yes"},
-            {"text": "No, keep it", "callback_data": "clear:no"},
+            {"text": "Wipe everything", "callback_data": "clear:yes"},
+            {"text": "Cancel", "callback_data": "clear:no"},
         ]])
         return
     if low.startswith("/seed"):
@@ -1159,41 +1229,35 @@ def handle_message(tg, con, msg, cfg):
         return
 
     tracked, stable, outside, again = fridge.add_items(con, chat_id, names)
+    send_capture(tg, con, chat_id, tracked, stable, outside, again)
 
-    # Lead with what the list actually turned out to be. Someone who sent their
-    # spice rack must not read "Logged 0 things" as a failure — the list went
-    # somewhere useful, it just was not the tracked pile.
-    lines = []
-    if tracked:
-        lines += ["Tracking %d thing%s:" % (
-            len(tracked), "" if len(tracked) == 1 else "s"), ""]
-        for name, ub, risk, est in tracked:
-            lines.append("  • %s: %s%s" % (
-                name, sl.when(ub), " (a guess)" if est else ""))
+
+def send_capture(tg, con, chat_id, tracked, stable, outside, again):
+    """What a list turned into, as the same card /fridge shows.
+
+    It used to be prose ("Tracking 2 things: ..."), so the same food looked
+    one way when added and another in /fridge. Now it is the card, with the
+    pantry and counter sorting said in a note underneath. Someone who sent
+    only their spice rack gets the pantry card instead: the list went
+    somewhere useful, it just was not the tracked pile.
+    """
+    notes = []
     if again:
-        if lines:
-            lines.append("")
-        lines += ["Already had %s, so I moved the date instead of adding a second one:"
-                  % ("this" if len(again) == 1 else "these"),
-                  "  " + ", ".join(again)]
+        notes.append("Already had %s, so the date moved: %s."
+                     % ("this" if len(again) == 1 else "these", ", ".join(again)))
     if stable:
-        if lines:
-            lines.append("")
-        lines += ["Put %d in your pantry: no clock on %s, so no nudges:" % (
-            len(stable), "it" if len(stable) == 1 else "them"),
-            "  " + ", ".join(stable)]
+        notes.append("Pantry, no nudges: %s." % ", ".join(stable))
     if outside:
-        if lines:
-            lines.append("")
-        lines += ["These keep better on the counter than in the fridge, so I am "
-                  "remembering them without tracking them:",
-                  "  " + ", ".join(outside)]
-    if stable or outside:
-        lines += ["", "/pantry any time to see that list."]
-    soonest = min((a[1] for a in tracked), default=None)
-    if soonest:
-        lines += ["", "First one to watch: %s." % sl.when(soonest)]
-    tg.send(chat_id, "\n".join(lines))
+        notes.append("Counter, no nudges: %s." % ", ".join(outside))
+    added = {name for name, _, _, _ in tracked} | set(again)
+    items = [i for i in fridge.open_items(con, chat_id) if i["name"] in added]
+    if items:
+        send_card(tg, con, chat_id, "fridge", "Added to your fridge", items,
+                  date.today(), notes=notes)
+    elif stable or outside:
+        tg.send(chat_id, card.render_pantry(
+            "Added to your pantry", _capped_names(stable), _capped_names(outside)),
+            html=True)
 
 
 def handle_callback(tg, con, cb, cfg):

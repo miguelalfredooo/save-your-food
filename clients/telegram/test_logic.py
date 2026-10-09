@@ -26,6 +26,7 @@ import art
 import bot
 import card
 import llm_agent
+import recipe_text
 
 TODAY = date(2026, 9, 23)   # a Wednesday, so weekday names are checkable
 
@@ -2563,7 +2564,7 @@ class BotHandlers(unittest.TestCase):
 
     def test_capturing_a_list_does_not_crash(self):
         bot.handle_message(self.tg, self.con, {"chat": {"id": 1, "type": "private"}, "text": "milk, spinach"}, CFG)
-        self.assertIn("First one to watch", self.tg.sent[-1])
+        self.assertIn("Added to your fridge", self.tg.sent[-1])
 
     def test_an_unseparated_list_is_asked_for_commas_not_mistracked(self):
         bot.handle_message(self.tg, self.con, {"chat": {"id": 1, "type": "private"},
@@ -2807,7 +2808,8 @@ class BotHandlers(unittest.TestCase):
         self.assertEqual([p["name"] for p in fridge.pantry_items(self.con, 1)], ["cumin"])
         self.assertIn("butter chicken (leftovers)", by_name)
         self.assertEqual(by_name["butter chicken (leftovers)"]["risk"], sl.YELLOW)
-        self.assertIn("butter chicken (leftovers)", self.tg.sent[-1])
+        self.assertIn("butter chicken", self.tg.sent[-1])
+        self.assertIn("(leftovers)", self.tg.sent[-1])     # wrapped, not cut
 
     def test_put_them_in_the_fridge_still_corrects(self):
         # A pronoun instead of a food: this is about the last list, not a capture.
@@ -4387,6 +4389,278 @@ class RecipeLinks(unittest.TestCase):
                               "it was too sweet, what can I swap?")
         self.assertEqual(self.fetched, [])
         self.assertEqual(len(self.ai), 1)
+
+
+SMOOTHIE = """Vanilla berry protein smoothie
+
+Ingredients
+for 2 servings
+• 1 ½ cups water, or yogurt or milk of choice
+• 1 scoop vanilla protein powder
+• 1 cup strawberry, frozen
+• 1 cup blueberry, frozen
+• ½ cup raspberry, frozen
+• ½ cup blackberry, frozen"""
+
+MEAT_SAUCE = """“Easy Italian Meat Sauce
+4 tablespoons butter
+2 tablespoons olive oil
+1 carrot, finely chopped
+1 onion, chopped
+2 garlic cloves, chopped
+¾ pound ground beef
+1 can (28 ounces) whole tomatoes
+½ cup milk
+Coarse salt and fresh ground pepper
+1. Heat butter and oil in a large pot over medium heat.
+2. Add carrot, onion and garlic and cook until soft, about 8 minutes.”"""
+
+
+class PastedRecipes(unittest.TestCase):
+    """A pasted recipe gets the same Save/Cancel preview as a link, built in
+    code, without waiting on the model to decide to draft it."""
+
+    def test_a_recipe_with_an_ingredients_heading_is_read(self):
+        r = recipe_text.parse(SMOOTHIE)
+        self.assertEqual(r["title"], "Vanilla berry protein smoothie")
+        self.assertIn("1 scoop vanilla protein powder", r["ingredients"])
+        self.assertEqual(r["ingredients"][-1], "½ cup blackberry, frozen")
+        self.assertEqual(r["steps"], [])
+
+    def test_a_recipe_with_numbered_steps_is_split(self):
+        r = recipe_text.parse(MEAT_SAUCE)
+        self.assertEqual(r["title"], "Easy Italian Meat Sauce")
+        self.assertIn("Coarse salt and fresh ground pepper", r["ingredients"])
+        self.assertEqual(r["steps"][0], "Heat butter and oil in a large pot over medium heat.")
+        self.assertTrue(r["steps"][1].endswith("about 8 minutes."))
+
+    def test_words_are_kept_as_written(self):
+        r = recipe_text.parse(MEAT_SAUCE)
+        self.assertIn("1 can (28 ounces) whole tomatoes", r["ingredients"])
+
+    def test_a_grocery_list_is_not_a_recipe(self):
+        for text in ("2 lbs chicken\n1 dozen eggs\nmilk\n3 apples",
+                     "milk, eggs, bread",
+                     "Shopping\n2 lbs chicken\n1 dozen eggs\n3 apples",
+                     "I had 2 cups of coffee and 1 bagel today"):
+            self.assertIsNone(recipe_text.parse(text), text)
+
+    def test_a_save_request_is_recognised(self):
+        for t in ("Save to notes", "save it", "Add as a recipe", "save this recipe"):
+            self.assertTrue(recipe_text.is_save_request(t), t)
+        for t in ("what can I make", "save me some time", "milk, eggs"):
+            self.assertFalse(recipe_text.is_save_request(t), t)
+
+
+class PastedRecipeFlow(unittest.TestCase):
+    OWNER, OTHER = 1, 2
+    CFG = dict(CFG, allowed_chat_ids=[1, 2], llm_mode=True, openrouter_api_key="k")
+
+    def setUp(self):
+        self.con = fridge.connect(tempfile.mktemp(suffix=".db"))
+        self.tg = FakeTG()
+        bot.reset_rate_limits()
+        for chat in (self.OWNER, self.OTHER):
+            onb.set_step(self.con, chat, onb.DONE)
+        self.ai = []
+        self.orig = llm_agent.run_agent
+        llm_agent.run_agent = lambda con, chat_id, text, cfg, **k: self.ai.append(text) or "ai reply"
+
+    def tearDown(self):
+        llm_agent.run_agent = self.orig
+
+    def _say(self, chat_id, text, cfg=None):
+        bot.handle_message(self.tg, self.con, {
+            "chat": {"id": chat_id, "type": "private"}, "text": text}, cfg or self.CFG)
+
+    def test_a_pasted_recipe_goes_straight_to_the_preview(self):
+        self._say(self.OWNER, MEAT_SAUCE)
+        self.assertEqual(self.ai, [])
+        self.assertTrue(self.tg.sent[-1].startswith("Easy Italian Meat Sauce"))
+        self.assertEqual([b["text"] for b in self.tg.buttons[-1][0]],
+                         ["Save to Notes", "Cancel"])
+
+    def test_it_works_with_ai_off(self):
+        self._say(self.OWNER, SMOOTHIE, dict(self.CFG, llm_mode=False))
+        self.assertEqual(self.tg.buttons[-1][0][0]["text"], "Save to Notes")
+
+    def test_only_the_owner(self):
+        self._say(self.OTHER, MEAT_SAUCE)
+        self.assertEqual(len(self.ai), 1)
+
+    def test_save_to_notes_drafts_the_recipe_sent_before(self):
+        # The model got the recipe (say it was phrased oddly) and replied.
+        llm_agent._remember(self.con, self.OWNER, MEAT_SAUCE, "Looks tasty!",
+                            datetime.now())
+        self._say(self.OWNER, "Save to notes")
+        self.assertEqual(self.ai, [])
+        self.assertTrue(self.tg.sent[-1].startswith("Easy Italian Meat Sauce"))
+        self.assertEqual(self.tg.buttons[-1][0][0]["text"], "Save to Notes")
+
+    def test_save_to_notes_with_nothing_before_goes_to_the_model(self):
+        self._say(self.OWNER, "Save to notes")
+        self.assertEqual(self.ai, ["Save to notes"])
+
+
+class CommandsAreAlwaysTheBots(unittest.TestCase):
+    """With AI mode on, a slash command used to go to the model, so /fridge
+    from the menu got prose instead of the card. Commands are the bot's;
+    the model only gets free text."""
+
+    CFG = dict(CFG, allowed_chat_ids=[1], llm_mode=True, openrouter_api_key="k")
+
+    def setUp(self):
+        self.con = fridge.connect(tempfile.mktemp(suffix=".db"))
+        self.tg = FakeTG()
+        bot.reset_rate_limits()
+        onb.set_step(self.con, 1, onb.DONE)
+        fridge.add_items(self.con, 1, ["milk"], TODAY)
+        self.ai = []
+        self.orig = llm_agent.run_agent
+        llm_agent.run_agent = lambda con, chat_id, text, cfg, **k: self.ai.append(text) or "ai reply"
+
+    def tearDown(self):
+        llm_agent.run_agent = self.orig
+
+    def _say(self, text):
+        bot.handle_message(self.tg, self.con, {
+            "chat": {"id": 1, "type": "private"}, "text": text}, self.CFG)
+
+    def test_every_menu_command_is_handled_by_the_bot(self):
+        for cmd in ("/fridge", "/nudge", "/pantry", "/freezer", "/month",
+                    "/undo", "/clear", "/help", "/fridge@fridgebot"):
+            self._say(cmd)
+        self.assertEqual(self.ai, [])
+
+    def test_fridge_is_the_card_with_ai_on(self):
+        self._say("/fridge")
+        self.assertIn("<pre>", self.tg.sent[-1])
+        self.assertTrue(self.tg.buttons[-1])
+
+    def test_an_unknown_command_gets_help_not_the_model(self):
+        self._say("/whatever")
+        self.assertEqual(self.tg.sent[-1], bot.HELP)
+        self.assertEqual(self.ai, [])
+
+    def test_free_text_still_goes_to_the_model(self):
+        self._say("what can I make tonight?")
+        self.assertEqual(self.ai, ["what can I make tonight?"])
+
+
+class OneLookForLists(unittest.TestCase):
+    """Adding food, /fridge and /pantry all answer as the same kind of card,
+    and every confirm button reads [Action] [Cancel]."""
+
+    def setUp(self):
+        self.con = fridge.connect(tempfile.mktemp(suffix=".db"))
+        self.tg = FakeTG()
+        bot.reset_rate_limits()
+        onb.set_step(self.con, 1, onb.DONE)
+
+    def _say(self, text):
+        bot.handle_message(self.tg, self.con, {
+            "chat": {"id": 1, "type": "private"}, "text": text}, CFG)
+
+    def test_a_typed_list_answers_with_the_fridge_card(self):
+        self._say("milk, spinach, rice")
+        html = self.tg.sent[-1]
+        self.assertTrue(html.startswith("<b>Added to your fridge</b>\n<pre>"))
+        self.assertIn("Pantry, no nudges: rice.", html.replace("\n", " "))
+        self.assertEqual(len(self.tg.buttons[-1]), 2)
+
+    def test_a_capture_tap_edits_that_card(self):
+        self._say("milk")
+        item = fridge.open_items(self.con, 1)[0]
+        bot.handle_callback(self.tg, self.con, {
+            "id": "cb", "data": "used:%d" % item["id"],
+            "message": {"chat": {"id": 1, "type": "private"},
+                        "message_id": len(self.tg.sent)}}, CFG)
+        self.assertEqual(len(self.tg.sent), 1)               # edited, not resent
+        self.assertIn("used", self.tg.edits[-1])
+
+    def test_only_pantry_things_get_the_pantry_card(self):
+        self._say("cumin, rice, olive oil")
+        self.assertTrue(self.tg.sent[-1].startswith("<b>Added to your pantry</b>"))
+        self.assertIsNone(self.tg.buttons[-1])
+
+    def test_slash_pantry_is_a_card(self):
+        fridge.add_items(self.con, 1, ["cumin", "olive oil", "onions"], TODAY)
+        self._say("/pantry")
+        html = self.tg.sent[-1]
+        self.assertIn("<pre>", html)
+        self.assertIn("PANTRY (2)", html)
+        self.assertIn("ON THE COUNTER (1)", html)
+
+    def test_pantry_names_wrap_between_names(self):
+        lines = card._wrap_names(["cumin", "rice", "olive oil", "chicken bouillon"], "  ")
+        self.assertIn("  olive oil,", lines)
+        for line in lines:
+            self.assertLessEqual(len(line), card.WIDTH)
+
+    def test_a_long_name_wraps_instead_of_being_cut(self):
+        rows = card._row("1 butter chicken (leftovers)", "in 3d")
+        self.assertNotIn("…", "".join(rows))
+        self.assertIn("(leftovers)", "".join(rows))
+        for row in rows:
+            self.assertLessEqual(len(row), card.WIDTH)
+
+    def test_confirm_buttons_are_action_then_cancel(self):
+        for cmd in ("/clear", "/deleteme"):
+            self._say(cmd)
+            labels = [b["text"] for b in self.tg.buttons[-1][0]]
+            self.assertEqual(labels[1], "Cancel", cmd)
+            self.assertFalse(labels[0].lower().startswith(("yes", "no")), cmd)
+
+
+class AIVoiceAndListings(unittest.TestCase):
+    """The model sounds like the bot, and a plain "what's in my fridge"
+    gets the card, not the model's prose version of it."""
+
+    CFG = dict(CFG, allowed_chat_ids=[1], llm_mode=True, openrouter_api_key="k")
+
+    def setUp(self):
+        self.con = fridge.connect(tempfile.mktemp(suffix=".db"))
+        self.tg = FakeTG()
+        bot.reset_rate_limits()
+        onb.set_step(self.con, 1, onb.DONE)
+        fridge.add_items(self.con, 1, ["milk", "cumin"], TODAY)
+        self.ai = []
+        self.orig = llm_agent.run_agent
+        llm_agent.run_agent = lambda con, chat_id, text, cfg, **k: self.ai.append(text) or "ok"
+
+    def tearDown(self):
+        llm_agent.run_agent = self.orig
+
+    def _say(self, text):
+        bot.handle_message(self.tg, self.con, {
+            "chat": {"id": 1, "type": "private"}, "text": text}, self.CFG)
+
+    def test_listing_questions_get_the_card(self):
+        for q, marker in (("what's in my fridge?", "In your fridge"),
+                          ("What is in the fridge", "In your fridge"),
+                          ("show me my pantry", "PANTRY"),
+                          ("what do I have in the freezer?", "freezer")):
+            self._say(q)
+            self.assertIn(marker, self.tg.sent[-1], q)
+        self.assertEqual(self.ai, [])
+
+    def test_questions_about_the_contents_still_go_to_the_model(self):
+        for q in ("is the milk in the fridge still ok?",
+                  "what can I make with what's in my fridge?",
+                  "what's in my fridge that I should use first?"):
+            self._say(q)
+        self.assertEqual(len(self.ai), 3)
+
+    def test_emoji_are_stripped_from_ai_replies(self):
+        tg = FakeTG()
+        bot.send_llm_reply(tg, 1, "Got it! 😊 Berries 🍓🫐 are in.")
+        self.assertEqual(tg.sent[-1], "Got it! Berries are in.")
+
+    def test_the_prompt_rules_out_emoji_and_sign_offs(self):
+        p = " ".join(llm_agent.SYSTEM_PROMPT.lower().split())
+        self.assertIn("no emoji", p)
+        self.assertIn("i'm here to help", p)
+        self.assertIn("at most one question", p)
 
 
 class MonthSummaryTool(unittest.TestCase):

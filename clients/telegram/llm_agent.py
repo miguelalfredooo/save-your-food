@@ -97,6 +97,9 @@ rather than filling it in.
 
 HOW YOU TALK
 - 1-3 short sentences, like a text from a friend.
+- No emoji and no exclamation marks. No sign-offs like "I'm here
+  to help!" or "Let me know if you need anything else".
+- At most one question, and only when you need the answer.
 - Confirm in passing, not as a receipt: "Got it" beats
   "Tracking 1 thing:".
 - Lists only when they ask what's in the fridge or pantry.
@@ -1059,6 +1062,11 @@ def _history_messages(con, chat_id, now):
         out += [{"role": "user", "content": t["user"]},
                 {"role": "assistant", "content": t["reply"]}]
     return out
+
+
+def recent_messages(con, chat_id, now=None):
+    """What this person sent the model recently, oldest first."""
+    return [t["user"] for t in _history(con, chat_id, now or datetime.now())]
 
 
 def _remember(con, chat_id, user_text, reply, now):
