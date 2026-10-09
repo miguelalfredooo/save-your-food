@@ -2466,9 +2466,9 @@ class SeedClassification(unittest.TestCase):
 
 class LLMReplyFormatting(unittest.TestCase):
     """The model writes plain markdown and, for a list, "- " bulleted
-    lines. Telegram needs HTML to render either, and a run of bulleted
-    lines needs a monospace <pre> block or a phone's proportional font
-    scrambles the alignment."""
+    lines. Telegram needs HTML to render either. A list is plain "•" lines,
+    not a <pre> block: Telegram draws <pre> as code, with a copy icon, and a
+    list of words has no columns to keep."""
 
     def test_bold_and_italic_become_html_tags(self):
         html = bot._markdown_to_html("**Got it.** Should be good till *Sunday*.")
@@ -2478,10 +2478,11 @@ class LLMReplyFormatting(unittest.TestCase):
         self.assertEqual(bot._markdown_to_html("use `/undo` any time"),
                          "use <code>/undo</code> any time")
 
-    def test_a_bulleted_list_is_wrapped_in_a_pre_block(self):
-        text = "Here's what you have:\n- milk: today\n- eggs: in 5 days"
+    def test_a_bulleted_list_becomes_plain_bullet_lines(self):
+        text = "Here's what you have:\n- milk: today\n- eggs: in *5* days"
         html = bot._markdown_to_html(text)
-        self.assertEqual(html, "Here's what you have:\n<pre>- milk: today\n- eggs: in 5 days</pre>")
+        self.assertEqual(html, "Here's what you have:\n• milk: today\n• eggs: in <i>5</i> days")
+        self.assertNotIn("<pre>", html)
 
     def test_overlapping_bold_and_italic_fall_back_to_plain_rather_than_break(self):
         # "**bold *italic** more*" crosses its own boundaries: bold and
@@ -2513,7 +2514,7 @@ class LLMReplyFormatting(unittest.TestCase):
 
     def test_a_lone_dash_bullet_is_not_mistaken_for_a_rule(self):
         html = bot._markdown_to_html("- milk")
-        self.assertEqual(html, "<pre>- milk</pre>")
+        self.assertEqual(html, "• milk")
 
     def test_html_special_characters_are_escaped(self):
         html = bot._markdown_to_html("watch out for <3 cilantro & onions")
@@ -4237,6 +4238,82 @@ class BotName(unittest.TestCase):
                                                "text": "/start"}, cfg)
         self.assertIn("What Save Your Food keeps", self.tg.sent[0])
         self.assertIn("I'm Save Your Food.", self.tg.sent[1])
+
+
+class AIMemory(unittest.TestCase):
+    """A follow-up like "add as a recipe" only works if the model sees the
+    message it follows. A few recent exchanges ride along, briefly."""
+
+    NOW = datetime(2026, 10, 8, 20, 0)
+
+    def setUp(self):
+        self.con = fridge.connect(tempfile.mktemp(suffix=".db"))
+        self.seen = []
+
+    def _run(self, text, reply, now):
+        def caller(messages):
+            self.seen.append(messages)
+            return {"choices": [{"message": {"content": reply}}]}
+        return llm_agent.run_agent(self.con, 1, text, CFG, now.date(),
+                                   caller=caller, now=now)
+
+    def test_the_last_exchange_is_sent_with_the_next_message(self):
+        self._run("Vanilla smoothie: milk, berries", "Nice smoothie!", self.NOW)
+        self._run("Add as a recipe", "Drafting it.", self.NOW + timedelta(minutes=2))
+        sent = self.seen[-1]
+        self.assertEqual([m["role"] for m in sent], ["system", "user", "assistant", "user"])
+        self.assertEqual(sent[1]["content"], "Vanilla smoothie: milk, berries")
+        self.assertEqual(sent[2]["content"], "Nice smoothie!")
+        self.assertEqual(sent[3]["content"], "Add as a recipe")
+
+    def test_only_the_last_few_exchanges_are_kept(self):
+        for n in range(6):
+            self._run("msg %d" % n, "reply %d" % n, self.NOW + timedelta(minutes=n))
+        self._run("latest", "ok", self.NOW + timedelta(minutes=7))
+        users = [m["content"] for m in self.seen[-1] if m["role"] == "user"]
+        self.assertEqual(users, ["msg 3", "msg 4", "msg 5", "latest"])
+
+    def test_old_exchanges_are_forgotten(self):
+        self._run("old", "old reply", self.NOW)
+        self._run("new", "ok", self.NOW + timedelta(minutes=45))
+        self.assertEqual([m["role"] for m in self.seen[-1]], ["system", "user"])
+
+    def test_a_failed_call_is_not_remembered(self):
+        def boom(messages):
+            raise OSError("down")
+        llm_agent.run_agent(self.con, 1, "hello", CFG, self.NOW.date(),
+                            caller=boom, now=self.NOW)
+        self._run("again", "ok", self.NOW + timedelta(minutes=1))
+        self.assertEqual([m["role"] for m in self.seen[-1]], ["system", "user"])
+
+    def test_memory_is_per_person(self):
+        self._run("mine", "ok", self.NOW)
+        seen = []
+        llm_agent.run_agent(self.con, 2, "theirs", CFG, self.NOW.date(),
+                            caller=lambda m: seen.append(m) or
+                            {"choices": [{"message": {"content": "ok"}}]},
+                            now=self.NOW)
+        self.assertEqual([m["role"] for m in seen[0]], ["system", "user"])
+
+    def test_deleteme_forgets_it(self):
+        self._run("mine", "ok", self.NOW)
+        fridge.delete_person(self.con, 1)
+        self._run("again", "ok", self.NOW + timedelta(minutes=1))
+        self.assertEqual([m["role"] for m in self.seen[-1]], ["system", "user"])
+
+    def test_a_photo_is_remembered_as_its_caption_not_its_bytes(self):
+        def caller(messages):
+            self.seen.append(messages)
+            return {"choices": [{"message": {"content": "I see milk."}}]}
+        llm_agent.run_agent(self.con, 1, "my fridge", CFG, self.NOW.date(),
+                            caller=caller, image_b64="aGVsbG8=", now=self.NOW)
+        self._run("thanks", "ok", self.NOW + timedelta(minutes=1))
+        self.assertEqual(self.seen[-1][1]["content"], "my fridge [photo]")
+
+    def test_the_prompt_drafts_a_pasted_recipe(self):
+        p = " ".join(llm_agent.SYSTEM_PROMPT.lower().split())
+        self.assertIn("looks like a recipe", p)
+        self.assertIn("earlier in the conversation", p)
 
 
 class MonthSummaryTool(unittest.TestCase):

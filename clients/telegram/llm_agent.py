@@ -26,7 +26,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from html import escape as _escape
 from html import unescape as _unescape
 
@@ -72,8 +72,12 @@ Offering options from search_recipes: name each one in one short
 line, the dish name and what of theirs it uses. Don't write out
 more than one full recipe at a time.
 
-Adding a recipe to their Notes, when they send one or a link to one:
-for a link, fetch_recipe_page first. Then draft_recipe with the title,
+Adding a recipe to their Notes: when they ask to, or when a message
+looks like a recipe (a dish name with an ingredient list or steps) and
+asks for nothing else, draft it straight away rather than asking or
+checking their fridge; the preview has a Cancel button, so a wrong guess
+costs one tap. If they ask to add one they sent earlier in the
+conversation, draft that one. For a link, fetch_recipe_page first. Then draft_recipe with the title,
 ingredients and steps exactly as the source gives them. Never invent,
 reword or "fix" anything; if something is missing, leave it out and
 say so. Not from a photo: if they send a picture of a recipe, ask them
@@ -1026,8 +1030,46 @@ def _default_caller(cfg, tools=TOOLS):
         cfg["openrouter_api_key"], cfg["llm_model"], messages, tools)
 
 
+# --- short memory -----------------------------------------------------------
+#
+# Each message used to reach the model alone, so "add as a recipe" right
+# after sending one got "could you send me the recipe?". A few recent
+# exchanges now ride along. Kept short and brief on purpose: it is a
+# follow-up window, not a history, and every remembered word is paid for
+# again on every call. Lives in meta, so /deleteme forgets it too.
+
+HISTORY_KEY = "ai_history"
+HISTORY_TURNS = 3
+HISTORY_MINUTES = 30
+
+
+def _history(con, chat_id, now):
+    raw = fridge.get_pref(con, chat_id, HISTORY_KEY)
+    try:
+        turns = json.loads(raw) if raw else []
+    except ValueError:
+        turns = []
+    cutoff = (now - timedelta(minutes=HISTORY_MINUTES)).isoformat()
+    return [t for t in turns if t.get("at", "") >= cutoff][-HISTORY_TURNS:]
+
+
+def _history_messages(con, chat_id, now):
+    out = []
+    for t in _history(con, chat_id, now):
+        out += [{"role": "user", "content": t["user"]},
+                {"role": "assistant", "content": t["reply"]}]
+    return out
+
+
+def _remember(con, chat_id, user_text, reply, now):
+    turns = _history(con, chat_id, now) + [
+        {"at": now.isoformat(), "user": user_text, "reply": reply}]
+    fridge.set_pref(con, chat_id, HISTORY_KEY,
+                    json.dumps(turns[-HISTORY_TURNS:]))
+
+
 def run_agent(con, chat_id, text, cfg, today=None, caller=None, image_b64=None,
-              recipes=True):
+              recipes=True, now=None):
     """caller lets tests substitute a fake model instead of the real API, the
     same shape FakeTG substitutes for the real Telegram class.
 
@@ -1041,8 +1083,11 @@ def run_agent(con, chat_id, text, cfg, today=None, caller=None, image_b64=None,
     the tool list, the prompt says so, and a call to one is refused anyway in
     case the model tries.
     """
-    today = today or date.today()
+    now = now or datetime.now()
+    today = today or now.date()
     call = caller or _default_caller(cfg, tools_for(recipes))
+    # A photo is remembered by its caption, never its bytes.
+    remembered = ((text or "") + (" [photo]" if image_b64 else "")).strip()
 
     user_content = text
     if image_b64:
@@ -1056,6 +1101,7 @@ def run_agent(con, chat_id, text, cfg, today=None, caller=None, image_b64=None,
         system += "\n\n" + NO_RECIPES_NOTE
     messages = [
         {"role": "system", "content": system},
+    ] + _history_messages(con, chat_id, now) + [
         {"role": "user", "content": user_content},
     ]
 
@@ -1077,7 +1123,12 @@ def run_agent(con, chat_id, text, cfg, today=None, caller=None, image_b64=None,
         choice = resp["choices"][0]["message"]
         tool_calls = choice.get("tool_calls")
         if not tool_calls:
-            return choice.get("content") or "..."
+            reply = choice.get("content") or "..."
+            try:
+                _remember(con, chat_id, remembered, reply, now)
+            except Exception as e:   # memory must never cost the user a reply
+                print("! llm_agent history not saved: %s" % e)
+            return reply
         messages.append(choice)
         for tc in tool_calls:
             name = tc["function"]["name"]
