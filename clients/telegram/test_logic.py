@@ -1923,7 +1923,7 @@ class BotHandlers(unittest.TestCase):
     def test_llm_mode_bypasses_the_regex_pipeline_entirely(self):
         cfg = dict(CFG, llm_mode=True)
         original = llm_agent.run_agent
-        llm_agent.run_agent = lambda con, chat_id, text, cfg: "fake agent reply"
+        llm_agent.run_agent = lambda con, chat_id, text, cfg, **kw: "fake agent reply"
         try:
             bot.handle_message(self.tg, self.con, {"chat": {"id": 1, "type": "private"},
                                "text": "milk, spinach"}, cfg)
@@ -3176,6 +3176,129 @@ class Invites(unittest.TestCase):
     def test_an_open_bot_needs_no_invite(self):
         cfg = dict(self.CFG, allowed_chat_ids=[])
         self.assertTrue(bot.allowed(self.con, cfg, self.STRANGER))
+
+
+class AIPerPerson(unittest.TestCase):
+    """AI mode is the owner's (and config.json's) by default. A member gets it
+    only when the owner turns it on, and never gets the owner's recipes."""
+
+    OWNER, FRIEND = 1, 2
+    CFG = dict(CFG, allowed_chat_ids=[1], llm_mode=True,
+               openrouter_api_key="k", bot_username="fridgebot")
+
+    def setUp(self):
+        self.con = fridge.connect(tempfile.mktemp(suffix=".db"))
+        self.tg = FakeTG()
+        bot.reset_rate_limits()
+        self.calls = []
+        self.orig_run_agent = llm_agent.run_agent
+        llm_agent.run_agent = lambda con, chat_id, text, cfg, **kw: (
+            self.calls.append((chat_id, kw.get("recipes", True))) or "ai reply")
+        code = fridge.create_invite(self.con)
+        fridge.redeem_invite(self.con, code, self.FRIEND, "Ana")
+        onb.set_step(self.con, self.FRIEND, onb.DONE)
+        onb.set_step(self.con, self.OWNER, onb.DONE)
+
+    def tearDown(self):
+        llm_agent.run_agent = self.orig_run_agent
+
+    def _say(self, chat_id, text):
+        bot.handle_message(self.tg, self.con, {
+            "chat": {"id": chat_id, "type": "private"}, "text": text}, self.CFG)
+
+    def _toggle(self, chat_id):
+        bot.handle_callback(self.tg, self.con, {
+            "id": "cb", "data": "member:ai:%d" % chat_id,
+            "message": {"chat": {"id": self.OWNER, "type": "private"},
+                        "message_id": 1}}, self.CFG)
+
+    def test_the_owner_gets_ai_with_recipes(self):
+        self._say(self.OWNER, "what can I cook")
+        self.assertEqual(self.calls, [(self.OWNER, True)])
+
+    def test_a_member_starts_without_ai(self):
+        self._say(self.FRIEND, "milk, spinach")
+        self.assertEqual(self.calls, [])
+        self.assertIn("spinach", self.tg.sent[-1])     # the rule-based capture
+
+    def test_a_member_without_ai_cannot_send_photos_to_it(self):
+        bot.handle_message(self.tg, self.con, {
+            "chat": {"id": self.FRIEND, "type": "private"},
+            "photo": [{"file_id": "x", "width": 1, "height": 1}]}, self.CFG)
+        self.assertEqual(self.calls, [])
+
+    def test_the_owner_can_turn_ai_on_for_a_member_without_recipes(self):
+        self._toggle(self.FRIEND)
+        self._say(self.FRIEND, "what can I cook")
+        self.assertEqual(self.calls, [(self.FRIEND, False)])
+        self._toggle(self.FRIEND)
+        self._say(self.FRIEND, "milk")
+        self.assertEqual(len(self.calls), 1)
+
+    def test_members_shows_an_ai_button_only_when_ai_exists(self):
+        self._say(self.OWNER, "/members")
+        texts = [b["text"] for row in self.tg.buttons[-1] for b in row]
+        self.assertTrue(any("AI" in t for t in texts))
+        bot.handle_message(self.tg, self.con, {
+            "chat": {"id": self.OWNER, "type": "private"}, "text": "/members"},
+            dict(self.CFG, llm_mode=False))
+        texts = [b["text"] for row in self.tg.buttons[-1] for b in row]
+        self.assertFalse(any("AI" in t for t in texts))
+
+    def test_owner_commands_work_with_ai_on(self):
+        self._say(self.OWNER, "/invite")
+        self.assertIn("https://t.me/fridgebot?start=", self.tg.sent[-1])
+        self.assertEqual(self.calls, [])
+
+    def test_a_member_cannot_toggle_ai(self):
+        bot.handle_callback(self.tg, self.con, {
+            "id": "cb", "data": "member:ai:%d" % self.FRIEND,
+            "message": {"chat": {"id": self.FRIEND, "type": "private"},
+                        "message_id": 1}}, self.CFG)
+        self.assertFalse(bot.ai_for(self.con, self.CFG, self.FRIEND))
+
+    def test_removing_a_member_turns_their_ai_off(self):
+        self._toggle(self.FRIEND)
+        fridge.remove_member(self.con, self.FRIEND)
+        code = fridge.create_invite(self.con)
+        fridge.redeem_invite(self.con, code, self.FRIEND, "Ana")
+        self.assertFalse(bot.ai_for(self.con, self.CFG, self.FRIEND))
+
+
+class RecipesOwnerOnly(unittest.TestCase):
+    """run_agent(recipes=False) neither offers search_recipes nor runs it."""
+
+    def setUp(self):
+        self.con = fridge.connect(tempfile.mktemp(suffix=".db"))
+        fridge.add_items(self.con, 2, ["milk"], TODAY)
+        self.orig_fetch = llm_agent.fetch_recipes
+        self.fetched = []
+        llm_agent.fetch_recipes = lambda *a, **k: self.fetched.append(1) or []
+
+    def tearDown(self):
+        llm_agent.fetch_recipes = self.orig_fetch
+
+    def test_the_tool_is_not_offered(self):
+        names = [t["function"]["name"] for t in llm_agent.tools_for(recipes=False)]
+        self.assertNotIn("search_recipes", names)
+        self.assertIn("add_items", names)
+        all_names = [t["function"]["name"] for t in llm_agent.tools_for(recipes=True)]
+        self.assertIn("search_recipes", all_names)
+
+    def test_a_call_to_it_anyway_is_refused(self):
+        replies = [
+            {"choices": [{"message": {"tool_calls": [{"id": "c1", "function": {
+                "name": "search_recipes", "arguments": "{}"}}]}}]},
+            {"choices": [{"message": {"content": "done"}}]},
+        ]
+        seen = []
+        def caller(messages):
+            seen.append(messages[-1])
+            return replies[len(seen) - 1]
+        llm_agent.run_agent(self.con, 2, "recipes?", CFG, TODAY,
+                            caller=caller, recipes=False)
+        self.assertEqual(self.fetched, [])
+        self.assertIn("not available", seen[-1]["content"])
 
 
 class MonthSummaryTool(unittest.TestCase):

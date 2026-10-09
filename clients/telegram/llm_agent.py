@@ -580,15 +580,28 @@ def call_ollama(base_url, model, messages, tools, timeout=REQUEST_TIMEOUT):
         return json.loads(r.read().decode())
 
 
-def _default_caller(cfg):
+def tools_for(recipes=True):
+    """The tools offered to the model. Recipes are the bot owner's own Apple
+    Notes, so a chat that isn't the owner's is never offered the search."""
+    if recipes:
+        return TOOLS
+    return [t for t in TOOLS if t["function"]["name"] != "search_recipes"]
+
+
+NO_RECIPES_NOTE = ("search_recipes is not available in this chat. Never offer "
+                   "or mention saved recipes here.")
+
+
+def _default_caller(cfg, tools=TOOLS):
     if cfg.get("llm_provider") == "ollama":
         base_url = cfg.get("ollama_base_url", "http://localhost:11434/v1")
-        return lambda messages: call_ollama(base_url, cfg["ollama_model"], messages, TOOLS)
+        return lambda messages: call_ollama(base_url, cfg["ollama_model"], messages, tools)
     return lambda messages: call_openrouter(
-        cfg["openrouter_api_key"], cfg["llm_model"], messages, TOOLS)
+        cfg["openrouter_api_key"], cfg["llm_model"], messages, tools)
 
 
-def run_agent(con, chat_id, text, cfg, today=None, caller=None, image_b64=None):
+def run_agent(con, chat_id, text, cfg, today=None, caller=None, image_b64=None,
+              recipes=True):
     """caller lets tests substitute a fake model instead of the real API, the
     same shape FakeTG substitutes for the real Telegram class.
 
@@ -596,9 +609,13 @@ def run_agent(con, chat_id, text, cfg, today=None, caller=None, image_b64=None):
     sent alongside the text as a vision content block. Whether anything
     happens with it depends entirely on the chosen model actually being
     vision-capable; a text-only model just never mentions it.
+
+    recipes=False is for anyone but the bot's owner: search_recipes reads the
+    owner's Apple Notes, so it is left off the tool list, the prompt says so,
+    and a call to it is refused anyway in case the model tries.
     """
     today = today or date.today()
-    call = caller or _default_caller(cfg)
+    call = caller or _default_caller(cfg, tools_for(recipes))
 
     user_content = text
     if image_b64:
@@ -607,8 +624,11 @@ def run_agent(con, chat_id, text, cfg, today=None, caller=None, image_b64=None):
             {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,%s" % image_b64}},
         ]
 
+    system = build_system_prompt(con, chat_id, today)
+    if not recipes:
+        system += "\n\n" + NO_RECIPES_NOTE
     messages = [
-        {"role": "system", "content": build_system_prompt(con, chat_id, today)},
+        {"role": "system", "content": system},
         {"role": "user", "content": user_content},
     ]
 
@@ -635,8 +655,11 @@ def run_agent(con, chat_id, text, cfg, today=None, caller=None, image_b64=None):
             except (ValueError, TypeError):
                 args = {}
             executor = TOOL_EXECUTORS.get(name)
-            result = executor(con, chat_id, args, today) if executor \
-                else {"error": "unknown tool %r" % name}
+            if not recipes and name == "search_recipes":
+                result = {"error": "recipes are not available in this chat"}
+            else:
+                result = executor(con, chat_id, args, today) if executor \
+                    else {"error": "unknown tool %r" % name}
             messages.append({
                 "role": "tool",
                 "tool_call_id": tc["id"],

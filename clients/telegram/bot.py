@@ -180,6 +180,33 @@ def allowed(con, cfg, chat_id):
             or fridge.is_member(con, chat_id))
 
 
+def ai_for(con, cfg, chat_id):
+    """Whether this chat's messages go to the model.
+
+    llm_mode turns the AI on for the bot. It then covers the chats in
+    config.json (or everyone, on an open bot), since those were let in by
+    hand. Someone who joined by invite starts without it, because every
+    message costs the owner money and goes to a third party: the owner
+    turns it on for them in /members.
+    """
+    if not cfg["llm_mode"]:
+        return False
+    if not cfg["allowed_chat_ids"] or chat_id in cfg["allowed_chat_ids"]:
+        return True
+    return fridge.get_pref(con, chat_id, "ai") == "on"
+
+
+def recipes_for(cfg, chat_id):
+    """Recipes are the owner's own Apple Notes. Nobody else's to search, and
+    on an open bot, with no owner, nobody's."""
+    return owner(cfg) is not None and chat_id == owner(cfg)
+
+
+def run_ai(con, chat_id, text, cfg, **kw):
+    return llm_agent.run_agent(con, chat_id, text, cfg,
+                               recipes=recipes_for(cfg, chat_id), **kw)
+
+
 # --- telegram --------------------------------------------------------------
 
 class Telegram:
@@ -683,7 +710,7 @@ def handle_photo(tg, con, chat_id, msg, cfg):
     """A photo only means something in llm_mode: there is no way for the
     regex pipeline to read an image, and pretending otherwise would be the
     exact kind of silent guess this bot is built to avoid."""
-    if not cfg["llm_mode"]:
+    if not ai_for(con, cfg, chat_id):
         tg.send(chat_id, "I can't read photos yet, only typed lists: "
                          "commas between things.")
         return
@@ -694,7 +721,7 @@ def handle_photo(tg, con, chat_id, msg, cfg):
         tg.send(chat_id, "Couldn't get that photo from Telegram. Try sending it again.")
         return
     image_b64 = base64.b64encode(photo_bytes).decode()
-    send_llm_reply(tg, chat_id, llm_agent.run_agent(con, chat_id, caption, cfg, image_b64=image_b64))
+    send_llm_reply(tg, chat_id, run_ai(con, chat_id, caption, cfg, image_b64=image_b64))
 
 
 INVITE_SPENT = ("That invite link has already been used or has expired. "
@@ -720,20 +747,56 @@ def join_by_invite(tg, con, msg):
     return False
 
 
-def compose_members(con):
-    """(text, buttons) for /members: who got in by invite, each removable."""
+def compose_members(con, cfg):
+    """(text, buttons) for /members: who got in by invite, each removable,
+    and, when the bot has AI at all, each with AI switchable."""
     people = fridge.members(con)
     if not people:
         return ("Nobody has joined by invite yet. /invite makes a link.", None)
     lines = ["Joined by invite (%d). Removing someone ends their access and "
-             "their nudges; their data stays." % len(people), ""]
+             "their nudges; their data stays." % len(people)]
+    if cfg["llm_mode"]:
+        lines.append("AI on means their messages go to the model on your "
+                     "key. Your recipes stay yours either way.")
+    lines.append("")
     buttons = []
     for p in people:
         name = p["name"] or "chat %d" % p["chat_id"]
-        lines.append("  • %s, joined %s" % (name, p["joined"][:10]))
-        buttons.append([{"text": "Remove %s" % name,
-                         "callback_data": "member:remove:%d" % p["chat_id"]}])
+        on = ai_for(con, cfg, p["chat_id"])
+        lines.append("  • %s, joined %s%s" % (
+            name, p["joined"][:10],
+            (", AI on" if on else ", AI off") if cfg["llm_mode"] else ""))
+        row = [{"text": "Remove %s" % name,
+                "callback_data": "member:remove:%d" % p["chat_id"]}]
+        if cfg["llm_mode"]:
+            row.append({"text": "AI off" if on else "AI on",
+                        "callback_data": "member:ai:%d" % p["chat_id"]})
+        buttons.append(row)
     return "\n".join(lines), buttons
+
+
+def handle_owner_command(tg, con, chat_id, text, cfg):
+    """/invite and /members, from the owner's chat only. True if handled.
+
+    Runs ahead of AI mode, which otherwise takes every message, slash
+    commands included: these are the owner managing the bot, not a
+    conversation about food.
+    """
+    if chat_id != owner(cfg):
+        return False
+    low = text.lower()
+    if low.startswith("/invite"):
+        code = fridge.create_invite(con)
+        tg.send(chat_id, "Send this to one person. It lets them in once and "
+                         "stops working after %d days:\n\nhttps://t.me/%s?start=%s"
+                % (fridge.INVITE_DAYS, cfg.get("bot_username") or "<your bot>",
+                   code))
+        return True
+    if low.startswith("/members"):
+        text, buttons = compose_members(con, cfg)
+        tg.send(chat_id, text, buttons=buttons)
+        return True
+    return False
 
 
 def handle_message(tg, con, msg, cfg):
@@ -769,8 +832,10 @@ def handle_message(tg, con, msg, cfg):
     # parse_list. It replaces how a typed message is understood, not the
     # daily nudge or the used/frozen/tossed buttons, which are unchanged in
     # both modes since they are not an understanding problem.
-    if cfg["llm_mode"]:
-        send_llm_reply(tg, chat_id, llm_agent.run_agent(con, chat_id, text, cfg))
+    if handle_owner_command(tg, con, chat_id, text, cfg):
+        return
+    if ai_for(con, cfg, chat_id):
+        send_llm_reply(tg, chat_id, run_ai(con, chat_id, text, cfg))
         return
 
     # A reply to me or a genuine question can arrive at any point, onboarding
@@ -837,17 +902,6 @@ def handle_message(tg, con, msg, cfg):
             {"text": "Yes, wipe it", "callback_data": "clear:yes"},
             {"text": "No, keep it", "callback_data": "clear:no"},
         ]])
-        return
-    if low.startswith("/invite") and chat_id == owner(cfg):
-        code = fridge.create_invite(con)
-        tg.send(chat_id, "Send this to one person. It lets them in once and "
-                         "stops working after %d days:\n\nhttps://t.me/%s?start=%s"
-                % (fridge.INVITE_DAYS, cfg.get("bot_username") or "<your bot>",
-                   code))
-        return
-    if low.startswith("/members") and chat_id == owner(cfg):
-        text, buttons = compose_members(con)
-        tg.send(chat_id, text, buttons=buttons)
         return
     if low.startswith("/seed"):
         # seed.json is the owner's real fridge. Anyone with nothing logged
@@ -974,7 +1028,7 @@ def handle_callback(tg, con, cb, cfg):
 
     if state == "member":
         action, _, raw = raw_id.partition(":")
-        if chat_id != owner(cfg) or action != "remove":
+        if chat_id != owner(cfg) or action not in ("remove", "ai"):
             tg.answer(cb["id"])
             return
         try:
@@ -982,9 +1036,16 @@ def handle_callback(tg, con, cb, cfg):
         except ValueError:
             tg.answer(cb["id"])
             return
-        fridge.remove_member(con, who)
-        tg.answer(cb["id"], "Removed.")
-        text, buttons = compose_members(con)
+        if action == "remove":
+            fridge.remove_member(con, who)
+            tg.answer(cb["id"], "Removed.")
+        elif fridge.is_member(con, who):
+            on = fridge.get_pref(con, who, "ai") == "on"
+            fridge.set_pref(con, who, "ai", "off" if on else "on")
+            tg.answer(cb["id"], "AI off." if on else "AI on.")
+        else:
+            tg.answer(cb["id"])
+        text, buttons = compose_members(con, cfg)
         tg.edit(chat_id, msg["message_id"], text, buttons=buttons)
         return
 
