@@ -1690,17 +1690,25 @@ class RecipeNoteWrite(unittest.TestCase):
                               ("NO_FOLDER\n", "no_folder"),
                               ("something else\n", "failed")):
             run, _ = self._fake_run(stdout=out)
-            self.assertEqual(
-                self._with_run(run, lambda: llm_agent.create_recipe_note(self.DRAFT)),
-                expected, out)
+            with contextlib.redirect_stdout(io.StringIO()):
+                got = self._with_run(run, lambda: llm_agent.create_recipe_note(self.DRAFT))
+            self.assertEqual(got, expected, out)
 
-    def test_failures_never_raise(self):
-        run, _ = self._fake_run(stdout="", returncode=1)
-        self.assertEqual(self._with_run(run, lambda: llm_agent.create_recipe_note(self.DRAFT)),
-                         "failed")
-        run, _ = self._fake_run(raises=subprocess.TimeoutExpired("osascript", 30))
-        self.assertEqual(self._with_run(run, lambda: llm_agent.create_recipe_note(self.DRAFT)),
-                         "failed")
+    def test_failures_never_raise_and_are_logged(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            run, _ = self._fake_run(stdout="", returncode=1)
+            self.assertEqual(self._with_run(run, lambda: llm_agent.create_recipe_note(self.DRAFT)),
+                             "failed")
+            run, _ = self._fake_run(raises=subprocess.TimeoutExpired("osascript", 30))
+            self.assertEqual(self._with_run(run, lambda: llm_agent.create_recipe_note(self.DRAFT)),
+                             "failed")
+        lines = out.getvalue().splitlines()
+        self.assertEqual(len(lines), 2)
+        for line in lines:
+            self.assertTrue(line.startswith("! recipe note create failed: "), line)
+        self.assertIn("1", lines[0])
+        self.assertIn("osascript", lines[1])
 
     def test_the_script_only_ever_creates(self):
         s = llm_agent._CREATE_RECIPE_APPLESCRIPT
@@ -1716,13 +1724,31 @@ class FakePage:
         self.headers["Content-Type"] = "text/html; charset=%s" % charset
 
     def read(self, n=-1):
-        return self.body if n is None or n < 0 else self.body[:n]
+        # Consumed as it is read, like a real response: a loop that reads
+        # in chunks sees the end of the body.
+        if n is None or n < 0:
+            n = len(self.body)
+        chunk, self.body = self.body[:n], self.body[n:]
+        return chunk
 
     def __enter__(self):
         return self
 
     def __exit__(self, *exc):
         return False
+
+
+class SlowPage(FakePage):
+    """Hands out one small chunk per read and moves a fake clock forward,
+    like a server that trickles bytes."""
+
+    def __init__(self, clock, step):
+        super().__init__(b"")
+        self.clock, self.step = clock, step
+
+    def read(self, n=-1):
+        self.clock[0] += self.step
+        return b"x" * 10
 
 
 class FakeOpener:
@@ -1748,6 +1774,26 @@ class RecipePageFetch(unittest.TestCase):
 
     def tearDown(self):
         llm_agent._is_public_host = self._orig_public
+
+    def test_a_trickling_server_is_cut_off_at_the_deadline(self):
+        clock = [1000.0]
+        original = llm_agent._now
+        llm_agent._now = lambda: clock[0]
+        try:
+            opener = FakeOpener(SlowPage(clock, step=4))
+            with contextlib.redirect_stdout(io.StringIO()):
+                r = llm_agent.fetch_recipe_page("https://e.com/slow", opener=opener)
+        finally:
+            llm_agent._now = original
+        self.assertEqual(r, {"error": "That page took too long to load."})
+
+    def test_a_page_read_in_chunks_is_still_parsed(self):
+        body = (self.LD % json.dumps({"@type": "Recipe", "name": "Big",
+                                      "recipeIngredient": ["x"],
+                                      "recipeInstructions": ["y"]})).encode()
+        body += b" " * 200000  # more than one 64 KiB chunk
+        r = llm_agent.fetch_recipe_page("https://e.com/big", opener=FakeOpener(FakePage(body)))
+        self.assertEqual(r["title"], "Big")
 
     def test_reads_a_plain_recipe_block(self):
         data = {"@context": "https://schema.org", "@type": "Recipe",
@@ -1958,6 +2004,9 @@ class RecipeDraft(unittest.TestCase):
         llm_agent.clear_pending_recipe(self.con, 1)
         self.assertIsNone(llm_agent.pending_recipe(self.con, 1))
 
+    def test_the_prompt_refuses_recipe_photos(self):
+        self.assertIn("Not from a photo", llm_agent.SYSTEM_PROMPT)
+
     def test_no_model_tool_writes_to_notes(self):
         names = {t["function"]["name"] for t in llm_agent.TOOLS}
         self.assertEqual(names, {"add_items", "update_item", "remove_item", "list_items",
@@ -1984,6 +2033,41 @@ class RecipeDraft(unittest.TestCase):
         self.assertEqual(reply, "Here's the draft, check it over.")
         self.assertEqual(created, [])
         self.assertIsNotNone(llm_agent.pending_recipe(self.con, 1))
+
+    def _fetch_turns(self, url):
+        return iter([
+            {"choices": [{"message": {"role": "assistant", "tool_calls": [
+                {"id": "t1", "type": "function", "function": {
+                    "name": "fetch_recipe_page",
+                    "arguments": json.dumps({"url": url})}}]}}]},
+            {"choices": [{"message": {"role": "assistant", "content": "ok"}}]},
+        ])
+
+    def _run_fetching(self, user_text, url):
+        fetched, seen = [], []
+        turns = self._fetch_turns(url)
+        def caller(messages):
+            seen.append(list(messages))
+            return next(turns)
+        original = llm_agent.fetch_recipe_page
+        llm_agent.fetch_recipe_page = lambda u: fetched.append(u) or {"title": "T"}
+        try:
+            llm_agent.run_agent(self.con, 1, user_text, CFG, today=TODAY, caller=caller)
+        finally:
+            llm_agent.fetch_recipe_page = original
+        return fetched, seen
+
+    def test_a_link_the_user_sent_is_fetched(self):
+        fetched, _ = self._run_fetching("add https://e.com/r please", "https://e.com/r")
+        self.assertEqual(fetched, ["https://e.com/r"])
+
+    def test_a_link_the_user_did_not_send_is_not_fetched(self):
+        fetched, seen = self._run_fetching("add https://e.com/r please",
+                                           "https://evil.example/?q=secret")
+        self.assertEqual(fetched, [])
+        tool_msg = [m for m in seen[1] if m.get("role") == "tool"][0]
+        self.assertIn("I only open links the user sent in this message.",
+                      tool_msg["content"])
 
     def test_non_dict_tool_arguments_do_not_end_the_turn(self):
         fetched = []
@@ -2032,10 +2116,11 @@ class RecipeSaveFlow(unittest.TestCase):
         llm_agent.exec_draft_recipe(self.con, 1, dict(self.ARGS, **over), TODAY)
         return llm_agent.pending_recipe(self.con, 1)
 
-    def _tap(self, data):
+    def _tap(self, data, cfg=None):
         cb = {"id": "cb", "data": data,
               "message": {"message_id": 7, "chat": {"id": 1, "type": "private"}}}
-        bot.handle_callback(self.tg, self.con, cb, CFG)
+        bot.handle_callback(self.tg, self.con, cb,
+                            cfg or dict(CFG, allowed_chat_ids=[1]))
 
     def test_a_new_draft_is_shown_once_with_its_buttons(self):
         d = self._draft()
@@ -2099,7 +2184,26 @@ class RecipeSaveFlow(unittest.TestCase):
         d = self._draft()
         self._tap("recipe:save:%s" % d["id"])
         self.assertIn("already have", self.tg.edits[-1])
+        self.assertIn("Send the recipe again with a different title",
+                      self.tg.edits[-1])
         self.assertIsNone(llm_agent.pending_recipe(self.con, 1))
+
+    def test_an_empty_allow_list_never_saves(self):
+        d = self._draft()
+        self._tap("recipe:save:%s" % d["id"], cfg=CFG)
+        self.assertEqual(self.created, [])
+        self.assertIsNotNone(llm_agent.pending_recipe(self.con, 1))
+        self.assertEqual(self.tg.answers[-1], "Not allowed.")
+        self.assertEqual(
+            self.tg.edits[-1],
+            llm_agent.recipe_note_text(d) + "\n\nSaving recipes to Notes needs "
+            "your chat id in allowed_chat_ids in config.json.")
+        self.assertIsNone(self.tg.edit_buttons[-1])
+
+    def test_a_listed_chat_saves(self):
+        d = self._draft()
+        self._tap("recipe:save:%s" % d["id"], cfg=dict(CFG, allowed_chat_ids=[1]))
+        self.assertEqual(self.created, ["Arroz con Pollo"])
 
     def test_a_notes_failure_keeps_the_draft_for_a_retry(self):
         self.outcome = "failed"

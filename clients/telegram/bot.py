@@ -1154,7 +1154,7 @@ def handle_callback(tg, con, cb, cfg):
         return
     state, _, raw_id = data.partition(":")
     if state == "recipe":
-        handle_recipe_callback(tg, con, chat_id, cb, msg, raw_id)
+        handle_recipe_callback(tg, con, chat_id, cb, msg, raw_id, cfg)
         return
 
     if state == "member":
@@ -1317,7 +1317,7 @@ def handle_callback(tg, con, cb, cfg):
                  caption=CLOSE_LINES[state])
 
 
-def handle_recipe_callback(tg, con, chat_id, cb, msg, raw):
+def handle_recipe_callback(tg, con, chat_id, cb, msg, raw, cfg):
     """recipe:save:<id> or recipe:cancel:<id>. The id must match the
     current draft, so an old preview can't act on a newer one."""
     action, _, draft_id = raw.partition(":")
@@ -1336,8 +1336,16 @@ def handle_recipe_callback(tg, con, chat_id, cb, msg, raw):
         tg.answer(cb["id"])
         return
 
-    outcome = llm_agent.create_recipe_note(draft)
     preview = llm_agent.recipe_note_text(draft)
+    # Notes is the owner's single shared store, and an empty allow-list
+    # means the bot answers anyone: only a listed chat may write to it.
+    if chat_id not in (cfg.get("allowed_chat_ids") or []):
+        tg.answer(cb["id"], "Not allowed.")
+        tg.edit(chat_id, msg["message_id"],
+                preview + "\n\nSaving recipes to Notes needs your chat id in "
+                "allowed_chat_ids in config.json.")
+        return
+    outcome = llm_agent.create_recipe_note(draft)
     if outcome == "created":
         llm_agent.clear_pending_recipe(con, chat_id)
         tg.answer(cb["id"], "Saved.")
@@ -1347,7 +1355,8 @@ def handle_recipe_callback(tg, con, chat_id, cb, msg, raw):
         tg.answer(cb["id"], "Already in Notes.")
         tg.edit(chat_id, msg["message_id"],
                 "You already have a recipe called \"%s\" in Notes, so I didn't "
-                "save this one. Give me a different name if you want both."
+                "save this one. Send the recipe again with a different title if "
+                "you want both."
                 % draft["title"])
     elif outcome == "no_folder":
         tg.answer(cb["id"], "No Recipes folder.")

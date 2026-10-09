@@ -245,14 +245,13 @@ raw meat, 3 for dairy and greens, 7 for hard cheese and root veg — are marked
 
 ## What it deliberately doesn't do
 
-Recipe search and recipe adding exist in LLM mode only (text or link, after a
-Save tap, create-only), and so does the pantry. No cook log, no scorecard, no
+The pantry works in both modes. Photo capture of fridge food works in LLM
+mode with a vision-capable model. Recipe search and recipe adding (text or a
+link, then a Save tap, create-only) are LLM mode only, and adding a recipe
+from a photo isn't supported in the bot. No cook log, no scorecard, no
 geofences. This is the thinnest loop that can prove whether a Telegram nudge
 gets answered more often than a Reminders alert. Everything else is in the
 `fridge-loop` skill and can come across once that question is settled.
-
-Photo capture needs a vision model and an API key, so it's not here either —
-typed lists only for now.
 
 ## Files
 

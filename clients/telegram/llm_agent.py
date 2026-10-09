@@ -21,6 +21,7 @@ import os
 import re
 import socket
 import subprocess
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -75,8 +76,10 @@ Adding a recipe to their Notes, when they send one or a link to one:
 for a link, fetch_recipe_page first. Then draft_recipe with the title,
 ingredients and steps exactly as the source gives them. Never invent,
 reword or "fix" anything; if something is missing, leave it out and
-say so. draft_recipe does not save: they see the draft with Save and
-Cancel buttons, and only their tap saves it. Never say it's saved.
+say so. Not from a photo: if they send a picture of a recipe, ask them
+to type it or send the link. draft_recipe does not save: they see the
+draft with Save and Cancel buttons, and only their tap saves it. Never
+say it's saved.
 
 Showing one recipe in full, once they pick it or ask for it
 directly: the same shape every time, plain text, no headers, no
@@ -436,8 +439,9 @@ def exec_list_items(con, chat_id, today):
 # --- recipes: read-only, live from Apple Notes -------------------------------
 #
 # SKILL.md names Apple Notes' Recipes folder as RECIPE_CANON, the source of
-# truth, for the Mac-based skill. This reads the same folder, read-only
-# (never writes to Notes, matching SKILL.md's Safety section), live on every
+# truth, for the Mac-based skill. This reader only reads the same folder
+# (the one write is create_recipe_note below: create-only, reached only
+# from the Save button), live on every
 # search rather than caching, since a full fetch is a few seconds for
 # dozens of recipes. Any folder whose name starts with "Recipes" is
 # included, so "Recipes - Instant Pot" counts alongside "Recipes".
@@ -648,12 +652,21 @@ def create_recipe_note(draft, timeout=RECIPE_SAVE_TIMEOUT):
             ["osascript", "-", draft["title"], recipe_note_html(draft)],
             input=_CREATE_RECIPE_APPLESCRIPT,
             capture_output=True, text=True, timeout=timeout)
-    except Exception:
+    except Exception as e:
+        print("! recipe note create failed: %s" % " ".join(str(e).split()))
         return "failed"
     if result.returncode != 0:
+        detail = "exit %s %s" % (result.returncode,
+                                 " ".join((result.stderr or "").split()))
+        print("! recipe note create failed: %s" % detail[:200])
         return "failed"
-    return {"CREATED": "created", "DUPLICATE": "duplicate",
-            "NO_FOLDER": "no_folder"}.get(result.stdout.strip(), "failed")
+    outcome = {"CREATED": "created", "DUPLICATE": "duplicate",
+               "NO_FOLDER": "no_folder"}.get(result.stdout.strip())
+    if outcome is None:
+        print("! recipe note create failed: unrecognized output %r"
+              % result.stdout.strip()[:200])
+        return "failed"
+    return outcome
 
 
 # --- recipes: reading one from a link ---------------------------------------
@@ -667,6 +680,8 @@ def create_recipe_note(draft, timeout=RECIPE_SAVE_TIMEOUT):
 
 FETCH_PAGE_TIMEOUT = 15
 MAX_PAGE_BYTES = 2 * 1024 * 1024
+_READ_CHUNK = 64 * 1024
+_now = time.monotonic  # a name of its own so tests can move the clock
 MAX_PAGE_TEXT_CHARS = 6000
 
 def _blocks(page_html, tag):
@@ -807,9 +822,21 @@ def fetch_recipe_page(url, timeout=FETCH_PAGE_TIMEOUT, opener=None):
         return {"error": "I can only open https links to public websites."}
     opener = opener or urllib.request.build_opener(_SafeRedirect)
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    # The socket timeout is per read, so a server trickling bytes could hold
+    # the bot far longer; the deadline covers the whole request.
+    deadline = _now() + timeout
     try:
         with opener.open(req, timeout=timeout) as r:
-            raw = r.read(MAX_PAGE_BYTES + 1)
+            chunks, total = [], 0
+            while total <= MAX_PAGE_BYTES:
+                if _now() > deadline:
+                    return {"error": "That page took too long to load."}
+                chunk = r.read(min(_READ_CHUNK, MAX_PAGE_BYTES + 1 - total))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                total += len(chunk)
+            raw = b"".join(chunks)
             charset = r.headers.get_content_charset() or "utf-8"
     except Exception as e:
         print("! recipe page fetch failed: %s" % e)
@@ -1057,6 +1084,11 @@ def run_agent(con, chat_id, text, cfg, today=None, caller=None, image_b64=None,
             executor = TOOL_EXECUTORS.get(name)
             if not recipes and name == "search_recipes":
                 result = {"error": "recipes are not available in this chat"}
+            elif name == "fetch_recipe_page" and \
+                    str(args.get("url") or "").strip() not in (text or ""):
+                # A fetched page is data and must not choose where the bot
+                # connects next, or a page could send things out in a URL.
+                result = {"error": "I only open links the user sent in this message."}
             else:
                 result = executor(con, chat_id, args, today) if executor \
                     else {"error": "unknown tool %r" % name}
