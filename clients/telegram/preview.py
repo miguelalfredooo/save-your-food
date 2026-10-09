@@ -4,7 +4,7 @@
     python3 preview.py 2026-09-25   # any date
 
 Shows the nudge card as it arrives, the same card after the first item is
-tapped, and the /fridge card. Falls back to seed.example.json when there is
+tapped, the /fridge card, and the /freezer card. Falls back to seed.example.json when there is
 no seed.json.
 """
 import html, json, os, re, sys, tempfile
@@ -62,3 +62,14 @@ else:
     print("(silent — nothing at risk)\n")
 print("%s\n  /fridge\n%s\n" % (bar, bar))
 bot.send_fridge(tg, con, 1, day)
+
+print("%s\n  /freezer (after freezing everything open)\n%s\n" % (bar, bar))
+for i in fridge.open_items(con, 1):
+    fridge.close_item(con, 1, i["id"], "frozen", day)
+frozen = fridge.frozen_items(con, 1)
+if bot.send_freezer(tg, con, 1, day):
+    print("%s\n  AFTER TAPPING 🗑 ON ITEM 1\n%s\n" % (bar, bar))
+    bot.handle_callback(tg, con, {
+        "id": "cb", "data": "frz:tossed:%d" % frozen[0]["id"],
+        "message": {"chat": {"id": 1, "type": "private"}, "message_id": 1}},
+        {"allowed_chat_ids": []})

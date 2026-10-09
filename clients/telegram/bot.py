@@ -317,8 +317,7 @@ def send_card(tg, con, chat_id, kind, head, items, today):
     spec = {"kind": kind, "head": head, "day": today.isoformat(),
             "ids": [i["id"] for i in shown], "more": more,
             "used_before": fridge.count_closed(con, chat_id, "used")}
-    html, buttons = card.render(head, shown, today,
-                                card.tally(kind, shown, more))
+    html, buttons = _render(kind, head, shown, today, more)
     res = tg.send(chat_id, html, buttons=buttons, html=True)
     msg_id = ((res or {}).get("result") or {}).get("message_id")
     if msg_id is not None:
@@ -350,16 +349,25 @@ def close_card(con, chat_id, spec, items):
     return art.render(frame, caption)
 
 
+def _render(kind, head, items, today, more, closing=None):
+    footer = card.tally(kind, items, more)
+    if kind == "freezer":
+        return card.render_freezer(head, items, footer)
+    return card.render(head, items, today, footer, closing)
+
+
 def refresh_card(tg, con, chat_id, message_id, spec):
     """Redraw a card after a tap: the line flips, its buttons go."""
     items = fridge.items_by_ids(con, chat_id, spec["ids"])
     today = date.fromisoformat(spec["day"])
     closing = None
-    if items and all(i["state"] != "open" for i in items):
+    # The freezer gets no closing drawing: it never drew on a settle before
+    # cards either, and its last tap is as likely to be a toss as not.
+    if (spec["kind"] != "freezer" and items
+            and all(card.settled(spec["kind"], i) for i in items)):
         closing = close_card(con, chat_id, spec, items)
-    html, buttons = card.render(spec["head"], items, today,
-                                card.tally(spec["kind"], items, spec["more"]),
-                                closing)
+    html, buttons = _render(spec["kind"], spec["head"], items, today,
+                            spec["more"], closing)
     tg.edit(chat_id, message_id, html, buttons=buttons, html=True)
 
 
@@ -401,17 +409,8 @@ def _capped_item_list(names, max_chars=MAX_CAPTION_LIST_CHARS):
     return "%s, and %d more" % (", ".join(kept), len(names) - len(kept))
 
 
-def freezer_buttons(item_id):
-    """Only two outcomes. There is no "froze it" for something already frozen,
-    and tossing from here is what reverses the rescue."""
-    return [[
-        {"text": "\u2705 Used it", "callback_data": "frz:used:%d" % item_id},
-        {"text": "\U0001f5d1 Tossed it", "callback_data": "frz:tossed:%d" % item_id},
-    ]]
-
-
 def send_freezer(tg, con, chat_id, today=None):
-    """What is in the freezer, one buttoned line each.
+    """What is in the freezer, as one card with ✅ and 🗑 per item.
 
     This exists because freezing was a dead end: the item left every view and
     could never be answered for again, so a frozen rescue could never be
@@ -423,18 +422,7 @@ def send_freezer(tg, con, chat_id, today=None):
         tg.send(chat_id, "Nothing in the freezer that I know about. Freezing "
                          "something from a nudge puts it here.")
         return 0
-    tg.send(chat_id, "In the freezer (%d). Tell me when one of these is "
-                     "finished, or if it ended up in the bin." % len(items))
-    for i in items:
-        froze_on = (i["closed"] or "")[:10]
-        label = i["name"]
-        if froze_on:
-            d = date.fromisoformat(froze_on)
-            # Not strftime("%-d"): that is a glibc extension and this runs on
-            # macOS, where BSD strftime leaves it as a literal.
-            label += " (frozen %s %d)" % (d.strftime("%b"), d.day)
-        tg.send(chat_id, label, buttons=freezer_buttons(i["id"]))
-    return len(items)
+    return send_card(tg, con, chat_id, "freezer", "In the freezer", items, today)
 
 
 def compose_pantry_html(items):
@@ -900,6 +888,14 @@ def handle_callback(tg, con, cb, cfg):
             return
         fridge.settle_freezer_item(con, chat_id, item_id, outcome)
         tg.answer(cb["id"], "Used it" if outcome == "used" else "Tossed it")
+
+        spec = fridge.load_card(con, chat_id, msg["message_id"])
+        if spec and item_id in spec["ids"]:
+            refresh_card(tg, con, chat_id, msg["message_id"], spec)
+            return
+
+        # A message sent before the freezer was a card: one item, its own
+        # buttons, and the reversal said as a separate line.
         if outcome == "used":
             tg.edit(chat_id, msg["message_id"],
                     "%s: used out of the freezer." % row["name"])
