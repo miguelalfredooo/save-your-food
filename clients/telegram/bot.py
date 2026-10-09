@@ -801,9 +801,13 @@ def privacy_note(con, cfg, chat_id):
     else:
         ai = ("Your messages and photos are also sent to an AI service "
               "(OpenRouter) so they can be understood.")
-    return ("What I keep, and who can see it:\n\n"
-            "  • The food you send me, what happened to it, and your "
-            "settings.\n"
+    # Named when Telegram gave us a name: the data lives on the owner's
+    # computer, so "I keep" blurs the bot with the person running it.
+    name = cfg.get("bot_name")
+    return (("What %s keeps, and who can see it:\n\n" % name if name
+             else "What I keep, and who can see it:\n\n") +
+            "  • The food you send%s, what happened to it, and your "
+            "settings.\n" % ("" if name else " me") +
             "  • It's stored on the computer of whoever runs this bot, not "
             "in the cloud, and they can see it.\n"
             "  • %s\n\n"
@@ -964,12 +968,12 @@ def handle_message(tg, con, msg, cfg):
         # tapping /start out of curiosity should not lose their fridge.
         if not onb.started(con, chat_id):
             tg.send(chat_id, privacy_note(con, cfg, chat_id))
-            tg.send(chat_id, onb.begin(con, chat_id))
+            tg.send(chat_id, onb.begin(con, chat_id, cfg.get("bot_name")))
         else:
             tg.send(chat_id, WELCOME)
         return
     if low.startswith("/setup"):
-        tg.send(chat_id, onb.begin(con, chat_id))
+        tg.send(chat_id, onb.begin(con, chat_id, cfg.get("bot_name")))
         return
     if low.startswith("/skip"):
         tg.send(chat_id, onb.skip(con, chat_id, cfg["nudge_hour"]))
@@ -1345,6 +1349,8 @@ def main():
     if not me or not me.get("ok"):
         sys.exit("! Couldn't reach Telegram. Check the token and your connection.")
     cfg["bot_username"] = me["result"]["username"]
+    # The display name set in BotFather, so the copy matches the chat header.
+    cfg["bot_name"] = me["result"].get("first_name")
     tg.call("setMyCommands", commands=[
         {"command": c, "description": d} for c, d in COMMANDS])
     if owner(cfg):

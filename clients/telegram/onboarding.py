@@ -122,9 +122,12 @@ def finished(hour):
 
 # --- steps -----------------------------------------------------------------
 
-def begin(con, chat_id):
+def begin(con, chat_id, name=None):
+    """Step 1's prompt. With the bot's display name, setup opens by
+    introducing it, so the name in the privacy note just before it is not
+    the only place it appears."""
     set_step(con, chat_id, "1")
-    return STEP1
+    return ("I'm %s. " % name if name else "") + STEP1
 
 
 def skip(con, chat_id, hour):
