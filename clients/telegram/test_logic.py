@@ -2345,6 +2345,25 @@ class Cards(unittest.TestCase):
         self.assertIn("popup: Used it", out.stdout)
         self.assertIn("1 closed", out.stdout)
 
+    def test_a_one_tier_nudge_drops_the_label_its_heading_repeats(self):
+        self._items(["milk", "spinach"])                # both past by self.day
+        bot.send_nudge(self.tg, self.con, 1, self.day)
+        self.assertIn("check before eating", self.tg.sent[0].split("<pre>")[0])
+        self.assertNotIn("CHECK BEFORE EATING", self._pre_lines(self.tg.sent[0]))
+
+    def test_a_mixed_nudge_keeps_its_section_labels(self):
+        fridge.add_items(self.con, 1, ["milk"], TODAY)                 # 7d: past
+        fridge.add_items(self.con, 1, ["chicken thighs"], self.day)    # due today
+        bot.send_nudge(self.tg, self.con, 1, self.day)
+        lines = self._pre_lines(self.tg.sent[0])
+        self.assertIn("CHECK BEFORE EATING", lines)
+        self.assertIn("TONIGHT OR FREEZE IT", lines)
+
+    def test_a_one_tier_fridge_card_keeps_its_label(self):
+        self._items(["milk"])
+        bot.send_fridge(self.tg, self.con, 1, self.day)
+        self.assertIn("CHECK BEFORE EATING", self._pre_lines(self.tg.sent[0]))
+
     def test_rel_column_fits(self):
         for d in (-30, -1, 0, 1, 3, 40):
             self.assertLessEqual(len(card.rel(TODAY + timedelta(days=d), TODAY)), card.RIGHT)
