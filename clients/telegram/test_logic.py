@@ -2197,6 +2197,59 @@ class Cards(unittest.TestCase):
         self.assertIn("1 tracked", self.tg.sent[-1])
         self.assertTrue(self.tg.buttons[-1])
 
+    def _freeze(self, names):
+        """Freeze these from a nudge, as a person would, then open /freezer."""
+        items = self._items(names)
+        for i in items:
+            fridge.close_item(self.con, 1, i["id"], "frozen", self.day)
+        self.tg = FakeTG()
+        bot.handle_message(self.tg, self.con,
+                           {"chat": {"id": 1, "type": "private"}, "text": "/freezer"}, CFG)
+        return fridge.items_by_ids(self.con, 1, [i["id"] for i in items])
+
+    def _frz_tap(self, outcome, item_id):
+        cb = {"id": "cb", "data": "frz:%s:%d" % (outcome, item_id),
+              "message": {"chat": {"id": 1, "type": "private"}, "message_id": 1}}
+        bot.handle_callback(self.tg, self.con, cb, CFG)
+
+    def test_the_freezer_is_one_card_with_two_buttons_each(self):
+        self._freeze(["milk", "spinach", "chicken thighs"])
+        self.assertEqual(len(self.tg.sent), 1)
+        self.assertIn("3 in the freezer", self.tg.sent[0])
+        self.assertEqual(len(self.tg.buttons[0]), 3)
+        self.assertEqual(len(self.tg.buttons[0][0]), 2)
+        self.assertTrue(self.tg.buttons[0][0][0]["callback_data"].startswith("frz:used:"))
+
+    def test_freezer_lines_are_card_width_and_show_when_it_went_in(self):
+        self._freeze(["milk"])
+        lines = self._pre_lines(self.tg.sent[0])
+        row = [l for l in lines if l.startswith("1 milk")][0]
+        self.assertEqual(len(row), card.WIDTH)
+        self.assertTrue(row.endswith(date.today().strftime("%b ") + str(date.today().day)))
+
+    def test_a_freezer_tap_edits_the_card(self):
+        items = self._freeze(["milk", "spinach"])
+        self._frz_tap("used", items[0]["id"])
+        self.assertEqual(len(self.tg.sent), 1)
+        self.assertIn("1 settled, 1 left", self.tg.edits[-1])
+        self.assertEqual(len(self.tg.edit_buttons[-1]), 1)
+
+    def test_binning_a_frozen_rescue_says_so_on_its_line(self):
+        items = self._freeze(["milk"])
+        self._frz_tap("tossed", items[0]["id"])
+        self.assertEqual(len(self.tg.sent), 1)   # no separate "Noted." message
+        self.assertIn("off this month's count", self.tg.edits[-1])
+        self.assertEqual(self.tg.edits[-1].count("<pre>"), 1)   # and no drawing
+        row = self.con.execute("SELECT freezer_outcome FROM items WHERE id=?",
+                               (items[0]["id"],)).fetchone()
+        self.assertEqual(row["freezer_outcome"], "tossed")
+
+    def test_freezing_from_a_nudge_finishes_its_nudge_line(self):
+        items = self._items(["milk"])
+        bot.send_nudge(self.tg, self.con, 1, self.day)
+        self._tap("frozen", items[0]["id"])
+        self.assertIn("All 1 handled", self.tg.edits[-1])
+
     def test_rel_column_fits(self):
         for d in (-30, -1, 0, 1, 3, 40):
             self.assertLessEqual(len(card.rel(TODAY + timedelta(days=d), TODAY)), card.RIGHT)

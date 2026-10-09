@@ -26,6 +26,7 @@ Pure functions only. Nothing here touches the network or the database.
 from datetime import date
 
 import art
+import fridge
 import shelf_life as sl
 
 WIDTH = art.MAX_WIDTH
@@ -38,6 +39,8 @@ MAX_ITEMS = 15            # 3 buttons each stays well under Telegram's 100
 MARK = {"used": "✓", "frozen": "✓", "tossed": "·"}
 OUTCOME = {"used": "used", "frozen": "frozen", "tossed": "tossed"}
 BUTTONS = (("used", "✅"), ("frozen", "❄️"), ("tossed", "\U0001f5d1"))
+# Something already frozen has no "froze it": only finished, or binned.
+FREEZER_BUTTONS = (("used", "✅"), ("tossed", "\U0001f5d1"))
 
 
 def rel(use_by, today):
@@ -93,6 +96,12 @@ def lines_for(n, item, today):
     return out
 
 
+def _html(head, body, closing):
+    html = "<b>%s</b>\n<pre>%s</pre>" % (art.esc(head),
+                                        "\n".join(art.esc(l) for l in body))
+    return html + ("\n" + closing if closing else "")
+
+
 def render(head, items, today, footer, closing=None):
     """(html, buttons) for a card.
 
@@ -111,11 +120,7 @@ def render(head, items, today, footer, closing=None):
             seen = t
         body.extend(lines_for(n, item, today))
     body += [RULE, footer]
-
-    html = "<b>%s</b>\n<pre>%s</pre>" % (art.esc(head),
-                                        "\n".join(art.esc(l) for l in body))
-    if closing:
-        html += "\n" + closing
+    html = _html(head, body, closing)
     buttons = [[{"text": "%d %s" % (n, icon),
                  "callback_data": "%s:%d" % (state, item["id"])}
                 for state, icon in BUTTONS]
@@ -123,17 +128,66 @@ def render(head, items, today, footer, closing=None):
     return html, (buttons or None)
 
 
+def frozen_on(item):
+    """The day it went in the freezer, as "Oct 3", or "" if unrecorded."""
+    stamp = (item["closed"] or "")[:10]
+    if not stamp:
+        return ""
+    d = date.fromisoformat(stamp)
+    return d.strftime("%b ") + str(d.day)
+
+
+def settled(kind, item):
+    """Whether a line on this kind of card is finished.
+
+    Depends on the card: freezing milk from a nudge finishes its nudge line,
+    while the same milk is still an open line on the freezer card until it is
+    used or binned out of the freezer.
+    """
+    if kind == "freezer":
+        return item.get("freezer_outcome") is not None
+    return item["state"] != "open"
+
+
+def render_freezer(head, items, footer):
+    """(html, buttons) for /freezer. No tier sections: once frozen, a use-by
+    date stops meaning anything, so the right column is when it went in."""
+    body = [RULE, "FROZEN ON".rjust(WIDTH)]
+    for n, item in enumerate(items, 1):
+        outcome = item.get("freezer_outcome")
+        if outcome:
+            body.extend(_row("%s %s" % (MARK[outcome], item["name"]),
+                             OUTCOME[outcome]))
+            # A binned rescue comes back off the month. Said once, on its
+            # line, as a fact about the figure: no verdict (SKILL §20).
+            if outcome == "tossed" and fridge.is_rescue("frozen", item["tier"]):
+                body.append("  off this month's count")
+        else:
+            body.extend(_row("%d %s" % (n, item["name"]), frozen_on(item)))
+    body += [RULE, footer]
+    buttons = [[{"text": "%d %s" % (n, icon),
+                 "callback_data": "frz:%s:%d" % (state, item["id"])}
+                for state, icon in FREEZER_BUTTONS]
+               for n, item in enumerate(items, 1)
+               if not item.get("freezer_outcome")]
+    return _html(head, body, None), (buttons or None)
+
+
 def tally(kind, items, more=0):
-    """The footer. A nudge counts what's handled; /fridge counts what's left."""
+    """The footer. A nudge counts what's handled; /fridge and /freezer count
+    what's left."""
     total = len(items)
-    done = sum(1 for i in items if i["state"] != "open")
+    done = sum(1 for i in items if settled(kind, i))
     if kind == "nudge":
         line = ("All %d handled" % total if done == total
                 else "%d of %d handled" % (done, total))
+    elif kind == "freezer":
+        line = ("%d in the freezer" % total if not done
+                else "%d settled, %d left" % (done, total - done))
     else:
         line = ("%d tracked" % total if not done
                 else "%d closed, %d left" % (done, total - done))
     if more:
-        line += "\n+%d more, see /fridge" % more if kind == "nudge" else \
-                "\n+%d more not shown" % more
+        line += ("\n+%d more, see /fridge" % more if kind == "nudge"
+                 else "\n+%d more not shown" % more)
     return line
