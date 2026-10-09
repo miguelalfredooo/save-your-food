@@ -55,6 +55,15 @@ CREATE TABLE IF NOT EXISTS members (
     joined    TEXT    NOT NULL,
     invite    TEXT
 );
+CREATE TABLE IF NOT EXISTS ai_usage (
+    chat_id   INTEGER NOT NULL,
+    day       TEXT    NOT NULL,         -- ISO date
+    calls     INTEGER NOT NULL DEFAULT 0,
+    prompt_tokens     INTEGER NOT NULL DEFAULT 0,
+    completion_tokens INTEGER NOT NULL DEFAULT 0,
+    cost      REAL,                     -- dollars, when the provider says; NULL if never
+    PRIMARY KEY (chat_id, day)
+);
 CREATE TABLE IF NOT EXISTS meta (
     chat_id   INTEGER NOT NULL,
     key       TEXT    NOT NULL,
@@ -733,6 +742,40 @@ def remove_member(con, chat_id):
     # never carried over from an earlier membership.
     con.execute("DELETE FROM meta WHERE chat_id=? AND key='ai'", (chat_id,))
     con.commit()
+
+
+# --- AI usage --------------------------------------------------------------
+#
+# One row per person per day. Counts what the provider reports for each model
+# call, so "is this worth optimising" is answered from the bill, not a guess.
+
+def record_usage(con, chat_id, usage, day=None):
+    """Add one model call. `usage` is the provider's usage object, or None
+    when it sent none: the call still counts, with no tokens and no cost."""
+    usage = usage or {}
+    cost = usage.get("cost")
+    con.execute(
+        "INSERT INTO ai_usage (chat_id, day, calls, prompt_tokens,"
+        " completion_tokens, cost) VALUES (?,?,1,?,?,?)"
+        " ON CONFLICT (chat_id, day) DO UPDATE SET calls=calls+1,"
+        " prompt_tokens=prompt_tokens+excluded.prompt_tokens,"
+        " completion_tokens=completion_tokens+excluded.completion_tokens,"
+        " cost=CASE WHEN excluded.cost IS NULL THEN cost"
+        "      ELSE COALESCE(cost, 0) + excluded.cost END",
+        (chat_id, (day or date.today()).isoformat(),
+         int(usage.get("prompt_tokens") or 0),
+         int(usage.get("completion_tokens") or 0),
+         float(cost) if cost is not None else None))
+    con.commit()
+
+
+def usage_since(con, day):
+    """Totals per chat from `day` on, busiest first."""
+    return [dict(r) for r in con.execute(
+        "SELECT chat_id, SUM(calls) calls, SUM(prompt_tokens) prompt_tokens,"
+        " SUM(completion_tokens) completion_tokens, SUM(cost) cost"
+        " FROM ai_usage WHERE day >= ? GROUP BY chat_id ORDER BY calls DESC",
+        (day.isoformat(),))]
 
 
 def items_by_ids(con, chat_id, ids):

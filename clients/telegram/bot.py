@@ -367,6 +367,7 @@ COMMANDS = [
 OWNER_COMMANDS = [
     ("invite", "Make a one-use link for a friend"),
     ("members", "Who has joined, and remove them"),
+    ("usage", "What AI mode used, per person"),
 ]
 
 
@@ -695,6 +696,10 @@ def send_llm_reply(tg, chat_id, text):
 
 
 MAX_PHOTO_BYTES = 10 * 1024 * 1024
+# Telegram keeps a 2560px copy of newer photos. A vision model is billed by
+# pixels, and that copy costs about four times the 1280px one, which still
+# reads a fridge shelf or a receipt.
+MAX_PHOTO_EDGE = 1280
 
 
 def _pick_photo(sizes):
@@ -702,7 +707,8 @@ def _pick_photo(sizes):
     largest one at or under the cap, rather than always the biggest: a huge
     photo still gets something sent instead of a flat refusal, and the model
     doesn't need more resolution than that to read a fridge or a receipt."""
-    under_cap = [s for s in sizes if s.get("file_size", 0) <= MAX_PHOTO_BYTES]
+    under_cap = [s for s in sizes if s.get("file_size", 0) <= MAX_PHOTO_BYTES
+                 and max(s.get("width", 0), s.get("height", 0)) <= MAX_PHOTO_EDGE]
     return (under_cap[-1] if under_cap else sizes[0])["file_id"]
 
 
@@ -796,7 +802,39 @@ def handle_owner_command(tg, con, chat_id, text, cfg):
         text, buttons = compose_members(con, cfg)
         tg.send(chat_id, text, buttons=buttons)
         return True
+    if low.startswith("/usage"):
+        tg.send(chat_id, compose_usage(con, cfg))
+        return True
     return False
+
+
+def compose_usage(con, cfg, today=None):
+    """What AI mode used, per person, this week and this month."""
+    today = today or date.today()
+    names = {m["chat_id"]: m["name"] or "chat %d" % m["chat_id"]
+             for m in fridge.members(con)}
+    names[owner(cfg)] = "you"
+
+    def block(title, since):
+        rows = fridge.usage_since(con, since)
+        if not rows:
+            return ["%s: no AI calls." % title]
+        out = ["%s:" % title]
+        for r in rows:
+            cost = ("$%.4f" % r["cost"] if r["cost"] is not None
+                    else "cost not reported")
+            out.append("  • %s: %d call%s, %s in / %s out, %s" % (
+                names.get(r["chat_id"], "chat %d" % r["chat_id"]),
+                r["calls"], "" if r["calls"] == 1 else "s",
+                format(r["prompt_tokens"], ","),
+                format(r["completion_tokens"], ","), cost))
+        return out
+
+    lines = block("Last 7 days", today - timedelta(days=6))
+    lines += [""] + block(today.strftime("%B so far"), today.replace(day=1))
+    lines += ["", "Tokens and cost as the provider reported them. A message "
+                  "can take several calls when the model uses tools."]
+    return "\n".join(lines)
 
 
 def handle_message(tg, con, msg, cfg):
