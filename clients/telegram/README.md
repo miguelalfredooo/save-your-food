@@ -167,10 +167,14 @@ with an invite link start without it, since every message they send would
 go to the model on your key: turn it on for one person from `/members`.
 Without it they get the regular bot, which reads commands and typed lists.
 
-**Recipes stay yours.** `search_recipes` reads the Recipes folder in the
+**Recipes stay yours.** The recipe tools (`search_recipes`,
+`fetch_recipe_page`, `draft_recipe`) all work on the Recipes folder in the
 owner's Apple Notes, so only the owner's chat (the first id in
-`allowed_chat_ids`) is offered it. Anyone else's model never sees the tool,
-and a call to it is refused. On an open bot, with no owner, nobody gets it.
+`allowed_chat_ids`) is offered them. Anyone else's model never sees them,
+and a call to one is refused. The Save button checks the same thing, so a
+household chat on the allow-list still can't write to your Notes. On an
+open bot, with no owner, nobody gets them. A recipe link is only opened over
+https, and never to a home-network or loopback address, redirects included.
 `/invite` and `/members` still work for the owner with AI mode on.
 
 **What it costs.** Every model call is logged per person and day, with the
@@ -261,7 +265,7 @@ gets answered more often than a Reminders alert. Everything else is in the
 | `fridge.py` | Storage, list parsing, composing messages |
 | `card.py` | The fixed-width card the nudge, `/fridge` and `/freezer` are drawn as |
 | `shelf_life.py` | The use-by table and risk classes, ported from the skill |
-| `test_logic.py` | 390 tests. `python3 test_logic.py` |
+| `test_logic.py` | 447 tests. `python3 test_logic.py` |
 | `preview.py` | Renders the messages for any date, no token needed. `python3 preview.py 2026-09-26` |
 | `try_chat.py` | Chat with the real handlers in a terminal, no token. `tap 2 used` presses a card button. `python3 try_chat.py -i` |
 | `seed.json` | Real fridge contents as of Sep 23, so the test runs against real food |
@@ -319,7 +323,7 @@ The bot registers these with Telegram on startup, so they show in the `/` menu.
 
     python3 test_logic.py
 
-390 tests, no network needed. The interesting ones are the bucket collisions
+447 tests, no network needed. The interesting ones are the bucket collisions
 (`ground beef` vs `ground ginger`, `coconut milk` vs `oat milk`, `butternut
 squash` vs `peanut butter`) and the correction phrasings, including negation.
 

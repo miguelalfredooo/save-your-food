@@ -12,7 +12,7 @@ is not meant to.
 Typed capture, one daily nudge, three inline buttons (Used it / Froze it /
 Tossed it), per-class disposal prompts. In LLM mode only, recipe search reads
 Notes live, and a recipe sent as text or a link can be added to Notes after a
-Save tap (create-only; see SKILL.md §8a). No cook log, scorecard or geofences.
+Save tap (create-only, owner's chat only; see SKILL.md §8a). No cook log, scorecard or geofences.
 The only question this client exists to answer is whether a chat nudge gets
 answered more often than a Reminders alert.
 
