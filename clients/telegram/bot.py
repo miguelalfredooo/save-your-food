@@ -431,7 +431,7 @@ def _actionable(kind, today):
     """Which open items on this kind of card get buttons of their own.
 
     A nudge is all decisions. /fridge only asks about what's past its date or
-    due tonight or tomorrow; the rest sit behind "Something else". The card
+    due tonight or tomorrow; the rest sit behind "Mark another item". The card
     after adding food asks nothing: it was bought a moment ago.
     """
     if kind == "fridge":
@@ -1365,7 +1365,7 @@ def handle_pick(tg, con, chat_id, cb, msg, state, raw_id):
     """Tap a number, then choose: the keyboard swaps, the card doesn't.
 
     pick:<id> shows that item's choices, pickall shows a number for every
-    open item (behind "Something else"), unpick goes back to the card's own
+    open item (behind "Mark another item"), unpick goes back to the card's own
     buttons. The choice itself is an ordinary used:/frz: tap, which closes
     the item and redraws the card with its normal buttons.
     """
