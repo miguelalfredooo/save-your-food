@@ -1351,14 +1351,16 @@ class LLMAgentTools(unittest.TestCase):
         self.con.close()
         os.unlink(self.tmp.name)
 
-    def test_add_items_uses_the_models_own_estimate(self):
+    def test_add_items_uses_the_models_estimate_for_unknown_food(self):
+        # The table wins for food it knows (see BetterDates); the model's
+        # number only fills in, as a guess, for food it doesn't.
         result = llm_agent.exec_add_items(
             self.con, 1,
-            {"items": [{"name": "butter chicken (leftovers)", "estimated_days": 4}]},
+            {"items": [{"name": "dragonfruit curd", "estimated_days": 4}]},
             TODAY)
         self.assertEqual(len(result["added"]), 1)
         item = fridge.open_items(self.con, 1)[0]
-        self.assertEqual(item["name"], "butter chicken (leftovers)")
+        self.assertEqual(item["name"], "dragonfruit curd")
         self.assertEqual(item["use_by_date"], TODAY + timedelta(days=4))
         self.assertTrue(item["estimated"])   # the model guessed, didn't state a date
 
@@ -4929,6 +4931,92 @@ class FewerButtons(unittest.TestCase):
     def test_a_stale_pick_says_so(self):
         self._cb("pick:999", message_id=42)
         self.assertIn("out of date", self.tg.answers[-1])
+
+
+class BetterDates(unittest.TestCase):
+    """The table comes first, in AI mode too, and it knows far more food, so
+    "date is a guess" means the bot really doesn't know."""
+
+    def setUp(self):
+        self.con = fridge.connect(tempfile.mktemp(suffix=".db"))
+
+    def _ai_add(self, name, **kw):
+        llm_agent.exec_add_items(self.con, 1, {"items": [dict(name=name, **kw)]}, TODAY)
+        return [i for i in fridge.open_items(self.con, 1) if i["name"] == name][0]
+
+    def test_ai_mode_uses_the_table_for_a_known_food(self):
+        item = self._ai_add("milk", estimated_days=12)
+        self.assertEqual(item["use_by_date"], TODAY + timedelta(days=sl.lookup("milk")[0]))
+        self.assertFalse(item["estimated"])
+
+    def test_ai_mode_guesses_only_for_an_unknown_food(self):
+        item = self._ai_add("dragonfruit curd", estimated_days=4)
+        self.assertEqual(item["use_by_date"], TODAY + timedelta(days=4))
+        self.assertTrue(item["estimated"])
+
+    def test_a_stated_date_wins_over_the_table(self):
+        item = self._ai_add("milk", estimated_days=2, stated_date=True)
+        self.assertEqual(item["use_by_date"], TODAY + timedelta(days=2))
+        self.assertFalse(item["estimated"])
+
+    def test_common_foods_are_known(self):
+        for name in ("avocado", "tortillas", "salsa", "kimchi", "cream cheese",
+                     "mozzarella", "feta", "sausage", "hot dogs", "salami",
+                     "smoked salmon", "cod", "shrimp", "celery", "cauliflower",
+                     "green onions", "fresh ginger", "peaches", "mango", "kiwi",
+                     "orange juice", "bread", "bagels", "pesto", "hummus",
+                     "pickles", "tempeh", "fresh pasta", "kefir", "tomatoes",
+                     "corn on the cob", "radishes", "jalapeno", "pizza",
+                     "chicken salad", "duck"):
+            self.assertFalse(sl.lookup(name)[2], name)
+
+    def test_specific_rows_beat_general_ones(self):
+        cases = {
+            "turkey slices": (3, sl.YELLOW),     # deli, not raw turkey
+            "orange juice": (7, sl.YELLOW),      # opened juice, not an orange
+            "grapefruit": (21, sl.GREEN),        # citrus, not a grape
+            "cream cheese": (10, sl.YELLOW),     # not cream
+            "smoked salmon": (5, sl.YELLOW),     # not raw fish
+            "chicken salad": (3, sl.YELLOW),     # prepared, not raw chicken
+            "hot dogs": (7, sl.YELLOW),          # cooked, not raw sausage
+        }
+        for name, (days, cls) in cases.items():
+            self.assertEqual(sl.lookup(name)[:2], (days, cls), name)
+
+    def test_the_pantry_still_comes_first(self):
+        for name in ("tortilla chips", "pasta", "canned tuna", "dried cranberries"):
+            self.assertTrue(sl.not_tracked(name)[0], name)
+        self.assertFalse(sl.not_tracked("pasta salad")[0])
+
+
+class OneWidth(unittest.TestCase):
+    """Every monospace block in the chat is the card's width, drawings too,
+    so no bubble comes out narrower than the cards around it."""
+
+    def setUp(self):
+        self.con = fridge.connect(tempfile.mktemp(suffix=".db"))
+        self.tg = FakeTG()
+        bot.reset_rate_limits()
+        onb.set_step(self.con, 1, onb.DONE)
+
+    def _widest(self, html):
+        body = html.split("<pre>", 1)[1].split("</pre>", 1)[0]
+        return max(len(l.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">"))
+                   for l in body.split("\n"))
+
+    def test_a_drawing_message_is_card_width(self):
+        bot.handle_message(self.tg, self.con, {"chat": {"id": 1, "type": "private"},
+                                               "text": "/fridge"}, CFG)   # empty: a drawing
+        self.assertIn("<pre>", self.tg.sent[-1])
+        self.assertEqual(self._widest(self.tg.sent[-1]), card.WIDTH)
+
+    def test_a_long_caption_wraps_to_the_card(self):
+        html = art.render(art.MOMENT_ART["empty"][0], "word " * 40, width=card.WIDTH)
+        self.assertEqual(self._widest(html), card.WIDTH)
+
+    def test_without_a_width_render_is_unchanged(self):
+        html = art.render(art.MOMENT_ART["empty"][0], "Nothing yet.")
+        self.assertNotIn("\u2500", html)
 
 
 class MonthSummaryTool(unittest.TestCase):

@@ -368,11 +368,21 @@ def exec_add_items(con, chat_id, args, today):
             fridge.remember(con, chat_id, name, "stable", today)
             went_to_pantry.append(name)
             continue
+        # A date they gave wins. Otherwise the table, which is standard
+        # storage guidance, beats the model's estimate: milk was being marked
+        # "a guess" in AI mode while the table knew it. The model's number
+        # only fills in for food the table doesn't know, and that is the one
+        # case still called a guess.
         days = it.get("estimated_days")
-        use_by = (today + timedelta(days=int(days))) if days is not None \
-            else sl.use_by(name, today)[0]
-        estimated = not it.get("stated_date")
-        risk = sl.lookup(name)[1]
+        table_days, risk, unknown = sl.lookup(name)
+        if it.get("stated_date") and days is not None:
+            use_by, estimated = today + timedelta(days=int(days)), False
+        elif not unknown:
+            use_by, estimated = today + timedelta(days=table_days), False
+        elif days is not None:
+            use_by, estimated = today + timedelta(days=int(days)), True
+        else:
+            use_by, estimated = today + timedelta(days=table_days), True
         existing = _find_open_item(con, chat_id, name)
         if existing:
             con.execute("UPDATE items SET use_by=?, estimated=? WHERE id=?",

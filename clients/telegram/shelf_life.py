@@ -12,30 +12,69 @@ RED, YELLOW, GREEN = "red", "yellow", "green"
 # (match substrings, days, risk class)
 # Order matters — the first match wins, so put specific before general.
 SHELF_LIFE = [
-    # Cooked food first: "chicken soup" and "butter chicken (leftovers)" are
-    # three-day leftovers, not one-day raw chicken.
-    (("leftover", "cooked", "soup", "stew", "guiso"), 3, YELLOW),
-    (("ground beef", "ground chicken", "ground turkey", "ground pork"), 1, RED),
-    (("chicken breast", "chicken thigh", "chicken", "turkey"), 1, RED),
-    (("fish", "salmon", "tilapia", "shrimp", "prawn", "shellfish", "scallop"), 1, RED),
+    # Cooked and prepared food first: "chicken soup", "chicken salad" and
+    # "butter chicken (leftovers)" are three-day leftovers, not raw chicken.
+    (("leftover", "cooked", "soup", "stew", "guiso", "pizza", "takeout",
+      "take-out", "chicken salad", "egg salad", "tuna salad", "potato salad",
+      "pasta salad", "coleslaw"), 3, YELLOW),
+    (("fresh pasta", "gnocchi", "ravioli", "tortellini", "dumpling"), 3, YELLOW),
+    (("ground beef", "ground chicken", "ground turkey", "ground pork",
+      "ground lamb", "ground meat", "burger", "patty", "patties"), 1, RED),
+    # Sliced and cured before raw: "turkey slices" is deli meat, not raw turkey.
+    (("deli meat", "lunch meat", "cold cuts", "turkey slices", "sliced turkey",
+      "salami", "prosciutto", "pepperoni", "pastrami", "ham"), 3, YELLOW),
+    (("hot dog", "hotdog", "frankfurter", "frank"), 7, YELLOW),
+    (("smoked salmon", "lox"), 5, YELLOW),
+    (("chicken breast", "chicken thigh", "chicken", "turkey", "duck"), 1, RED),
+    (("sausage", "bratwurst"), 1, RED),
+    (("fish", "salmon", "tilapia", "shrimp", "prawn", "shellfish", "scallop",
+      "cod", "tuna", "trout", "halibut", "catfish", "snapper", "crab",
+      "lobster", "mussel", "clam", "oyster"), 1, RED),
     (("steak", "chops", "roast", "pork belly", "beef", "pork", "lamb"), 3, RED),
     (("bacon",), 7, RED),
-    (("deli meat", "ham", "turkey slices"), 3, YELLOW),
     (("tofu",), 3, YELLOW),
+    (("tempeh", "seitan"), 7, YELLOW),
     (("cut fruit", "melon", "pineapple"), 3, YELLOW),
+    (("guacamole",), 3, YELLOW),
+    (("avocado", "banana"), 3, YELLOW),
     (("spinach", "lettuce", "arugula", "salad", "greens", "kale"), 3, YELLOW),
+    (("cranberr",), 14, GREEN),
     (("berry", "berries", "strawberr", "blueberr", "raspberr"), 3, YELLOW),
-    (("cilantro", "parsley", "culantro", "basil", "herb", "mint"), 3, YELLOW),
+    (("cilantro", "parsley", "culantro", "basil", "herb", "mint", "dill",
+      "chive"), 3, YELLOW),
+    (("green onion", "scallion", "leek"), 5, YELLOW),
     (("mushroom",), 3, YELLOW),
-    (("broccoli", "asparagus", "green bean", "zucchini"), 3, YELLOW),
+    (("broccoli", "asparagus", "green bean", "zucchini", "brussels",
+      "bok choy", "snap pea", "snow pea", "eggplant", "okra", "sprout"), 3, YELLOW),
+    (("cauliflower", "corn"), 3, YELLOW),
+    (("tomato",), 5, YELLOW),
+    (("peach", "plum", "nectarine", "apricot", "cherr", "kiwi", "mango",
+      "papaya", "pear"), 5, YELLOW),
+    (("tzatziki", "dip"), 5, YELLOW),
+    (("salsa", "pesto"), 7, YELLOW),
     (("hummus",), 7, YELLOW),
+    # Opened juice before the fruit: "orange juice" is a week, not an orange.
+    (("juice", "lemonade", "smoothie", "kombucha"), 7, YELLOW),
     (("oat milk", "oatmilk", "almond milk", "soy milk", "nut milk"), 7, YELLOW),
+    (("ice cream", "gelato", "sorbet"), 60, GREEN),
+    (("cream cheese",), 10, YELLOW),
     (("chocolate milk", "milk", "cream", "half and half"), 7, YELLOW),
+    (("mozzarella", "burrata", "feta", "goat cheese", "mascarpone"), 5, YELLOW),
     (("soft cheese", "brie", "ricotta", "cottage cheese"), 7, YELLOW),
-    (("yogurt", "yoghurt"), 7, YELLOW),
-    (("pepper", "cucumber", "grape"), 7, GREEN),
-    (("hard cheese", "parmesan", "cheddar", "manchego"), 21, GREEN),
-    (("carrot", "cabbage", "orange", "lemon", "lime", "apple", "citrus"), 21, GREEN),
+    (("yogurt", "yoghurt", "kefir"), 7, YELLOW),
+    # Citrus before grapes: "grapefruit" is citrus.
+    (("grapefruit", "orange", "lemon", "lime", "citrus"), 21, GREEN),
+    (("pepper", "cucumber", "grape", "jalapeno", "jalape\u00f1o", "serrano",
+      "poblano"), 7, GREEN),
+    (("hard cheese", "parmesan", "cheddar", "manchego", "gouda", "swiss",
+      "gruyere", "pecorino"), 21, GREEN),
+    (("cheese",), 14, GREEN),
+    (("celery", "radish", "beet", "turnip", "parsnip"), 14, GREEN),
+    (("carrot", "cabbage", "apple", "ginger"), 21, GREEN),
+    (("tortilla", "pita", "naan", "wrap"), 14, GREEN),
+    (("bread", "bagel", "buns", "muffin", "croissant", "brioche"), 7, GREEN),
+    (("jam", "jelly", "preserves", "pickle", "kimchi", "sauerkraut"), 30, GREEN),
+    (("miso",), 90, GREEN),
     (("egg",), 21, GREEN),
 ]
 
@@ -74,6 +113,8 @@ NEVER_STABLE = (
     # "butter" is a pantry keyword, and these are not butter.
     "butter lettuce", "butterhead", "buttermilk", "butternut",
     "butter chicken", "butter paneer",
+    # "pasta" and "rice" are pantry keywords; these are made, perishable food.
+    "pasta salad", "fresh pasta", "rice pudding",
     # "minced" is a pantry modifier; minced meat is a one-day red item.
     "minced beef", "minced meat", "minced pork", "minced lamb",
     "minced chicken", "minced turkey",
@@ -120,6 +161,7 @@ STABLE = (
     "cream of", "campbell", "consomme", "butter", "frozen",
     "baking powder", "sugar", "honey", "maple syrup", "syrup",
     "chocolate chip", "oats", "chia", "flax", "raisin",
+    "chips", "crackers", "cereal", "granola",
 )
 
 

@@ -464,8 +464,13 @@ def _wrap_caption(caption, width=MAX_WIDTH):
     return lines
 
 
-def render(frame, caption=None):
+def render(frame, caption=None, width=None):
     """A drawing and its caption as one Telegram HTML pre block.
+
+    `width`, when given, is the card width the bot uses everywhere else: a
+    rule of that width goes between the drawing and its caption, and the
+    caption wraps to it. A bubble is as wide as its longest line, so without
+    it a drawing came out narrower than every card around it.
 
     Telegram sets a proportional font by default, which turns every drawing
     into rubble. A pre block is the only thing that holds the columns, and
@@ -484,7 +489,10 @@ def render(frame, caption=None):
         # must NOT be escaped. Escaping here would show "&amp;" to the user.
         return caption or ""
     body = esc(frame)
+    if width:
+        body += "\n\n" + "\u2500" * width
     if caption:
-        wrapped = "\n".join(esc(line) for line in _wrap_caption(caption))
-        body += "\n\n" + wrapped
+        wrapped = "\n".join(esc(line)
+                            for line in _wrap_caption(caption, width or MAX_WIDTH))
+        body += ("\n" if width else "\n\n") + wrapped
     return "<pre>" + body + "</pre>"
