@@ -4989,6 +4989,36 @@ class BetterDates(unittest.TestCase):
         self.assertFalse(sl.not_tracked("pasta salad")[0])
 
 
+class OneWidth(unittest.TestCase):
+    """Every monospace block in the chat is the card's width, drawings too,
+    so no bubble comes out narrower than the cards around it."""
+
+    def setUp(self):
+        self.con = fridge.connect(tempfile.mktemp(suffix=".db"))
+        self.tg = FakeTG()
+        bot.reset_rate_limits()
+        onb.set_step(self.con, 1, onb.DONE)
+
+    def _widest(self, html):
+        body = html.split("<pre>", 1)[1].split("</pre>", 1)[0]
+        return max(len(l.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">"))
+                   for l in body.split("\n"))
+
+    def test_a_drawing_message_is_card_width(self):
+        bot.handle_message(self.tg, self.con, {"chat": {"id": 1, "type": "private"},
+                                               "text": "/fridge"}, CFG)   # empty: a drawing
+        self.assertIn("<pre>", self.tg.sent[-1])
+        self.assertEqual(self._widest(self.tg.sent[-1]), card.WIDTH)
+
+    def test_a_long_caption_wraps_to_the_card(self):
+        html = art.render(art.MOMENT_ART["empty"][0], "word " * 40, width=card.WIDTH)
+        self.assertEqual(self._widest(html), card.WIDTH)
+
+    def test_without_a_width_render_is_unchanged(self):
+        html = art.render(art.MOMENT_ART["empty"][0], "Nothing yet.")
+        self.assertNotIn("\u2500", html)
+
+
 class MonthSummaryTool(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)

@@ -424,7 +424,7 @@ def close_card(con, chat_id, spec, items):
     frame = draw(con, chat_id, moment)
     if not frame:
         return None
-    return art.render(frame, caption)
+    return art.render(frame, caption, width=card.WIDTH)
 
 
 def _actionable(kind, today):
@@ -633,7 +633,7 @@ def send_delight(tg, con, chat_id, moment, item=None, caption=None):
         if caption:
             tg.send(chat_id, caption)
         return False
-    tg.send(chat_id, art.render(frame, caption), html=True)
+    tg.send(chat_id, art.render(frame, caption, width=card.WIDTH), html=True)
     return True
 
 
@@ -1612,7 +1612,8 @@ def handle_recipe_callback(tg, con, chat_id, cb, msg, raw, cfg):
         frame = draw(con, chat_id, "recipe_saved")
         if frame:
             tg.edit(chat_id, msg["message_id"],
-                    art.render(frame, "Saved to Recipes: %s" % draft["title"]),
+                    art.render(frame, "Saved to Recipes: %s" % draft["title"],
+                               width=card.WIDTH),
                     html=True)
         else:
             tg.edit(chat_id, msg["message_id"],
