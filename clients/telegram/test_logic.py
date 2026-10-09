@@ -3301,6 +3301,68 @@ class RecipesOwnerOnly(unittest.TestCase):
         self.assertIn("not available", seen[-1]["content"])
 
 
+class AIUsage(unittest.TestCase):
+    """What each AI call costs is recorded per person and day, so cost work
+    can be decided on real numbers rather than estimates."""
+
+    def setUp(self):
+        self.con = fridge.connect(tempfile.mktemp(suffix=".db"))
+        self.tg = FakeTG()
+        bot.reset_rate_limits()
+
+    def _reply(self, usage=None):
+        r = {"choices": [{"message": {"content": "ok"}}]}
+        if usage is not None:
+            r["usage"] = usage
+        return r
+
+    def test_each_call_is_recorded(self):
+        caller = lambda m: self._reply({"prompt_tokens": 1900, "completion_tokens": 40,
+                                        "cost": 0.0002})
+        llm_agent.run_agent(self.con, 2, "hi", CFG, TODAY, caller=caller)
+        llm_agent.run_agent(self.con, 2, "hi", CFG, TODAY, caller=caller)
+        rows = fridge.usage_since(self.con, TODAY)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["chat_id"], 2)
+        self.assertEqual(rows[0]["calls"], 2)
+        self.assertEqual(rows[0]["prompt_tokens"], 3800)
+        self.assertEqual(rows[0]["completion_tokens"], 80)
+        self.assertAlmostEqual(rows[0]["cost"], 0.0004)
+
+    def test_a_reply_without_usage_still_counts_the_call(self):
+        llm_agent.run_agent(self.con, 2, "hi", CFG, TODAY,
+                            caller=lambda m: self._reply())
+        row = fridge.usage_since(self.con, TODAY)[0]
+        self.assertEqual((row["calls"], row["prompt_tokens"]), (1, 0))
+        self.assertIsNone(row["cost"])
+
+    def test_requests_cap_the_reply_and_ask_openrouter_for_cost(self):
+        body = llm_agent.request_body("m", [], [], openrouter=True)
+        self.assertEqual(body["max_tokens"], llm_agent.MAX_REPLY_TOKENS)
+        self.assertEqual(body["usage"], {"include": True})
+        self.assertNotIn("usage", llm_agent.request_body("m", [], [], openrouter=False))
+
+    def test_slash_usage_is_owner_only_and_works_with_ai_on(self):
+        cfg = dict(CFG, allowed_chat_ids=[1], llm_mode=True, openrouter_api_key="k")
+        fridge.record_usage(self.con, 1, {"prompt_tokens": 2000,
+                                          "completion_tokens": 50, "cost": 0.001})
+        bot.handle_message(self.tg, self.con, {"chat": {"id": 1, "type": "private"},
+                                               "text": "/usage"}, cfg)
+        self.assertIn("1 call", self.tg.sent[-1])
+        self.assertIn("$0.0010", self.tg.sent[-1])
+        code = fridge.create_invite(self.con)
+        fridge.redeem_invite(self.con, code, 2, "Ana")
+        bot.handle_message(self.tg, self.con, {"chat": {"id": 2, "type": "private"},
+                                               "text": "/usage"}, dict(cfg, llm_mode=False))
+        self.assertEqual(self.tg.sent[-1], bot.HELP)
+
+    def test_photos_are_capped_at_a_long_edge(self):
+        sizes = [{"file_id": "s", "width": 320, "height": 240, "file_size": 20000},
+                 {"file_id": "m", "width": 1280, "height": 960, "file_size": 200000},
+                 {"file_id": "l", "width": 2560, "height": 1920, "file_size": 900000}]
+        self.assertEqual(bot._pick_photo(sizes), "m")
+
+
 class MonthSummaryTool(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)

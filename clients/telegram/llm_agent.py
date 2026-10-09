@@ -559,8 +559,23 @@ def _redact(text, cfg):
     return text.replace(key, "<key>") if key and key in text else text
 
 
+# A ceiling, not a target: replies are a few lines. It stops a runaway answer,
+# the expensive kind, while leaving room for an add_items call carrying a long
+# grocery list, whose arguments count as output too.
+MAX_REPLY_TOKENS = 1000
+
+
+def request_body(model, messages, tools, openrouter=False):
+    body = {"model": model, "messages": messages, "tools": tools,
+            "max_tokens": MAX_REPLY_TOKENS}
+    if openrouter:
+        # OpenRouter adds the dollar cost of the call to its usage object.
+        body["usage"] = {"include": True}
+    return body
+
+
 def call_openrouter(api_key, model, messages, tools, timeout=REQUEST_TIMEOUT):
-    body = json.dumps({"model": model, "messages": messages, "tools": tools}).encode()
+    body = json.dumps(request_body(model, messages, tools, openrouter=True)).encode()
     req = urllib.request.Request(
         API_URL, data=body,
         headers={
@@ -572,7 +587,7 @@ def call_openrouter(api_key, model, messages, tools, timeout=REQUEST_TIMEOUT):
 
 
 def call_ollama(base_url, model, messages, tools, timeout=REQUEST_TIMEOUT):
-    body = json.dumps({"model": model, "messages": messages, "tools": tools}).encode()
+    body = json.dumps(request_body(model, messages, tools)).encode()
     req = urllib.request.Request(
         base_url.rstrip("/") + "/chat/completions", data=body,
         headers={"Content-Type": "application/json"})
@@ -643,6 +658,10 @@ def run_agent(con, chat_id, text, cfg, today=None, caller=None, image_b64=None,
             # too, the same way bot.py's Telegram class already is.
             print("! llm_agent call failed: %s" % _redact(str(e), cfg))
             return "Having trouble thinking right now. Try again in a bit."
+        try:
+            fridge.record_usage(con, chat_id, resp.get("usage"), today)
+        except Exception as e:   # bookkeeping must never cost the user a reply
+            print("! llm_agent usage not recorded: %s" % e)
         choice = resp["choices"][0]["message"]
         tool_calls = choice.get("tool_calls")
         if not tool_calls:
