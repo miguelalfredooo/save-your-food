@@ -2283,6 +2283,16 @@ class Cards(unittest.TestCase):
         self._tap("frozen", items[0]["id"])
         self.assertIn("All 1 handled", self.tg.edits[-1])
 
+    def test_try_chat_runs_and_can_tap_a_card(self):
+        out = subprocess.run(
+            [sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                          "try_chat.py"), "milk", "/fridge", "tap 1 used"],
+            capture_output=True, text=True, timeout=30,
+            env=dict(os.environ, TELEGRAM_BOT_TOKEN=""))
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("popup: Used it", out.stdout)
+        self.assertIn("1 closed", out.stdout)
+
     def test_rel_column_fits(self):
         for d in (-30, -1, 0, 1, 3, 40):
             self.assertLessEqual(len(card.rel(TODAY + timedelta(days=d), TODAY)), card.RIGHT)
