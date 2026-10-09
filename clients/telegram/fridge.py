@@ -7,8 +7,9 @@ without a network, which matters because the transport can't be tested offline.
 import json
 import os
 import re
+import secrets
 import sqlite3
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import prices
 import shelf_life as sl
@@ -40,6 +41,19 @@ CREATE TABLE IF NOT EXISTS pantry (
     added     TEXT    NOT NULL,
     batch     TEXT,
     UNIQUE (chat_id, name)
+);
+CREATE TABLE IF NOT EXISTS invites (
+    code      TEXT    PRIMARY KEY,
+    created   TEXT    NOT NULL,
+    expires   TEXT    NOT NULL,
+    used_by   INTEGER,                  -- the chat that redeemed it
+    used_at   TEXT
+);
+CREATE TABLE IF NOT EXISTS members (
+    chat_id   INTEGER PRIMARY KEY,      -- let in by an invite, not config.json
+    name      TEXT,
+    joined    TEXT    NOT NULL,
+    invite    TEXT
 );
 CREATE TABLE IF NOT EXISTS meta (
     chat_id   INTEGER NOT NULL,
@@ -659,6 +673,63 @@ def open_items(con, chat_id):
         (chat_id,),
     ).fetchall()
     return [dict(r, use_by_date=date.fromisoformat(r["use_by"])) for r in rows]
+
+
+# --- invites ---------------------------------------------------------------
+#
+# Friends get in through a link from the owner instead of their numeric chat
+# id in config.json. One person per link, and links go stale, so a link
+# forwarded on, or found in an old chat, lets nobody else in.
+
+INVITE_DAYS = 7
+
+
+def create_invite(con, now=None, days=INVITE_DAYS):
+    """A fresh one-use code. URL-safe, so it can ride a t.me ?start= link."""
+    now = now or datetime.now()
+    code = secrets.token_urlsafe(9)
+    con.execute("INSERT INTO invites (code, created, expires) VALUES (?,?,?)",
+                (code, now.isoformat(timespec="seconds"),
+                 (now + timedelta(days=days)).isoformat(timespec="seconds")))
+    con.commit()
+    return code
+
+
+def redeem_invite(con, code, chat_id, name=None, now=None):
+    """Let this chat in on this code. False if the code is unknown, used or
+    expired. A chat already in redeems nothing and stays in."""
+    now = now or datetime.now()
+    if is_member(con, chat_id):
+        return True
+    cur = con.execute(
+        "UPDATE invites SET used_by=?, used_at=? WHERE code=? AND used_by IS NULL"
+        " AND expires > ?",
+        (chat_id, now.isoformat(timespec="seconds"), code,
+         now.isoformat(timespec="seconds")))
+    if cur.rowcount != 1:
+        return False
+    con.execute("INSERT OR REPLACE INTO members (chat_id, name, joined, invite)"
+                " VALUES (?,?,?,?)",
+                (chat_id, name, now.isoformat(timespec="seconds"), code))
+    con.commit()
+    return True
+
+
+def is_member(con, chat_id):
+    return con.execute("SELECT 1 FROM members WHERE chat_id=?",
+                       (chat_id,)).fetchone() is not None
+
+
+def members(con):
+    return [dict(r) for r in
+            con.execute("SELECT * FROM members ORDER BY joined")]
+
+
+def remove_member(con, chat_id):
+    """Ends access only. Their fridge stays in the store until it is deleted
+    on purpose; losing someone's data on a mis-tap would be worse."""
+    con.execute("DELETE FROM members WHERE chat_id=?", (chat_id,))
+    con.commit()
 
 
 def items_by_ids(con, chat_id, ids):

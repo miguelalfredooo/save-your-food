@@ -84,6 +84,21 @@ reply at all, not even an error, since a reply would confirm the bot exists.
 Leave the list empty and the bot prints a warning on startup that it is open
 to anyone.
 
+**Letting friends in.** The first id in the list is the owner. From that
+chat, send `/invite` and the bot replies with a link like
+`https://t.me/yourbot?start=...`. Send it to one person: opening it lets
+them in and starts setup. Each link works once and stops working after 7
+days, so a forwarded or old link lets nobody else in. Someone holding a used
+or expired link gets one line asking for a new one.
+
+`/members` lists who joined by invite, with a button to remove each. Removing
+someone ends their access and their daily nudge. Their data stays in
+`fridge.db`. Both commands only work from the owner's chat, and only appear
+in the owner's `/` menu.
+
+Everyone shares one `fridge.db` on the machine running the bot, and whoever
+runs it can read it. Worth saying to anyone you invite.
+
 The bot only ever replies in a private chat. In a group, anyone in it could
 wipe the shared fridge with `/clear`, and the daily nudge would go out to
 everyone in the group.
@@ -214,7 +229,7 @@ typed lists only for now.
 | `fridge.py` | Storage, list parsing, composing messages |
 | `card.py` | The fixed-width card the nudge, `/fridge` and `/freezer` are drawn as |
 | `shelf_life.py` | The use-by table and risk classes, ported from the skill |
-| `test_logic.py` | 344 tests. `python3 test_logic.py` |
+| `test_logic.py` | 354 tests. `python3 test_logic.py` |
 | `preview.py` | Renders the messages for any date, no token needed. `python3 preview.py 2026-09-26` |
 | `try_chat.py` | Chat with the real handlers in a terminal, no token. `tap 2 used` presses a card button. `python3 try_chat.py -i` |
 | `seed.json` | Real fridge contents as of Sep 23, so the test runs against real food |
@@ -272,7 +287,7 @@ The bot registers these with Telegram on startup, so they show in the `/` menu.
 
     python3 test_logic.py
 
-344 tests, no network needed. The interesting ones are the bucket collisions
+354 tests, no network needed. The interesting ones are the bucket collisions
 (`ground beef` vs `ground ginger`, `coconut milk` vs `oat milk`, `butternut
 squash` vs `peanut butter`) and the correction phrasings, including negation.
 
