@@ -40,7 +40,10 @@ and every claim carrying its age.
 | **Report a state, never a failure** | "You've been out of milk since Tuesday" has no timing dependency and nothing to argue with. "You forgot the milk" works for thirty seconds and is an accusation |
 | **Recency beats inventory** | A purchase log is a fact; an inventory is an inference that decays the moment you eat something without ticking it |
 | **Prices measure waste, not spend** | A bank totals groceries better. What this uniquely knows is what the binned food cost |
-| **The toss count is the only real metric** | Reminders sent and recipes matched are activity, not outcome |
+| **Outcomes are the only real metrics** | Reminders sent and recipes matched are activity, not outcome. The two outcomes are what got tossed and what got rescued (below) |
+| **Rescued sits beside tossed, never netted against it** | A toss figure alone can't tell a good month from a month you barely shopped. "Rescued" is narrow on purpose: used or frozen at `t0`/`t1` only, because milk drunk on day 2 was never at risk. A net figure would turn two different kinds of number into a verdict |
+| **The tier is written at close time** | Urgency is never stored, so the moment an item was rescued has to be captured on the close line or it is gone |
+| **Your receipts outrank regional averages** | BLS West is a fallback for month one. It stopped tracking most produce years ago, which is exactly what gets thrown out, so receipts fill that gap as they arrive |
 
 ## Rejected, with reasons
 
@@ -60,6 +63,9 @@ and every claim carrying its age.
 | **Prices in a nudge** | Guilt with a number attached |
 | **Budgets and targets** | A target invites failing to hit it, and guilt is what makes people stop opening the app |
 | **Cross-store price comparison** | Noisy across sizes, promos and products, and it turns a waste system into a shopping optimizer |
+| **"Saved you $X"** | It claims a counterfactual: that the food would have been binned otherwise. "Used before it went off" is a fact; "saved" is a guess |
+| **Scaling US prices up to West** | West ÷ US had a median of 1.05 but ran from 0.85 to 1.31. One multiplier would be a precise-looking guess |
+| **Estimating a missing price from a similar item** | Cilantro priced from romaine is the confidently-wrong number this system exists to avoid. Unpriced items are counted, and the report says how many |
 
 ## Things learned the hard way
 
