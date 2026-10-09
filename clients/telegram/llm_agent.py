@@ -1061,6 +1061,11 @@ def _history_messages(con, chat_id, now):
     return out
 
 
+def recent_messages(con, chat_id, now=None):
+    """What this person sent the model recently, oldest first."""
+    return [t["user"] for t in _history(con, chat_id, now or datetime.now())]
+
+
 def _remember(con, chat_id, user_text, reply, now):
     turns = _history(con, chat_id, now) + [
         {"at": now.isoformat(), "user": user_text, "reply": reply}]

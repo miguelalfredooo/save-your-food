@@ -46,6 +46,7 @@ import shelf_life as sl  # noqa: E402
 import onboarding as onb  # noqa: E402
 import art  # noqa: E402
 import card  # noqa: E402
+import recipe_text  # noqa: E402
 import llm_agent  # noqa: E402
 
 CONFIG_PATH = os.path.join(HERE, "config.json")
@@ -753,13 +754,7 @@ def handle_recipe_link(tg, con, chat_id, text, cfg):
                          "draft it from those." % page["error"])
         return True
     if page.get("title"):
-        result = llm_agent.exec_draft_recipe(con, chat_id, page, date.today())
-        if result.get("error"):
-            tg.send(chat_id, "I couldn't make a draft from that page: it's "
-                             "either too long to show in one message or has no "
-                             "ingredients I can read. Paste the recipe instead.")
-            return True
-        send_pending_recipe(tg, con, chat_id)
+        show_recipe_draft(tg, con, chat_id, page)
         return True
     if ai_for(con, cfg, chat_id):
         send_llm_reply(tg, chat_id, run_ai(
@@ -769,6 +764,40 @@ def handle_recipe_link(tg, con, chat_id, text, cfg):
         return True
     tg.send(chat_id, "I couldn't find a recipe on that page that I can read "
                      "reliably. Paste the ingredients and steps instead.")
+    return True
+
+
+def show_recipe_draft(tg, con, chat_id, recipe):
+    """The one way a recipe reaches the Save and Cancel preview from code,
+    whether it came from a link or a paste, so both look and act the same."""
+    result = llm_agent.exec_draft_recipe(con, chat_id, recipe, date.today())
+    if result.get("error"):
+        tg.send(chat_id, "I couldn't make a draft from that: it's either too "
+                         "long to show in one message or has no ingredients I "
+                         "can read. Try a shorter version.")
+        return
+    send_pending_recipe(tg, con, chat_id)
+
+
+def handle_pasted_recipe(tg, con, chat_id, text, cfg):
+    """A pasted recipe, or "save to notes" right after one, straight to the
+    preview. True if handled.
+
+    Left to the model, a pasted recipe got an ingredient check or a question,
+    and "save to notes" got the recipe written back as chat text: never the
+    buttons a link gets. Owner only, like every recipe action.
+    """
+    if not recipes_for(cfg, chat_id):
+        return False
+    recipe = recipe_text.parse(text)
+    if recipe is None and recipe_text.is_save_request(text):
+        for earlier in reversed(llm_agent.recent_messages(con, chat_id)):
+            recipe = recipe_text.parse(earlier)
+            if recipe:
+                break
+    if recipe is None:
+        return False
+    show_recipe_draft(tg, con, chat_id, recipe)
     return True
 
 
@@ -1013,7 +1042,8 @@ def handle_message(tg, con, msg, cfg):
     # or the privacy note.
     in_setup = (text.lower().startswith(("/start", "/setup", "/skip"))
                 or (onb.active(con, chat_id) and not text.startswith("/")))
-    if not in_setup and handle_recipe_link(tg, con, chat_id, text, cfg):
+    if not in_setup and (handle_recipe_link(tg, con, chat_id, text, cfg)
+                         or handle_pasted_recipe(tg, con, chat_id, text, cfg)):
         return
     if ai_for(con, cfg, chat_id) and not in_setup:
         send_llm_reply(tg, chat_id, run_ai(con, chat_id, text, cfg))

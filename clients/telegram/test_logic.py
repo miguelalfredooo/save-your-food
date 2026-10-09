@@ -26,6 +26,7 @@ import art
 import bot
 import card
 import llm_agent
+import recipe_text
 
 TODAY = date(2026, 9, 23)   # a Wednesday, so weekday names are checkable
 
@@ -4387,6 +4388,117 @@ class RecipeLinks(unittest.TestCase):
                               "it was too sweet, what can I swap?")
         self.assertEqual(self.fetched, [])
         self.assertEqual(len(self.ai), 1)
+
+
+SMOOTHIE = """Vanilla berry protein smoothie
+
+Ingredients
+for 2 servings
+• 1 ½ cups water, or yogurt or milk of choice
+• 1 scoop vanilla protein powder
+• 1 cup strawberry, frozen
+• 1 cup blueberry, frozen
+• ½ cup raspberry, frozen
+• ½ cup blackberry, frozen"""
+
+MEAT_SAUCE = """“Easy Italian Meat Sauce
+4 tablespoons butter
+2 tablespoons olive oil
+1 carrot, finely chopped
+1 onion, chopped
+2 garlic cloves, chopped
+¾ pound ground beef
+1 can (28 ounces) whole tomatoes
+½ cup milk
+Coarse salt and fresh ground pepper
+1. Heat butter and oil in a large pot over medium heat.
+2. Add carrot, onion and garlic and cook until soft, about 8 minutes.”"""
+
+
+class PastedRecipes(unittest.TestCase):
+    """A pasted recipe gets the same Save/Cancel preview as a link, built in
+    code, without waiting on the model to decide to draft it."""
+
+    def test_a_recipe_with_an_ingredients_heading_is_read(self):
+        r = recipe_text.parse(SMOOTHIE)
+        self.assertEqual(r["title"], "Vanilla berry protein smoothie")
+        self.assertIn("1 scoop vanilla protein powder", r["ingredients"])
+        self.assertEqual(r["ingredients"][-1], "½ cup blackberry, frozen")
+        self.assertEqual(r["steps"], [])
+
+    def test_a_recipe_with_numbered_steps_is_split(self):
+        r = recipe_text.parse(MEAT_SAUCE)
+        self.assertEqual(r["title"], "Easy Italian Meat Sauce")
+        self.assertIn("Coarse salt and fresh ground pepper", r["ingredients"])
+        self.assertEqual(r["steps"][0], "Heat butter and oil in a large pot over medium heat.")
+        self.assertTrue(r["steps"][1].endswith("about 8 minutes."))
+
+    def test_words_are_kept_as_written(self):
+        r = recipe_text.parse(MEAT_SAUCE)
+        self.assertIn("1 can (28 ounces) whole tomatoes", r["ingredients"])
+
+    def test_a_grocery_list_is_not_a_recipe(self):
+        for text in ("2 lbs chicken\n1 dozen eggs\nmilk\n3 apples",
+                     "milk, eggs, bread",
+                     "Shopping\n2 lbs chicken\n1 dozen eggs\n3 apples",
+                     "I had 2 cups of coffee and 1 bagel today"):
+            self.assertIsNone(recipe_text.parse(text), text)
+
+    def test_a_save_request_is_recognised(self):
+        for t in ("Save to notes", "save it", "Add as a recipe", "save this recipe"):
+            self.assertTrue(recipe_text.is_save_request(t), t)
+        for t in ("what can I make", "save me some time", "milk, eggs"):
+            self.assertFalse(recipe_text.is_save_request(t), t)
+
+
+class PastedRecipeFlow(unittest.TestCase):
+    OWNER, OTHER = 1, 2
+    CFG = dict(CFG, allowed_chat_ids=[1, 2], llm_mode=True, openrouter_api_key="k")
+
+    def setUp(self):
+        self.con = fridge.connect(tempfile.mktemp(suffix=".db"))
+        self.tg = FakeTG()
+        bot.reset_rate_limits()
+        for chat in (self.OWNER, self.OTHER):
+            onb.set_step(self.con, chat, onb.DONE)
+        self.ai = []
+        self.orig = llm_agent.run_agent
+        llm_agent.run_agent = lambda con, chat_id, text, cfg, **k: self.ai.append(text) or "ai reply"
+
+    def tearDown(self):
+        llm_agent.run_agent = self.orig
+
+    def _say(self, chat_id, text, cfg=None):
+        bot.handle_message(self.tg, self.con, {
+            "chat": {"id": chat_id, "type": "private"}, "text": text}, cfg or self.CFG)
+
+    def test_a_pasted_recipe_goes_straight_to_the_preview(self):
+        self._say(self.OWNER, MEAT_SAUCE)
+        self.assertEqual(self.ai, [])
+        self.assertTrue(self.tg.sent[-1].startswith("Easy Italian Meat Sauce"))
+        self.assertEqual([b["text"] for b in self.tg.buttons[-1][0]],
+                         ["Save to Notes", "Cancel"])
+
+    def test_it_works_with_ai_off(self):
+        self._say(self.OWNER, SMOOTHIE, dict(self.CFG, llm_mode=False))
+        self.assertEqual(self.tg.buttons[-1][0][0]["text"], "Save to Notes")
+
+    def test_only_the_owner(self):
+        self._say(self.OTHER, MEAT_SAUCE)
+        self.assertEqual(len(self.ai), 1)
+
+    def test_save_to_notes_drafts_the_recipe_sent_before(self):
+        # The model got the recipe (say it was phrased oddly) and replied.
+        llm_agent._remember(self.con, self.OWNER, MEAT_SAUCE, "Looks tasty!",
+                            datetime.now())
+        self._say(self.OWNER, "Save to notes")
+        self.assertEqual(self.ai, [])
+        self.assertTrue(self.tg.sent[-1].startswith("Easy Italian Meat Sauce"))
+        self.assertEqual(self.tg.buttons[-1][0][0]["text"], "Save to Notes")
+
+    def test_save_to_notes_with_nothing_before_goes_to_the_model(self):
+        self._say(self.OWNER, "Save to notes")
+        self.assertEqual(self.ai, ["Save to notes"])
 
 
 class MonthSummaryTool(unittest.TestCase):
