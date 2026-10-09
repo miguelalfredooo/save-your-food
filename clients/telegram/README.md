@@ -245,6 +245,13 @@ canvas the drawings use, so every card is the same width on a phone instead of
 each bubble sizing itself to its longest line. A long list shows the soonest
 15 and says how many it left out. `card.py` has the reasoning.
 
+**Everything that lists food is a card**: the nudge, `/fridge`, `/freezer`,
+`/month`, `/pantry`, the reply to a typed list ("Added to your fridge", with
+the pantry and counter sorting in a note underneath), and "what's in my
+fridge?" asked in words. Long names wrap rather than being cut. Every button
+that confirms something reads **[Action] [Cancel]**: Save to Notes, Wipe
+everything, Delete it all.
+
 The bold heading sits outside the block, so it is kept short enough never to
 widen the card: a nudge whose items share one urgency is headed with that
 urgency ("Check before eating"), and a mixed one with a count ("1 tonight, 1
@@ -282,7 +289,7 @@ gets answered more often than a Reminders alert. Everything else is in the
 | `fridge.py` | Storage, list parsing, composing messages |
 | `card.py` | The fixed-width card the nudge, `/fridge` and `/freezer` are drawn as |
 | `shelf_life.py` | The use-by table and risk classes, ported from the skill |
-| `test_logic.py` | 476 tests. `python3 test_logic.py` |
+| `test_logic.py` | 487 tests. `python3 test_logic.py` |
 | `preview.py` | Renders the messages for any date, no token needed. `python3 preview.py 2026-09-26` |
 | `try_chat.py` | Chat with the real handlers in a terminal, no token. `tap 2 used` presses a card button. `python3 try_chat.py -i` |
 | `seed.json` | Real fridge contents as of Sep 23, so the test runs against real food |
@@ -340,7 +347,7 @@ The bot registers these with Telegram on startup, so they show in the `/` menu.
 
     python3 test_logic.py
 
-476 tests, no network needed. The interesting ones are the bucket collisions
+487 tests, no network needed. The interesting ones are the bucket collisions
 (`ground beef` vs `ground ginger`, `coconut milk` vs `oat milk`, `butternut
 squash` vs `peanut butter`) and the correction phrasings, including negation.
 
@@ -363,8 +370,10 @@ you can see which bucket something landed in rather than read that it did.
 Full set: pantry, counter, fridge, poultry, meat, fish, greens, dairy, egg,
 cheese, leftovers, bread, fruit, frozen.
 
-The can heads the pantry list and the onion heads the counter list in `/pantry`,
-which is the most useful thing the set does: it makes the sort visible.
+`/pantry` used to put the can over the pantry list and the onion over the
+counter list. It is a card now, like every other list, with PANTRY and ON
+THE COUNTER as its two sections: the sort stays visible, and the lists all
+look alike. The glyphs still mark a used or frozen item that matches one.
 
 **Frames rotate.** They mark a moment with no food behind it: an empty at-risk
 list, the end of setup, a milestone (10, 25, 50, 100, 250, 500 uses).
