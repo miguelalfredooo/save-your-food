@@ -729,6 +729,9 @@ def remove_member(con, chat_id):
     """Ends access only. Their fridge stays in the store until it is deleted
     on purpose; losing someone's data on a mis-tap would be worse."""
     con.execute("DELETE FROM members WHERE chat_id=?", (chat_id,))
+    # A re-invite starts from scratch: AI is the owner's money, so it is
+    # never carried over from an earlier membership.
+    con.execute("DELETE FROM meta WHERE chat_id=? AND key='ai'", (chat_id,))
     con.commit()
 
 
