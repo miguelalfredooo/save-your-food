@@ -27,6 +27,7 @@ import bot
 import card
 import llm_agent
 import recipe_text
+import redate
 
 TODAY = date(2026, 9, 23)   # a Wednesday, so weekday names are checkable
 
@@ -5017,6 +5018,71 @@ class OneWidth(unittest.TestCase):
     def test_without_a_width_render_is_unchanged(self):
         html = art.render(art.MOMENT_ART["empty"][0], "Nothing yet.")
         self.assertNotIn("\u2500", html)
+
+
+class Redate(unittest.TestCase):
+    """One-time fix for items saved before the table came first: re-date the
+    open guesses the table knows, from the day each was added."""
+
+    def setUp(self):
+        self.con = fridge.connect(tempfile.mktemp(suffix=".db"))
+
+    def _put(self, chat, name, use_by, estimated, state="open", added=TODAY, risk="yellow"):
+        self.con.execute(
+            "INSERT INTO items (chat_id,name,use_by,risk,estimated,added,state)"
+            " VALUES (?,?,?,?,?,?,?)",
+            (chat, name, use_by.isoformat(), risk, estimated, added.isoformat(), state))
+        self.con.commit()
+
+    def _row(self, name):
+        return self.con.execute("SELECT * FROM items WHERE name=?", (name,)).fetchone()
+
+    def test_a_guessed_known_food_is_redated_from_when_it_was_added(self):
+        self._put(1, "chicken thighs", TODAY + timedelta(days=7), 1)
+        changes = redate.redate(self.con, apply=True)
+        self.assertEqual(len(changes), 1)
+        row = self._row("chicken thighs")
+        self.assertEqual(row["use_by"], (TODAY + timedelta(days=1)).isoformat())
+        self.assertEqual(row["risk"], sl.RED)
+        self.assertEqual(row["estimated"], 0)
+
+    def test_a_dry_run_changes_nothing(self):
+        self._put(1, "chicken thighs", TODAY + timedelta(days=7), 1)
+        changes = redate.redate(self.con, apply=False)
+        self.assertEqual(len(changes), 1)
+        self.assertEqual(self._row("chicken thighs")["use_by"],
+                         (TODAY + timedelta(days=7)).isoformat())
+
+    def test_what_it_leaves_alone(self):
+        self._put(1, "milk", TODAY + timedelta(days=2), 0)                 # their date
+        self._put(1, "yogurt", TODAY, 1, state="used")                     # closed
+        self._put(1, "dragonfruit curd", TODAY + timedelta(days=5), 1)     # unknown food
+        self._put(1, "spinach", TODAY + timedelta(days=3), 1)              # already right
+        self.assertEqual(redate.redate(self.con, apply=True), [])
+        self.assertEqual(self._row("milk")["use_by"], (TODAY + timedelta(days=2)).isoformat())
+
+    def test_it_covers_every_chat(self):
+        self._put(1, "chicken thighs", TODAY + timedelta(days=7), 1)
+        self._put(2, "salmon", TODAY + timedelta(days=7), 1)
+        self.assertEqual({c["chat_id"] for c in redate.redate(self.con)}, {1, 2})
+
+    def test_apply_backs_up_the_database_first(self):
+        path = tempfile.mktemp(suffix=".db")
+        con = fridge.connect(path)
+        con.execute("INSERT INTO items (chat_id,name,use_by,risk,estimated,added,state)"
+                    " VALUES (1,'chicken thighs',?, 'yellow',1,?, 'open')",
+                    ((TODAY + timedelta(days=7)).isoformat(), TODAY.isoformat()))
+        con.commit()
+        con.close()
+        out = subprocess.run([sys.executable, os.path.join(os.path.dirname(
+            os.path.abspath(__file__)), "redate.py"), "--db", path, "--apply"],
+            capture_output=True, text=True, timeout=30)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        backups = [f for f in os.listdir(os.path.dirname(path))
+                   if f.startswith(os.path.basename(path) + ".bak-")]
+        self.assertTrue(backups)
+        self.assertIn("chicken thighs", out.stdout)
+        self.assertNotIn("chat_id", out.stdout)
 
 
 class MonthSummaryTool(unittest.TestCase):
