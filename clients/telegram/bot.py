@@ -962,6 +962,10 @@ DELETE_ASK = ("This deletes everything I have about you: your fridge, pantry "
               "undone.")
 
 
+KEEPS_RECIPES = ("\n\nRecipes you saved stay in your Recipes folder in "
+                 "Notes: this never touches Notes.")
+
+
 def handle_account_command(tg, con, chat_id, text, cfg):
     """/privacy and /deleteme. True if handled.
 
@@ -974,7 +978,9 @@ def handle_account_command(tg, con, chat_id, text, cfg):
         tg.send(chat_id, privacy_note(con, cfg, chat_id))
         return True
     if low.startswith("/deleteme"):
-        tg.send(chat_id, DELETE_ASK, buttons=[[
+        # Only the owner can save recipes, so only the owner could wonder.
+        ask = DELETE_ASK + (KEEPS_RECIPES if recipes_for(cfg, chat_id) else "")
+        tg.send(chat_id, ask, buttons=[[
             {"text": "Delete my data", "callback_data": "deleteme:yes"},
             {"text": "Cancel", "callback_data": "deleteme:no"},
         ]])

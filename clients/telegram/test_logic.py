@@ -4128,6 +4128,13 @@ class Privacy(unittest.TestCase):
             llm_agent.run_agent = orig
         self.assertNotIn("ai reply", self.tg.sent)
 
+    def test_the_owner_is_told_notes_are_untouched(self):
+        self._say(self.OWNER, "/deleteme")
+        self.assertIn("Recipes folder in Notes", self.tg.sent[-1])
+        self._join()
+        self._say(self.FRIEND, "/deleteme")
+        self.assertNotIn("Notes", self.tg.sent[-1])
+
     def test_deleteme_asks_first(self):
         fridge.add_items(self.con, self.OWNER, ["milk"], TODAY)
         self._say(self.OWNER, "/deleteme")

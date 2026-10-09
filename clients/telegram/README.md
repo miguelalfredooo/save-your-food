@@ -105,7 +105,8 @@ the same machine, with Ollama). `/privacy` shows it again.
 `/deleteme` deletes everything about the person who sends it, after a
 confirm button: food, pantry, freezer, settings, saved cards, AI usage and
 membership. A member who does this has left, and needs a new invite to come
-back. `/clear` is the lighter one: it wipes the food and keeps settings.
+back. `/clear` is the lighter one: it wipes the food and keeps settings. Neither touches Notes: recipes you saved stay in
+your Recipes folder, and the owner's `/deleteme` says so.
 
 The bot only ever replies in a private chat. In a group, anyone in it could
 wipe the shared fridge with `/clear`, and the daily nudge would go out to
@@ -290,7 +291,7 @@ gets answered more often than a Reminders alert. Everything else is in the
 | `fridge.py` | Storage, list parsing, composing messages |
 | `card.py` | The fixed-width card the nudge, `/fridge` and `/freezer` are drawn as |
 | `shelf_life.py` | The use-by table and risk classes, ported from the skill |
-| `test_logic.py` | 494 tests. `python3 test_logic.py` |
+| `test_logic.py` | 495 tests. `python3 test_logic.py` |
 | `preview.py` | Renders the messages for any date, no token needed. `python3 preview.py 2026-09-26` |
 | `try_chat.py` | Chat with the real handlers in a terminal, no token. `tap 2 used` presses a card button. `python3 try_chat.py -i` |
 | `seed.json` | Real fridge contents as of Sep 23, so the test runs against real food |
@@ -348,7 +349,7 @@ The bot registers these with Telegram on startup, so they show in the `/` menu.
 
     python3 test_logic.py
 
-494 tests, no network needed. The interesting ones are the bucket collisions
+495 tests, no network needed. The interesting ones are the bucket collisions
 (`ground beef` vs `ground ginger`, `coconut milk` vs `oat milk`, `butternut
 squash` vs `peanut butter`) and the correction phrasings, including negation.
 
