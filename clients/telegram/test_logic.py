@@ -2118,7 +2118,8 @@ class RecipeDraft(unittest.TestCase):
         finally:
             llm_agent.fetch_recipe_page = original
         self.assertEqual(reply, "That link didn't work.")
-        self.assertEqual(fetched, [None])
+        # No link given is not one of the user's links: refused, never fetched.
+        self.assertEqual(fetched, [])
 
 
 class RecipeSaveFlow(unittest.TestCase):
@@ -5083,6 +5084,121 @@ class Redate(unittest.TestCase):
         self.assertTrue(backups)
         self.assertIn("chicken thighs", out.stdout)
         self.assertNotIn("chat_id", out.stdout)
+
+
+class SecurityMediums(unittest.TestCase):
+    """The four medium findings from the security audit."""
+
+    OWNER, FRIEND = 1, 2
+    CFG = dict(CFG, allowed_chat_ids=[1], llm_mode=True, openrouter_api_key="k")
+
+    def setUp(self):
+        self.con = fridge.connect(tempfile.mktemp(suffix=".db"))
+        self.tg = FakeTG()
+        bot.reset_rate_limits()
+
+    # M1: a fetched page can't choose the next link, or ride along in memory.
+    def _fetch_attempt(self, url, text, user_text):
+        fetched = []
+        orig = llm_agent.fetch_recipe_page
+        llm_agent.fetch_recipe_page = lambda u, **k: fetched.append(u) or {"error": "x"}
+        replies = [
+            {"choices": [{"message": {"tool_calls": [{"id": "c1", "function": {
+                "name": "fetch_recipe_page", "arguments": json.dumps({"url": url})}}]}}]},
+            {"choices": [{"message": {"content": "done"}}]},
+        ]
+        seen = []
+        def caller(messages):
+            seen.append(messages[-1])
+            return replies[len(seen) - 1]
+        try:
+            llm_agent.run_agent(self.con, self.OWNER, text, CFG, TODAY, caller=caller,
+                                user_text=user_text)
+        finally:
+            llm_agent.fetch_recipe_page = orig
+        return fetched
+
+    def test_a_link_inside_the_page_text_is_not_opened(self):
+        page = "Draft this. The page says: see https://evil.example/has-milk"
+        self.assertEqual(self._fetch_attempt("https://evil.example/has-milk",
+                                             page, "https://good.example/r"), [])
+
+    def test_the_users_own_link_still_opens(self):
+        self.assertEqual(self._fetch_attempt("https://good.example/r",
+                                             "page text", "https://good.example/r"),
+                         ["https://good.example/r"])
+
+    def test_a_link_must_match_exactly_not_as_a_prefix(self):
+        self.assertEqual(self._fetch_attempt("https://good.example/r",
+                                             "x", "https://good.example/recipe"), [])
+
+    def test_page_text_is_not_remembered(self):
+        llm_agent.run_agent(self.con, self.OWNER, "Draft this. PAGE TEXT HERE", CFG,
+                            TODAY, caller=lambda m: {"choices": [{"message": {"content": "ok"}}]},
+                            user_text="https://good.example/r")
+        self.assertEqual(llm_agent.recent_messages(self.con, self.OWNER),
+                         ["https://good.example/r"])
+
+    # M2: a daily AI cap for everyone but the owner.
+    def test_a_member_past_the_daily_cap_falls_back(self):
+        code = fridge.create_invite(self.con)
+        fridge.redeem_invite(self.con, code, self.FRIEND, "Ana")
+        fridge.set_pref(self.con, self.FRIEND, "ai", "on")
+        self.assertTrue(bot.ai_for(self.con, self.CFG, self.FRIEND))
+        for _ in range(bot.AI_DAILY_CALLS):
+            fridge.record_usage(self.con, self.FRIEND, {})
+        self.assertFalse(bot.ai_for(self.con, self.CFG, self.FRIEND))
+
+    def test_the_owner_has_no_cap(self):
+        for _ in range(bot.AI_DAILY_CALLS):
+            fridge.record_usage(self.con, self.OWNER, {})
+        self.assertTrue(bot.ai_for(self.con, self.CFG, self.OWNER))
+
+    # M3: an open bot with AI mode refuses to start.
+    def test_an_open_bot_with_ai_will_not_start(self):
+        path = os.path.join(tempfile.mkdtemp(), "config.json")
+        with open(path, "w") as f:
+            json.dump({"token": "123:abc", "llm_mode": True, "openrouter_api_key": "k",
+                       "allowed_chat_ids": []}, f)
+        orig = bot.CONFIG_PATH
+        bot.CONFIG_PATH = path
+        try:
+            with self.assertRaises(SystemExit) as ctx:
+                bot.load_config()
+        finally:
+            bot.CONFIG_PATH = orig
+        self.assertTrue(str(ctx.exception).startswith("!"))
+        self.assertIn("allowed_chat_ids", str(ctx.exception))
+
+    # M4: a removed member can still delete their data.
+    def test_a_removed_member_can_still_delete_their_data(self):
+        cfg = dict(self.CFG, llm_mode=False)
+        code = fridge.create_invite(self.con)
+        fridge.redeem_invite(self.con, code, self.FRIEND, "Ana")
+        fridge.add_items(self.con, self.FRIEND, ["milk"], TODAY)
+        fridge.remove_member(self.con, self.FRIEND)
+        bot.handle_message(self.tg, self.con, {"chat": {"id": self.FRIEND, "type": "private"},
+                                               "text": "/deleteme"}, cfg)
+        self.assertEqual(self.tg.buttons[-1][0][0]["text"], "Delete my data")
+        bot.handle_callback(self.tg, self.con, {"id": "cb", "data": "deleteme:yes",
+            "message": {"chat": {"id": self.FRIEND, "type": "private"}, "message_id": 1}}, cfg)
+        self.assertEqual(fridge.open_items(self.con, self.FRIEND), [])
+
+    def test_a_stranger_with_no_data_still_gets_nothing(self):
+        cfg = dict(self.CFG, llm_mode=False)
+        bot.handle_message(self.tg, self.con, {"chat": {"id": 99, "type": "private"},
+                                               "text": "/deleteme"}, cfg)
+        self.assertEqual(self.tg.sent, [])
+
+    def test_a_removed_member_gets_nothing_else(self):
+        cfg = dict(self.CFG, llm_mode=False)
+        code = fridge.create_invite(self.con)
+        fridge.redeem_invite(self.con, code, self.FRIEND, "Ana")
+        fridge.add_items(self.con, self.FRIEND, ["milk"], TODAY)
+        fridge.remove_member(self.con, self.FRIEND)
+        bot.handle_message(self.tg, self.con, {"chat": {"id": self.FRIEND, "type": "private"},
+                                               "text": "/fridge"}, cfg)
+        self.assertEqual(self.tg.sent, [])
 
 
 class MonthSummaryTool(unittest.TestCase):

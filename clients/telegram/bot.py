@@ -163,6 +163,11 @@ def load_config():
     if _placeholder(cfg.get("token")):
         sys.exit("! config.json has no real token in it yet.")
     with_defaults(cfg)
+    if cfg["llm_mode"] and not cfg["allowed_chat_ids"]:
+        # Open to anyone, with every message going to a paid model: anyone
+        # who found the bot could spend the owner's money.
+        sys.exit("! llm_mode is on but allowed_chat_ids is empty, so anyone "
+                 "could use AI on your key. Add your chat id to allowed_chat_ids.")
     if cfg["llm_mode"] and cfg["llm_provider"] == "openrouter" and (
             not cfg["openrouter_api_key"] or "PUT_YOUR" in cfg["openrouter_api_key"]):
         sys.exit("! llm_mode is on with llm_provider openrouter, but "
@@ -181,6 +186,13 @@ def allowed(con, cfg, chat_id):
             or fridge.is_member(con, chat_id))
 
 
+# Model calls a day for anyone but the owner. A message can take several
+# calls, so this is roughly 50 to 100 messages: plenty for real use, and a
+# ceiling on what a runaway chat or a hijacked account can spend. Past it,
+# they get the regular bot until tomorrow.
+AI_DAILY_CALLS = 200
+
+
 def ai_for(con, cfg, chat_id):
     """Whether this chat's messages go to the model.
 
@@ -191,6 +203,10 @@ def ai_for(con, cfg, chat_id):
     turns it on for them in /members.
     """
     if not cfg["llm_mode"]:
+        return False
+    if chat_id == owner(cfg):
+        return True
+    if fridge.calls_today(con, chat_id) >= AI_DAILY_CALLS:
         return False
     if not cfg["allowed_chat_ids"] or chat_id in cfg["allowed_chat_ids"]:
         return True
@@ -853,7 +869,8 @@ def handle_recipe_link(tg, con, chat_id, text, cfg):
     if ai_for(con, cfg, chat_id):
         send_llm_reply(tg, chat_id, run_ai(
             con, chat_id, "Draft this recipe for me to save. It's from %s, and "
-            "the page says:\n\n%s" % (url, page.get("text", "")), cfg))
+            "the page says:\n\n%s" % (url, page.get("text", "")), cfg,
+            user_text=text))
         send_pending_recipe(tg, con, chat_id)
         return True
     tg.send(chat_id, "I couldn't find a recipe on that page that I can read "
@@ -1112,6 +1129,12 @@ def handle_message(tg, con, msg, cfg):
     # list gets nothing at all, not even an error. The one exception is a
     # chat holding an invite link: it already knows the bot exists.
     if not allowed(con, cfg, chat_id):
+        # Someone removed from the bot can still delete what it kept about
+        # them: /privacy promises that, any time. Nothing else gets through.
+        if ((msg.get("text") or "").strip().lower().startswith("/deleteme")
+                and fridge.has_data(con, chat_id)):
+            handle_account_command(tg, con, chat_id, msg["text"].strip(), cfg)
+            return
         if not join_by_invite(tg, con, msg):
             return
     if "photo" in msg:
@@ -1408,7 +1431,8 @@ def handle_callback(tg, con, cb, cfg):
         return
     if msg.get("chat", {}).get("type") != "private":
         return
-    if not allowed(con, cfg, chat_id):
+    if not allowed(con, cfg, chat_id) and not (
+            data.startswith("deleteme:") and fridge.has_data(con, chat_id)):
         return
     state, _, raw_id = data.partition(":")
     if state in ("pick", "pickall", "unpick"):
