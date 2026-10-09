@@ -358,7 +358,12 @@ def exec_add_items(con, chat_id, args, today):
     tracks everything at once with no limit at all, the same shape of bug
     that got 319 items dumped into one chat's fridge via /seed."""
     added, went_to_pantry = [], []
-    items = (args.get("items") or [])[:fridge.MAX_ITEMS]
+    room = fridge.room_left(con, chat_id)
+    if room <= 0:
+        return {"error": "Their fridge already has %d things tracked, the "
+                         "most it holds. Ask them to mark some used or "
+                         "tossed first." % fridge.MAX_OPEN_ITEMS}
+    items = (args.get("items") or [])[:min(fridge.MAX_ITEMS, room)]
     n_dropped = len(args.get("items") or []) - len(items)
     for it in items:
         name = (it.get("name") or "").strip()
@@ -754,7 +759,18 @@ def _url_allowed(url):
 
 
 class _SafeRedirect(urllib.request.HTTPRedirectHandler):
+    # urllib follows up to 10 by default, each with its own timeout, which a
+    # chain of slow redirects could stretch far past the fetch's deadline
+    # while every other chat waits. Three is plenty for a recipe site.
+    max_redirections = 3
+
+    def __init__(self, deadline=None):
+        super().__init__()
+        self.deadline = deadline
+
     def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if self.deadline is not None and _now() > self.deadline:
+            raise urllib.error.URLError("that page took too long to load")
         if not _url_allowed(newurl):
             raise urllib.error.URLError("redirect to a link I won't open")
         return super().redirect_request(req, fp, code, msg, headers, newurl)
@@ -837,11 +853,12 @@ def fetch_recipe_page(url, timeout=FETCH_PAGE_TIMEOUT, opener=None):
     url = (url or "").strip()
     if not _url_allowed(url):
         return {"error": "I can only open https links to public websites."}
-    opener = opener or urllib.request.build_opener(_SafeRedirect)
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     # The socket timeout is per read, so a server trickling bytes could hold
-    # the bot far longer; the deadline covers the whole request.
+    # the bot far longer; the deadline covers the whole request, redirects
+    # included.
     deadline = _now() + timeout
+    opener = opener or urllib.request.build_opener(_SafeRedirect(deadline))
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     try:
         with opener.open(req, timeout=timeout) as r:
             chunks, total = [], 0
@@ -1176,9 +1193,19 @@ def run_agent(con, chat_id, text, cfg, today=None, caller=None, image_b64=None,
                 # A fetched page is data and must not choose where the bot
                 # connects next, or a page could send things out in a URL.
                 result = {"error": "I only open links the user sent in this message."}
+            elif not executor:
+                result = {"error": "unknown tool %r" % name}
             else:
-                result = executor(con, chat_id, args, today) if executor \
-                    else {"error": "unknown tool %r" % name}
+                # A malformed argument from the model ("abc" for a number of
+                # days, a list for a name) must cost one tool call, not the
+                # whole reply.
+                try:
+                    result = executor(con, chat_id, args, today)
+                except Exception as e:
+                    print("! llm_agent tool %s failed: %s"
+                          % (name, " ".join(str(e).split())[:200]))
+                    result = {"error": "That didn't work; check the details "
+                                       "and try again."}
             messages.append({
                 "role": "tool",
                 "tool_call_id": tc["id"],

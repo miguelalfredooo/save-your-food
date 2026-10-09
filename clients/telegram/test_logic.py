@@ -1960,7 +1960,7 @@ class RecipePageFetch(unittest.TestCase):
             r = llm_agent.fetch_recipe_page("https://e.com/x")
         finally:
             urllib.request.build_opener = original
-        self.assertIn(llm_agent._SafeRedirect, calls[0])
+        self.assertTrue(any(isinstance(h, llm_agent._SafeRedirect) for h in calls[0]))
         self.assertEqual(r["text"], "hi")
 
 
@@ -5199,6 +5199,95 @@ class SecurityMediums(unittest.TestCase):
         bot.handle_message(self.tg, self.con, {"chat": {"id": self.FRIEND, "type": "private"},
                                                "text": "/fridge"}, cfg)
         self.assertEqual(self.tg.sent, [])
+
+
+class SecurityLows(unittest.TestCase):
+    """The low findings from the security audit."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.con = fridge.connect(os.path.join(self.tmp, "fridge.db"))
+        self.tg = FakeTG()
+        bot.reset_rate_limits()
+
+    # L1
+    def test_new_files_are_private(self):
+        mode = os.stat(os.path.join(self.tmp, "fridge.db")).st_mode & 0o777
+        self.assertEqual(mode & 0o077, 0)
+
+    # L2
+    def test_a_failing_tool_does_not_end_the_reply(self):
+        replies = iter([
+            {"choices": [{"message": {"tool_calls": [{"id": "t1", "function": {
+                "name": "add_items", "arguments": json.dumps(
+                    {"items": [{"name": "kale", "estimated_days": "abc"}]})}}]}}]},
+            {"choices": [{"message": {"content": "Couldn't add that."}}]},
+        ])
+        orig = sl.lookup
+        sl.lookup = lambda name: (_ for _ in ()).throw(ValueError("boom"))
+        try:
+            reply = llm_agent.run_agent(self.con, 1, "add kale", CFG, TODAY,
+                                        caller=lambda m: next(replies))
+        finally:
+            sl.lookup = orig
+        self.assertEqual(reply, "Couldn't add that.")
+
+    # L3
+    def test_redirects_are_capped_and_timed(self):
+        self.assertEqual(llm_agent._SafeRedirect.max_redirections, 3)
+        late = llm_agent._SafeRedirect(deadline=llm_agent._now() - 1)
+        with self.assertRaises(urllib.error.URLError):
+            late.redirect_request(None, None, 302, "", {}, "https://example.com/")
+
+    # L4
+    def test_button_taps_are_rate_limited(self):
+        fridge.add_items(self.con, 1, ["milk"], TODAY)
+        item = fridge.open_items(self.con, 1)[0]
+        for _ in range(bot.RATE_LIMIT_PER_MINUTE):
+            bot._rate_limited(1)
+        bot.handle_callback(self.tg, self.con, {"id": "cb", "data": "used:%d" % item["id"],
+            "message": {"chat": {"id": 1, "type": "private"}, "message_id": 1}}, CFG)
+        self.assertEqual(fridge.open_items(self.con, 1)[0]["state"], "open")
+
+    # L5
+    def test_a_full_fridge_takes_no_more(self):
+        for n in range(fridge.MAX_OPEN_ITEMS):
+            self.con.execute("INSERT INTO items (chat_id,name,use_by,risk,estimated,added,state)"
+                             " VALUES (1,?,?, 'yellow',0,?, 'open')",
+                             ("thing%d" % n, TODAY.isoformat(), TODAY.isoformat()))
+        self.con.commit()
+        onb.set_step(self.con, 1, onb.DONE)
+        bot.handle_message(self.tg, self.con, {"chat": {"id": 1, "type": "private"},
+                                               "text": "milk"}, CFG)
+        self.assertIn("the most I keep", self.tg.sent[-1])
+        r = llm_agent.exec_add_items(self.con, 1, {"items": [{"name": "milk"}]}, TODAY)
+        self.assertIn("error", r)
+
+    def test_old_cards_are_pruned(self):
+        fridge.save_card(self.con, 1, 10, {"day": (TODAY - timedelta(days=40)).isoformat()})
+        fridge.save_card(self.con, 1, 11, {"day": TODAY.isoformat()})
+        self.assertEqual(fridge.prune_cards(self.con, 1, TODAY), 1)
+        self.assertIsNone(fridge.load_card(self.con, 1, 10))
+        self.assertIsNotNone(fridge.load_card(self.con, 1, 11))
+
+    def test_idle_chats_leave_the_rate_limiter(self):
+        bot._rate_limited(5, now=1000)
+        bot.prune_rate_limits(now=1000 + bot.RATE_LIMIT_WINDOW + 1)
+        self.assertNotIn(5, bot._MSG_TIMES)
+
+    # L6
+    def test_deleteme_scrubs_the_invite_and_overwrites_pages(self):
+        self.assertEqual(self.con.execute("PRAGMA secure_delete").fetchone()[0], 1)
+        code = fridge.create_invite(self.con)
+        fridge.redeem_invite(self.con, code, 2, "Ana")
+        fridge.delete_person(self.con, 2)
+        self.assertIsNone(self.con.execute(
+            "SELECT 1 FROM invites WHERE used_by=2").fetchone())
+        self.assertFalse(fridge.redeem_invite(self.con, code, 3, "X"))   # still spent
+
+    def test_the_privacy_note_says_what_deleteme_cant_reach(self):
+        cfg = dict(CFG, allowed_chat_ids=[1], llm_mode=True, openrouter_api_key="k")
+        self.assertIn("can't reach", bot.privacy_note(self.con, cfg, 1))
 
 
 class MonthSummaryTool(unittest.TestCase):

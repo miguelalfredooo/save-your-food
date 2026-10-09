@@ -113,6 +113,35 @@ The bot only ever replies in a private chat. In a group, anyone in it could
 wipe the shared fridge with `/clear`, and the daily nudge would go out to
 everyone in the group.
 
+## Security
+
+A read-only audit (October 2026) found no high-severity issues. Every query
+and button is scoped to its own chat; owner-only actions check the owner;
+SQL is parameterized; HTML output is escaped; `osascript` gets data as
+arguments, never as script. Hardening since:
+
+- Only links you typed are fetched (exact match), never one from a page.
+- AI is capped at 200 model calls a day per person, owner aside, and the
+  bot won't start with AI on and an empty `allowed_chat_ids`.
+- Files the bot creates are private to its account (`umask 077`); on start
+  it tightens `fridge.db`, `config.json` and the recipe cache to 600, and
+  `install.sh` makes the log folder 700.
+- Button taps share the 20-a-minute rate limit. At most 300 open items per
+  person; saved card state older than 30 days is pruned.
+- `/deleteme` works after removal, scrubs the invite record, and SQLite's
+  `secure_delete` overwrites deleted rows. It can't reach OpenRouter's own
+  retention, and the privacy note says so.
+- Crash tracebacks go through the same token redaction as other logs.
+
+Accepted, on purpose:
+- **DNS rebinding** between the public-address check and the connection.
+  The fetch is https only with certificate checks, so a name that flips to a
+  private address fails the TLS handshake. Closing it fully means pinning
+  the checked IP inside urllib's connection, which is not worth the code.
+- **One slow request still holds up other chats.** Redirects are capped at 3
+  and inside the fetch deadline, but an AI turn can take up to about two
+  minutes. Moving AI work to a background thread is the real fix.
+
 ## Limits
 
 A message over 2,000 characters is refused with a note to send it in a few
@@ -311,7 +340,7 @@ gets answered more often than a Reminders alert. Everything else is in the
 | `fridge.py` | Storage, list parsing, composing messages |
 | `card.py` | The fixed-width card the nudge, `/fridge` and `/freezer` are drawn as |
 | `shelf_life.py` | The use-by table and risk classes, ported from the skill |
-| `test_logic.py` | 539 tests. `python3 test_logic.py` |
+| `test_logic.py` | 548 tests. `python3 test_logic.py` |
 | `preview.py` | Renders the messages for any date, no token needed. `python3 preview.py 2026-09-26` |
 | `try_chat.py` | Chat with the real handlers in a terminal, no token. `tap 2 used` presses a card button. `python3 try_chat.py -i` |
 | `redate.py` | One-time fix for dates saved as guesses before the table came first. Dry run by default; `--apply` backs up `fridge.db` first |
@@ -370,7 +399,7 @@ The bot registers these with Telegram on startup, so they show in the `/` menu.
 
     python3 test_logic.py
 
-539 tests, no network needed. The interesting ones are the bucket collisions
+548 tests, no network needed. The interesting ones are the bucket collisions
 (`ground beef` vs `ground ginger`, `coconut milk` vs `oat milk`, `butternut
 squash` vs `peanut butter`) and the correction phrasings, including negation.
 

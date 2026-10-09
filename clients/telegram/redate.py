@@ -31,6 +31,9 @@ sys.path.insert(0, HERE)
 import fridge            # noqa: E402
 import shelf_life as sl  # noqa: E402
 
+# The backup holds everyone's data: readable by this account only.
+os.umask(0o077)
+
 
 def redate(con, apply=False):
     """The changes to make, as dicts, and makes them if `apply`."""

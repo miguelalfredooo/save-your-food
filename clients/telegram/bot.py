@@ -38,6 +38,11 @@ def _ipv4_first_getaddrinfo(*args, **kwargs):
 
 socket.getaddrinfo = _ipv4_first_getaddrinfo
 
+# Everything this process creates (fridge.db, the recipe cache) is readable
+# by this account only. The store holds every person's food and the owner's
+# recipes, and other accounts on the same Mac have no business reading it.
+os.umask(0o077)
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
@@ -82,6 +87,15 @@ def _rate_limited(chat_id, now=None):
         return True
     times.append(now)
     return False
+
+
+def prune_rate_limits(now=None):
+    """Drop chats with no recent messages. Every chat that ever wrote,
+    allowed or not, used to keep a key here for the life of the process."""
+    cutoff = (now if now is not None else time.time()) - RATE_LIMIT_WINDOW
+    for chat_id in [c for c, times in _MSG_TIMES.items()
+                    if not times or times[-1] < cutoff]:
+        del _MSG_TIMES[chat_id]
 
 
 def reset_rate_limits():
@@ -1014,7 +1028,8 @@ def privacy_note(con, cfg, chat_id):
               "that same computer, not sent anywhere else.")
     else:
         ai = ("Your messages and photos are also sent to an AI service "
-              "(OpenRouter) so they can be understood.")
+              "(OpenRouter) so they can be understood. OpenRouter keeps them "
+              "under its own policy, which /deleteme can't reach.")
     # Named when Telegram gave us a name: the data lives on the owner's
     # computer, so "I keep" blurs the bot with the person running it.
     name = cfg.get("bot_name")
@@ -1312,6 +1327,12 @@ def handle_message(tg, con, msg, cfg):
                          "Try: milk, spinach, chicken thighs")
         return
 
+    if fridge.room_left(con, chat_id) <= 0:
+        tg.send(chat_id, "Your fridge already has %d things tracked, the most "
+                         "I keep. Mark some used or tossed from /fridge, then "
+                         "send this again." % fridge.MAX_OPEN_ITEMS)
+        return
+
     tracked, stable, outside, again = fridge.add_items(con, chat_id, names)
     send_capture(tg, con, chat_id, tracked, stable, outside, again)
 
@@ -1430,6 +1451,10 @@ def handle_callback(tg, con, cb, cfg):
         tg.answer(cb["id"])
         return
     if msg.get("chat", {}).get("type") != "private":
+        return
+    # Taps share the message budget: a forged stream of callbacks costs
+    # sends and writes the same as a flood of messages.
+    if _rate_limited(chat_id):
         return
     if not allowed(con, cfg, chat_id) and not (
             data.startswith("deleteme:") and fridge.has_data(con, chat_id)):
@@ -1702,6 +1727,8 @@ def sweep(tg, con, cfg, now=None):
         # message as well, on top of its line in the nudge.
         send_nudge(tg, con, chat_id, today)
         mark_nudged(con, chat_id, today)
+        fridge.prune_cards(con, chat_id, today)
+    prune_rate_limits()
 
 
 # --- main ------------------------------------------------------------------
@@ -1714,6 +1741,12 @@ def main():
               "respond to anyone who finds it.")
     tg = Telegram(cfg["token"])
     con = fridge.connect()
+    # Files made before the umask above, or by cp, keep their old modes.
+    for path in (CONFIG_PATH, fridge.DB_PATH, llm_agent.RECIPE_CACHE_PATH):
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
 
     me = tg.call("getMe")
     if not me or not me.get("ok"):
@@ -1748,7 +1781,9 @@ def main():
             print("\nStopped.")
             return
         except Exception:
-            traceback.print_exc()
+            # Through the same redaction as every other log line: a
+            # traceback can quote a URL, and the token lives in the URL.
+            print(tg._redact(traceback.format_exc()), file=sys.stderr)
             time.sleep(5)
 
 

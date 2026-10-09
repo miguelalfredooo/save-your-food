@@ -76,6 +76,9 @@ CREATE TABLE IF NOT EXISTS meta (
 def connect(path=None):
     con = sqlite3.connect(path or DB_PATH)
     con.row_factory = sqlite3.Row
+    # Deleted rows are overwritten, not left in free pages of the file, so
+    # /deleteme leaves nothing behind for a file-level reader to recover.
+    con.execute("PRAGMA secure_delete=ON")
     con.executescript(SCHEMA)
     # A db made before a feature existed is missing its columns. Add them
     # rather than asking anyone to delete their fridge to get an upgrade.
@@ -641,6 +644,9 @@ def delete_person(con, chat_id):
                            (chat_id,)).fetchone()[0]
     for table in ("items", "pantry", "meta", "ai_usage", "members"):
         con.execute("DELETE FROM %s WHERE chat_id=?" % table, (chat_id,))
+    # The invite they used no longer names them. 0, not NULL: a NULL would
+    # make the code redeemable again.
+    con.execute("UPDATE invites SET used_by=0 WHERE used_by=?", (chat_id,))
     con.commit()
     return n_items, n_pantry
 
@@ -857,6 +863,40 @@ def usage_since(con, day):
         " SUM(completion_tokens) completion_tokens, SUM(cost) cost"
         " FROM ai_usage WHERE day >= ? GROUP BY chat_id ORDER BY calls DESC",
         (day.isoformat(),))]
+
+
+# Open items per chat. Far past any real fridge, and it keeps one chat from
+# growing the store, and every AI prompt that lists the fridge, without end.
+MAX_OPEN_ITEMS = 300
+
+
+def room_left(con, chat_id):
+    n = con.execute("SELECT COUNT(*) FROM items WHERE chat_id=? AND state='open'",
+                    (chat_id,)).fetchone()[0]
+    return MAX_OPEN_ITEMS - n
+
+
+CARD_KEEP_DAYS = 30
+
+
+def prune_cards(con, chat_id, today=None):
+    """Forget cards older than CARD_KEEP_DAYS. One meta row is saved per card
+    sent, so without this the table grows with every nudge forever. A tap on
+    a card this old says it is out of date."""
+    cutoff = ((today or date.today()) - timedelta(days=CARD_KEEP_DAYS)).isoformat()
+    stale = []
+    for r in con.execute("SELECT key, value FROM meta WHERE chat_id=? AND key LIKE 'card:%'",
+                         (chat_id,)):
+        try:
+            day = json.loads(r["value"]).get("day", "")
+        except ValueError:
+            day = ""
+        if day < cutoff:
+            stale.append(r["key"])
+    for key in stale:
+        con.execute("DELETE FROM meta WHERE chat_id=? AND key=?", (chat_id, key))
+    con.commit()
+    return len(stale)
 
 
 def items_by_ids(con, chat_id, ids):
