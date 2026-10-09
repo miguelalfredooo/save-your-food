@@ -97,8 +97,27 @@ def lines_for(n, item, today):
     return out
 
 
+def nudge_title(items, today):
+    """The nudge card's heading, never wider than the card.
+
+    The heading sits outside the monospace block, so a long one widened the
+    bubble past the card: "3 things past their best: check before eating"
+    made every nudge wider than /fridge. With one tier, the heading is that
+    tier, which is also the label the card then drops; the count is already
+    in the footer. With two, a short count, and the sections keep labels.
+    """
+    tiers = [sl.tier(i["use_by_date"], today) for i in items]
+    if len(set(tiers)) == 1:
+        return sl.TIERS[tiers[0]]
+    tonight, check = tiers.count(1), tiers.count(0)
+    if tonight + check == len(tiers):
+        return "%d tonight, %d to check" % (tonight, check)
+    return "%d things to check" % len(tiers)
+
+
 def _html(head, body, closing):
-    html = "<b>%s</b>\n<pre>%s</pre>" % (art.esc(head),
+    # Clipped as a backstop: a heading wider than the card widens the bubble.
+    html = "<b>%s</b>\n<pre>%s</pre>" % (art.esc(_clip(head, WIDTH)),
                                         "\n".join(art.esc(l) for l in body))
     return html + ("\n" + closing if closing else "")
 
