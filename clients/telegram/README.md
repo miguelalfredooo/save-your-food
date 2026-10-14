@@ -163,7 +163,7 @@ self-contained mode that hands every typed message (and now photos too) to a
 model instead, so it can read natural phrasing and correct itself in
 conversation. Off by default.
 
-**Four providers, one code path.** Every install uses its own keys, never
+**Three providers, one code path.** Every install uses its own keys, never
 anyone else's. Pick one with `llm_provider`:
 
 | `llm_provider` | Needs | Model setting | Default model |
@@ -171,7 +171,6 @@ anyone else's. Pick one with `llm_provider`:
 | `openrouter` | `openrouter_api_key` (`sk-or-...`) | `llm_model` | `anthropic/claude-haiku-4.5` |
 | `anthropic` | `anthropic_api_key` (`sk-ant-...`) | `anthropic_model` | `claude-haiku-5-5` |
 | `openai` | `openai_api_key` (`sk-...`) | `openai_model` | `gpt-4o-mini` |
-| `ollama` | nothing; runs on this machine | `ollama_model` | `qwen3-vl:8b` |
 
 OpenRouter is one key for Claude, ChatGPT and many cheaper models; it charges
 the providers' own prices plus a small fee on credits. `anthropic` goes to
@@ -180,25 +179,13 @@ this file uses), with thinking off. `openai` goes to OpenAI directly. A
 ChatGPT or Claude subscription does not include API access: these need an
 API key, billed separately.
 
-**Local, free and private: Ollama.** Nothing leaves the machine:
-
-    "llm_mode": true,
-    "llm_provider": "ollama",
-    "ollama_base_url": "http://localhost:11434/v1",
-    "ollama_model": "qwen3-vl:8b"
-
-`ollama pull qwen3-vl:8b` first, with Ollama running. **The model must read
-images AND call tools**: `ollama show <model>` lists both under
-Capabilities. `llama3.2-vision` reads images but has no tools, so it can see
-a receipt and never log it. Any other local server with an OpenAI-compatible
-`/v1` endpoint (LM Studio, llama.cpp's server) works too: point
-`ollama_base_url` at it.
-
-Local models get an 8,000-token reply budget and a 240-second timeout,
-because qwen3-vl thinks before it answers: measured on a receipt photo, it
-spent all of 1,000 tokens thinking and never replied; with room, it logged
-the receipt after about 77 seconds on an Apple-silicon Mac. It wants roughly
-8 GB of free memory. The hosted providers keep the 1,000-token cap.
+**Local models (Ollama): not ready for receipts yet.** The `ollama` provider
+is still in the code, but no local model reads a receipt end to end today.
+The model must read images AND call tools (`ollama show <model>` lists both
+under Capabilities), and the one that does, `qwen3-vl:8b`, thinks before it
+answers and ignores every switch for turning that off. With the bot's real
+system prompt it ran past a 240-second timeout and logged nothing (measured
+2026-10-13, Ollama 0.33.3). Use one of the three hosted providers above.
 
 The bot refuses to start with `llm_mode` on and the chosen provider's key
 missing, or with an unknown `llm_provider`, rather than silently falling back
@@ -207,8 +194,7 @@ to a different path.
 **Photos work in this mode too.** Send a photo of your fridge or a receipt,
 with or without a caption, and it goes to the model as an image alongside
 any text you typed — provided the model you picked actually supports vision
-("Capabilities: vision" in `ollama show <model>`, or a vision-capable
-OpenRouter model). A text-only model just never mentions the photo. Outside
+(all three defaults do; on OpenRouter, pick a vision-capable model). A text-only model just never mentions the photo. Outside
 this mode, a photo gets a plain "I can't read photos yet."
 
 **Who gets it.** `llm_mode` turns the AI on for the chats in
