@@ -1,6 +1,6 @@
 # Installing Save Your Food
 
-Save Your Food (this repo, `fridge-loop`) is a Telegram bot that tracks what is in
+Save Your Food (this repo, `save-your-food`) is a Telegram bot that tracks what is in
 your fridge and nudges you before food goes off. This guide installs the Telegram
 client, which is the version almost everyone wants: it runs on any computer with
 Python, needs no Mac and installs nothing beyond Python itself.
@@ -78,10 +78,10 @@ and saving recipes to Apple Notes.
 
 ## Step 2 · Get the code 🤖 Agent
 
-    git clone https://github.com/miguelalfredooo/fridge-loop.git
-    cd fridge-loop/clients/telegram
+    git clone https://github.com/miguelalfredooo/save-your-food.git
+    cd save-your-food/clients/telegram
 
-Every later step runs from `fridge-loop/clients/telegram` unless it says otherwise.
+Every later step runs from `save-your-food/clients/telegram` unless it says otherwise.
 
 **Pass:** `ls` shows `bot.py` and `config.example.json`.
 
