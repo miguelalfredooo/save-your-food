@@ -84,7 +84,7 @@ Make it with the script beside this file, never by hand: `scripts/make_ics.py` g
          "items": [{"name": "Spinach", "use_by": "2026-10-17", "guess": true,
                     "idea": "Wilt it into eggs."}]}
 
-2. Run `python3 scripts/make_ics.py plan.json save-your-food.ics` from this skill's folder, writing the `.ics` where the person can download it (in the Claude apps, the outputs folder).
+2. Run the script by its full path inside this skill's folder, but write `plan.json` and the `.ics` somewhere writable, because the skill's own folder is read-only. The `.ics` goes where the person can download it (in the Claude apps, the outputs folder): `python3 <skill folder>/scripts/make_ics.py plan.json <outputs>/save-your-food.ics`.
 3. Share the file and say, in one line: "Open this to add your check-ins: Sundays and Wednesdays at 5pm, and a heads-up the day before anything urgent."
 
 What it makes: a check-in every Sunday and Wednesday at 17:00 listing the food to use before the next one, its own event the day before for anything due sooner than the first check-in, and a last event asking for the next receipt once everything is past its date. Food more than five weeks out stays out. The script prints the events; don't repeat them in the chat.

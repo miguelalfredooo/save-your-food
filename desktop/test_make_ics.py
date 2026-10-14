@@ -73,6 +73,10 @@ class Schedule(unittest.TestCase):
             item("Old milk", "2026-10-10"), item("Lettuce", TODAY),
             item("Honey", "2027-06-01")])), [])
 
+    def test_today_defaults_to_the_current_date(self):
+        soon = (make_ics.dt.date.today() + make_ics.dt.timedelta(days=9)).isoformat()
+        self.assertTrue(make_ics.plan_events({"items": [item("Yogurt", soon)]}))
+
     def test_other_days_and_hour(self):
         events = make_ics.plan_events(plan(
             [item("Spinach", "2026-10-20")], days=["MO", "TH"], hour=8))

@@ -11,7 +11,7 @@ run out and asks for the next receipt. Standard library only.
 plan.json:
 
     {
-      "today": "2026-10-14",
+      "today": "2026-10-14",             optional, defaults to today
       "days": ["SU", "WE"],              optional, two-letter weekdays
       "hour": 17,                        optional, 0 to 23
       "items": [
@@ -57,7 +57,7 @@ def line(item):
 
 def plan_events(plan):
     """[(date, hour, title, description)] in date order."""
-    today = dt.date.fromisoformat(plan["today"])
+    today = dt.date.fromisoformat(plan.get("today") or dt.date.today().isoformat())
     hour = int(plan.get("hour", 17))
     days = plan.get("days") or ["SU", "WE"]
     items = []
