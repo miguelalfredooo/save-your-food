@@ -10,8 +10,9 @@ defines, through its own tool-calling loop, because the model is meant to
 read context a keyword table cannot ("butter chicken (leftovers)", "ate the
 spinach") rather than because the schema is different.
 
-Needs an OpenRouter API key in config.json (openrouter_api_key) and costs
-money per message, which is why it defaults to off.
+Needs the person's own key for one of OpenRouter, Anthropic (Claude) or
+OpenAI (ChatGPT), each of which costs money per message, or a local model
+through Ollama, which costs nothing. That is why it defaults to off.
 """
 
 import codecs
@@ -36,6 +37,9 @@ import shelf_life as sl
 API_URL = "https://openrouter.ai/api/v1/chat/completions"
 MAX_TOOL_ROUNDS = 4   # a runaway tool-call loop must not hang a chat forever
 REQUEST_TIMEOUT = 30
+# A receipt photo on qwen3-vl:8b took 77s on an M-series Mac. The hosted
+# providers answer in seconds and keep the shorter limit.
+LOCAL_REQUEST_TIMEOUT = 240
 
 SYSTEM_PROMPT = """You are Fridge Loop: a friend who's good in the kitchen and helps
 people use food before it goes bad. You're texting in Telegram.
@@ -991,10 +995,26 @@ TOOL_EXECUTORS = {
 # needed at all. A local Ollama model costs nothing per message and never
 # leaves the machine, at the cost of needing real hardware to run it well.
 
+# Which config key holds the API key for each provider that needs one. Ollama
+# runs on the same machine and needs none. Each install brings its own keys:
+# nothing here reaches anyone else's account.
+API_KEYS = {"openrouter": "openrouter_api_key",
+            "openai": "openai_api_key",
+            "anthropic": "anthropic_api_key"}
+
+# The company named to people in the privacy note, per provider.
+PROVIDER_NAMES = {"openrouter": "OpenRouter",
+                  "openai": "OpenAI (ChatGPT)",
+                  "anthropic": "Anthropic (Claude)"}
+
+
 def _redact(text, cfg):
-    """The OpenRouter key is never logged, matching bot.py's Telegram._redact."""
-    key = cfg.get("openrouter_api_key") or ""
-    return text.replace(key, "<key>") if key and key in text else text
+    """No API key is ever logged, matching bot.py's Telegram._redact."""
+    for field in API_KEYS.values():
+        key = cfg.get(field) or ""
+        if key and "PUT_YOUR" not in key and key in text:
+            text = text.replace(key, "<key>")
+    return text
 
 
 # A ceiling, not a target: replies are a few lines. It stops a runaway answer,
@@ -1002,10 +1022,17 @@ def _redact(text, cfg):
 # grocery list, whose arguments count as output too.
 MAX_REPLY_TOKENS = 1000
 
+# A local model costs nothing per token, and the ones that read photos and
+# call tools (qwen3-vl) think first. Measured 2026-10-13 on a receipt photo:
+# qwen3-vl:8b spent all of 1,000 tokens thinking and never answered; with
+# 6,000 it called add_items after 1,605. Ollama ignored both ways of turning
+# thinking off (reasoning_effort, think). So a local model gets room instead.
+MAX_REPLY_TOKENS_LOCAL = 8000
 
-def request_body(model, messages, tools, openrouter=False):
+
+def request_body(model, messages, tools, openrouter=False, max_tokens=MAX_REPLY_TOKENS):
     body = {"model": model, "messages": messages, "tools": tools,
-            "max_tokens": MAX_REPLY_TOKENS}
+            "max_tokens": max_tokens}
     if openrouter:
         # OpenRouter adds the dollar cost of the call to its usage object.
         body["usage"] = {"include": True}
@@ -1024,8 +1051,135 @@ def call_openrouter(api_key, model, messages, tools, timeout=REQUEST_TIMEOUT):
         return json.loads(r.read().decode())
 
 
-def call_ollama(base_url, model, messages, tools, timeout=REQUEST_TIMEOUT):
+OPENAI_URL = "https://api.openai.com/v1/chat/completions"
+
+
+def call_openai(api_key, model, messages, tools, timeout=REQUEST_TIMEOUT):
+    """ChatGPT on the person's own OpenAI key. Same wire format as OpenRouter,
+    without OpenRouter's cost field, so /usage shows tokens and no dollars."""
     body = json.dumps(request_body(model, messages, tools)).encode()
+    req = urllib.request.Request(
+        OPENAI_URL, data=body,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": "Bearer %s" % api_key,
+        })
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read().decode())
+
+
+# --- Claude on the person's own Anthropic key ---------------------------------
+#
+# Anthropic's own Messages API, not an OpenAI-compatible shim. The rest of
+# this file speaks the OpenAI chat format, so the messages are translated on
+# the way out and the reply on the way back, and nothing else has to know.
+# Thinking is off: these are short replies, and with it on, every tool round
+# would have to carry the model's thinking blocks back unchanged.
+
+ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
+ANTHROPIC_VERSION = "2023-06-01"
+
+
+def to_anthropic(messages, tools):
+    """(system, messages, tools) in Messages API shape, from OpenAI chat shape."""
+    system, out = [], []
+    for m in messages:
+        role = m.get("role")
+        if role == "system":
+            system.append(m.get("content") or "")
+        elif role == "tool":
+            block = {"type": "tool_result", "tool_use_id": m["tool_call_id"],
+                     "content": m.get("content") or ""}
+            last = out[-1] if out else None
+            # Every result of one round goes back in a single user message.
+            if (last and last["role"] == "user" and isinstance(last["content"], list)
+                    and last["content"] and last["content"][0].get("type") == "tool_result"):
+                last["content"].append(block)
+            else:
+                out.append({"role": "user", "content": [block]})
+        elif role == "assistant":
+            blocks = []
+            if m.get("content"):
+                blocks.append({"type": "text", "text": m["content"]})
+            for tc in m.get("tool_calls") or []:
+                try:
+                    args = json.loads(tc["function"].get("arguments") or "{}")
+                except (ValueError, TypeError):
+                    args = {}
+                blocks.append({"type": "tool_use", "id": tc["id"],
+                               "name": tc["function"]["name"],
+                               "input": args if isinstance(args, dict) else {}})
+            if blocks:
+                out.append({"role": "assistant", "content": blocks})
+        else:
+            content = m.get("content")
+            if isinstance(content, list):
+                blocks = []
+                for part in content:
+                    if part.get("type") == "text":
+                        blocks.append({"type": "text", "text": part.get("text") or ""})
+                    elif part.get("type") == "image_url":
+                        url = part["image_url"]["url"]          # data:<type>;base64,<data>
+                        head, data = url.split(",", 1)
+                        media = head[len("data:"):].split(";")[0] or "image/jpeg"
+                        blocks.append({"type": "image", "source": {
+                            "type": "base64", "media_type": media, "data": data}})
+                content = blocks
+            out.append({"role": "user", "content": content or ""})
+    atools = [{"name": t["function"]["name"],
+               "description": t["function"].get("description", ""),
+               "input_schema": t["function"].get("parameters")
+               or {"type": "object", "properties": {}}} for t in tools]
+    return "\n\n".join(system), out, atools
+
+
+def from_anthropic(resp):
+    """A Messages API reply in the OpenAI chat shape run_agent reads."""
+    text, calls = [], []
+    for b in resp.get("content") or []:
+        if b.get("type") == "text":
+            text.append(b.get("text") or "")
+        elif b.get("type") == "tool_use":
+            calls.append({"id": b["id"], "type": "function",
+                          "function": {"name": b["name"],
+                                       "arguments": json.dumps(b.get("input") or {})}})
+    message = {"role": "assistant", "content": "".join(text) or None}
+    if calls:
+        message["tool_calls"] = calls
+    u = resp.get("usage") or {}
+    usage = {"prompt_tokens": (u.get("input_tokens") or 0)
+             + (u.get("cache_read_input_tokens") or 0)
+             + (u.get("cache_creation_input_tokens") or 0),
+             "completion_tokens": u.get("output_tokens") or 0}
+    return {"choices": [{"message": message}], "usage": usage}
+
+
+def anthropic_request(api_key, model, messages, tools):
+    """(url, headers, body) for one call. Separate so tests can check it
+    without the network."""
+    system, msgs, atools = to_anthropic(messages, tools)
+    body = {"model": model, "max_tokens": MAX_REPLY_TOKENS, "messages": msgs,
+            "tools": atools, "thinking": {"type": "disabled"}}
+    if system:
+        body["system"] = system
+    headers = {"Content-Type": "application/json", "x-api-key": api_key,
+               "anthropic-version": ANTHROPIC_VERSION}
+    return ANTHROPIC_URL, headers, body
+
+
+def call_anthropic(api_key, model, messages, tools, timeout=REQUEST_TIMEOUT):
+    url, headers, body = anthropic_request(api_key, model, messages, tools)
+    req = urllib.request.Request(url, data=json.dumps(body).encode(), headers=headers)
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return from_anthropic(json.loads(r.read().decode()))
+
+
+def call_ollama(base_url, model, messages, tools, timeout=LOCAL_REQUEST_TIMEOUT):
+    """Any local server with an OpenAI-compatible /v1 endpoint: Ollama, or
+    LM Studio and the like via ollama_base_url. No key, nothing leaves the
+    machine."""
+    body = json.dumps(request_body(model, messages, tools,
+                                   max_tokens=MAX_REPLY_TOKENS_LOCAL)).encode()
     req = urllib.request.Request(
         base_url.rstrip("/") + "/chat/completions", data=body,
         headers={"Content-Type": "application/json"})
@@ -1053,9 +1207,16 @@ NO_RECIPES_NOTE = ("Recipe tools (search_recipes, fetch_recipe_page, "
 
 
 def _default_caller(cfg, tools=TOOLS):
-    if cfg.get("llm_provider") == "ollama":
+    provider = cfg.get("llm_provider")
+    if provider == "ollama":
         base_url = cfg.get("ollama_base_url", "http://localhost:11434/v1")
         return lambda messages: call_ollama(base_url, cfg["ollama_model"], messages, tools)
+    if provider == "anthropic":
+        return lambda messages: call_anthropic(
+            cfg["anthropic_api_key"], cfg["anthropic_model"], messages, tools)
+    if provider == "openai":
+        return lambda messages: call_openai(
+            cfg["openai_api_key"], cfg["openai_model"], messages, tools)
     return lambda messages: call_openrouter(
         cfg["openrouter_api_key"], cfg["llm_model"], messages, tools)
 

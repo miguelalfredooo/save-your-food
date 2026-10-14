@@ -163,27 +163,46 @@ self-contained mode that hands every typed message (and now photos too) to a
 model instead, so it can read natural phrasing and correct itself in
 conversation. Off by default.
 
-**Two providers, same code path.** Pick one with `llm_provider`:
+**Four providers, one code path.** Every install uses its own keys, never
+anyone else's. Pick one with `llm_provider`:
 
-    "llm_mode": true,
-    "llm_provider": "openrouter",
-    "openrouter_api_key": "sk-or-...",
-    "llm_model": "anthropic/claude-haiku-4.5"
+| `llm_provider` | Needs | Model setting | Default model |
+|---|---|---|---|
+| `openrouter` | `openrouter_api_key` (`sk-or-...`) | `llm_model` | `anthropic/claude-haiku-4.5` |
+| `anthropic` | `anthropic_api_key` (`sk-ant-...`) | `anthropic_model` | `claude-haiku-5-5` |
+| `openai` | `openai_api_key` (`sk-...`) | `openai_model` | `gpt-4o-mini` |
+| `ollama` | nothing; runs on this machine | `ollama_model` | `qwen3-vl:8b` |
 
-or, to run entirely on your own machine with [Ollama](https://ollama.com)
-instead, free and offline once the model is pulled:
+OpenRouter is one key for Claude, ChatGPT and many cheaper models; it charges
+the providers' own prices plus a small fee on credits. `anthropic` goes to
+Anthropic's own Messages API (translated to and from the format the rest of
+this file uses), with thinking off. `openai` goes to OpenAI directly. A
+ChatGPT or Claude subscription does not include API access: these need an
+API key, billed separately.
+
+**Local, free and private: Ollama.** Nothing leaves the machine:
 
     "llm_mode": true,
     "llm_provider": "ollama",
     "ollama_base_url": "http://localhost:11434/v1",
-    "ollama_model": "llama3.2-vision"
+    "ollama_model": "qwen3-vl:8b"
 
-`ollama pull llama3.2-vision` first (needs Ollama running locally). Every
-message on OpenRouter costs money on your account; Ollama costs nothing per
-message but needs a machine that can actually run the model — a vision
-model wants real RAM (roughly 8GB+ free for an 11B model in Q4). The bot
-refuses to start with `llm_mode` on and OpenRouter selected with no key set,
-rather than silently falling back to a different path.
+`ollama pull qwen3-vl:8b` first, with Ollama running. **The model must read
+images AND call tools**: `ollama show <model>` lists both under
+Capabilities. `llama3.2-vision` reads images but has no tools, so it can see
+a receipt and never log it. Any other local server with an OpenAI-compatible
+`/v1` endpoint (LM Studio, llama.cpp's server) works too: point
+`ollama_base_url` at it.
+
+Local models get an 8,000-token reply budget and a 240-second timeout,
+because qwen3-vl thinks before it answers: measured on a receipt photo, it
+spent all of 1,000 tokens thinking and never replied; with room, it logged
+the receipt after about 77 seconds on an Apple-silicon Mac. It wants roughly
+8 GB of free memory. The hosted providers keep the 1,000-token cap.
+
+The bot refuses to start with `llm_mode` on and the chosen provider's key
+missing, or with an unknown `llm_provider`, rather than silently falling back
+to a different path.
 
 **Photos work in this mode too.** Send a photo of your fridge or a receipt,
 with or without a caption, and it goes to the model as an image alongside

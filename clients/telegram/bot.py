@@ -142,11 +142,19 @@ def with_defaults(cfg):
     cfg.setdefault("nudge_minute", 30)
     cfg.setdefault("allowed_chat_ids", [])
     cfg.setdefault("llm_mode", False)
-    cfg.setdefault("llm_provider", "openrouter")   # "openrouter" or "ollama"
+    # "openrouter", "anthropic" (Claude), "openai" (ChatGPT) or "ollama".
+    # Each install uses its own keys, never anyone else's.
+    cfg.setdefault("llm_provider", "openrouter")
     cfg.setdefault("openrouter_api_key", "")
     cfg.setdefault("llm_model", "anthropic/claude-haiku-4.5")
+    cfg.setdefault("anthropic_api_key", "")
+    cfg.setdefault("anthropic_model", "claude-haiku-5-5")
+    cfg.setdefault("openai_api_key", "")
+    cfg.setdefault("openai_model", "gpt-4o-mini")
     cfg.setdefault("ollama_base_url", "http://localhost:11434/v1")
-    cfg.setdefault("ollama_model", "llama3.2-vision")
+    # Must read photos AND call tools: llama3.2-vision reads photos but has
+    # no tool calling, so it could never log the food it saw.
+    cfg.setdefault("ollama_model", "qwen3-vl:8b")
     return cfg
 
 
@@ -182,10 +190,14 @@ def load_config():
         # who found the bot could spend the owner's money.
         sys.exit("! llm_mode is on but allowed_chat_ids is empty, so anyone "
                  "could use AI on your key. Add your chat id to allowed_chat_ids.")
-    if cfg["llm_mode"] and cfg["llm_provider"] == "openrouter" and (
-            not cfg["openrouter_api_key"] or "PUT_YOUR" in cfg["openrouter_api_key"]):
-        sys.exit("! llm_mode is on with llm_provider openrouter, but "
-                 "openrouter_api_key is not set in config.json.")
+    provider = cfg["llm_provider"]
+    if cfg["llm_mode"] and provider not in llm_agent.API_KEYS and provider != "ollama":
+        sys.exit("! llm_provider %r is not one of openrouter, anthropic, openai, "
+                 "ollama." % provider)
+    key_field = llm_agent.API_KEYS.get(provider)
+    if cfg["llm_mode"] and key_field and _placeholder(cfg.get(key_field)):
+        sys.exit("! llm_mode is on with llm_provider %s, but %s is not set in "
+                 "config.json." % (provider, key_field))
     return cfg
 
 
@@ -1027,9 +1039,10 @@ def privacy_note(con, cfg, chat_id):
         ai = ("Your messages and photos are read by an AI model running on "
               "that same computer, not sent anywhere else.")
     else:
+        company = llm_agent.PROVIDER_NAMES.get(cfg["llm_provider"], "the AI service")
         ai = ("Your messages and photos are also sent to an AI service "
-              "(OpenRouter) so they can be understood. OpenRouter keeps them "
-              "under its own policy, which /deleteme can't reach.")
+              "(%s) so they can be understood. It keeps them under its own "
+              "policy, which /deleteme can't reach." % company)
     # Named when Telegram gave us a name: the data lives on the owner's
     # computer, so "I keep" blurs the bot with the person running it.
     name = cfg.get("bot_name")
