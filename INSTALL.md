@@ -135,74 +135,106 @@ costs and load a starting fridge.
 ## Step 7 · Turn on photo reading (recommended) 👤 You decide
 
 **The easiest way to start is a photo of your next grocery receipt**, and reading a
-photo needs AI mode. Without it the bot still works, but you type your food in.
+photo needs an AI model. Without one the bot still works, but you type your food in.
+
+**It always uses the person's own account or computer.** Each install keeps its own
+keys in its own `config.json`, so nothing goes through whoever wrote this bot, or
+anyone else. A ChatGPT Plus or Claude Pro subscription does **not** cover this:
+those are for the chat apps. Using a model from another program needs API access,
+billed separately, usually a cent or less per receipt.
+
 Ask:
 
 > "The easiest way to use this is to send a photo of your grocery receipt after you
-> shop. To read photos, the bot needs an AI model. Two ways:
+> shop. To read photos the bot needs an AI model, on your own account or your own
+> computer. Four ways:
 >
-> - **OpenRouter (recommended):** a website that gives the bot access to an AI model.
->   You pay per message; a receipt costs well under a cent. You'll need to create an
->   account and add a few dollars of credit.
-> - **Ollama:** free and runs on your own computer, but needs a fairly powerful one
->   (about 8 GB of free memory).
+> 1. **OpenRouter:** one account and key that reaches Claude, ChatGPT and many
+>    cheaper models. Pay as you go; a receipt costs a cent or less.
+> 2. **Claude, from Anthropic directly:** if you already have, or want, an
+>    Anthropic API account.
+> 3. **ChatGPT, from OpenAI directly:** if you already have, or want, an OpenAI API
+>    account.
+> 4. **On your own computer, free and private (Ollama):** nothing leaves your
+>    machine, but it needs a fairly powerful computer (about 8 GB of free memory)
+>    and each receipt takes a minute or two to read.
 >
-> Or skip it for now and type your food in instead. Which would you like?"
+> Or skip it for now and type your food in. Which would you like?"
 
-**This always uses the person's own account.** Each install keeps its own keys in
-its own `config.json`, so nothing goes through whoever wrote this bot, or anyone
-else's account. Say so if they ask.
+The agent's job is the same for options 1 to 3: the person creates a key and pastes
+it into `config.json` themselves (**never in chat**), then you switch AI mode on and
+check the key without printing it.
 
-**Claude or ChatGPT, their choice.** Through OpenRouter one key reaches both, so they
-pick whichever they prefer. Tell them:
+| Option | They get a key at | It starts with | `llm_provider` | Key goes in | Model setting (default) |
+|---|---|---|---|---|---|
+| 1 · OpenRouter | https://openrouter.ai/keys (add a few dollars of credit first) | `sk-or-` | `openrouter` | `openrouter_api_key` | `llm_model` (`anthropic/claude-haiku-4.5`) |
+| 2 · Claude | https://console.anthropic.com (Settings → API keys; add credit under Billing) | `sk-ant-` | `anthropic` | `anthropic_api_key` | `anthropic_model` (`claude-haiku-5-5`) |
+| 3 · ChatGPT | https://platform.openai.com/api-keys (add credit under Billing) | `sk-` | `openai` | `openai_api_key` | `openai_model` (`gpt-4o-mini`) |
 
-> "A ChatGPT Plus or Claude Pro subscription doesn't cover this: those are for the
-> chat apps, not for other programs. You need your own API access, which is billed
-> separately and costs cents. OpenRouter gives you that for both Claude and ChatGPT
-> with one account."
+**For options 1 to 3 (👤 You, then 🤖 Agent).** Say, filling in their row:
 
-**If OpenRouter (👤 You, then 🤖 Agent).** Say:
+> "Go to [their link], sign in or sign up, add a few dollars of credit, and create
+> an API key. It starts with `[prefix]`. **Don't paste it here.** I'll open the
+> config file; replace `PUT_YOUR_..._KEY_HERE` on the `[key field]` line with it,
+> keeping the quote marks, then save and tell me."
 
-> "Go to https://openrouter.ai, sign up, add a few dollars of credit, then open
-> https://openrouter.ai/keys and create a key. It starts with `sk-or-`. **Don't
-> paste it here.** I'll open the config file; replace
-> `PUT_YOUR_OPENROUTER_KEY_HERE` with it, keeping the quote marks, then save and tell
-> me."
+Open the file for them (`open -e config.json` on a Mac). Then switch AI mode on for
+their provider, without touching the key. Set `P` to their `llm_provider`:
 
-Open the file for them (`open -e config.json` on a Mac). Then set AI mode on, without
-touching the key:
-
-    python3 -c "import json;p='config.json';c=json.load(open(p));c['llm_mode']=True;c['llm_provider']='openrouter';json.dump(c,open(p,'w'),indent=2)"
+    P=openrouter; python3 -c "import json,sys;p='config.json';c=json.load(open(p));c['llm_mode']=True;c['llm_provider']=sys.argv[1];json.dump(c,open(p,'w'),indent=2)" "$P"
 
 **Check** (prints `OK` or what is wrong, never the key):
 
-    python3 -c "import json;k=json.load(open('config.json')).get('openrouter_api_key','');print('OK' if k.startswith('sk-or-') and len(k)>20 else ('still the placeholder' if 'PUT_YOUR' in k else 'does not look like an OpenRouter key'))"
+    python3 -c "import json;c=json.load(open('config.json'));f={'openrouter':('openrouter_api_key','sk-or-'),'anthropic':('anthropic_api_key','sk-ant-'),'openai':('openai_api_key','sk-')}[c['llm_provider']];k=c.get(f[0],'');print('OK' if k.startswith(f[1]) and len(k)>20 else ('still the placeholder' if 'PUT_YOUR' in k else 'does not look like a %s key' % c['llm_provider']))"
 
-**Which model:** ask "Claude or ChatGPT?" and set `llm_model` to match. Both read
-photos:
+**Which model.** The defaults all read photos; leave them unless asked. On
+OpenRouter the person can still choose Claude or ChatGPT: set `llm_model` to
+`anthropic/claude-haiku-4.5` (Claude, the default) or `openai/gpt-4o-mini`
+(ChatGPT). Any other model must list **image** as an input on its page at
+https://openrouter.ai/models, or it will silently ignore photos.
 
-| They want | `llm_model` |
-|---|---|
-| Claude (the default) | `anthropic/claude-haiku-4.5` |
-| ChatGPT | `openai/gpt-4o-mini` |
+**For option 4, a model on their own computer (👤 You, then 🤖 Agent).**
 
-    python3 -c "import json;p='config.json';c=json.load(open(p));c['llm_model']='anthropic/claude-haiku-4.5';json.dump(c,open(p,'w'),indent=2)"
+1. **👤** Say:
 
-Swap in the ChatGPT model id if that's their choice. Any other model works if its
-page at https://openrouter.ai/models lists **image** as an input; a text-only model
-silently ignores photos.
+   > "Install Ollama from https://ollama.com (on a Mac you can also run
+   > `brew install ollama`), open it once so it's running, and tell me when it's
+   > done. The model download is about 6 GB, so it's best on a good connection."
 
-**If Ollama (👤 You, then 🤖 Agent).** They install Ollama from https://ollama.com
-and open it once. Then you run:
+2. **🤖** Check it's running, then download the model:
 
-    ollama pull llama3.2-vision
-    python3 -c "import json;p='config.json';c=json.load(open(p));c['llm_mode']=True;c['llm_provider']='ollama';json.dump(c,open(p,'w'),indent=2)"
+       ollama --version
+       ollama pull qwen3-vl:8b
 
-**If they skip:** change nothing. They can do this step any time later; restart the
-bot afterwards.
+3. **🤖** Confirm the model can do both jobs the bot needs:
 
-The bot refuses to start in AI mode with OpenRouter and no key, or with an empty
-`allowed_chat_ids` (step 6), rather than spending money for anyone who finds it.
+       ollama show qwen3-vl:8b
+
+   **Pass:** under **Capabilities** it lists both `vision` and `tools`. A model
+   without `tools` can read the receipt but never log it (`llama3.2-vision` is
+   one of those). A model without `vision` can't read photos at all.
+
+4. **🤖** Switch it on:
+
+       python3 -c "import json;p='config.json';c=json.load(open(p));c['llm_mode']=True;c['llm_provider']='ollama';c['ollama_model']='qwen3-vl:8b';json.dump(c,open(p,'w'),indent=2)"
+
+5. **👤** Tell them what to expect:
+
+   > "Your computer reads each photo itself, so a receipt takes a minute or two.
+   > That's normal. Nothing is sent anywhere."
+
+**Other local model servers.** Anything with an OpenAI-compatible `/v1` endpoint
+works the same way, LM Studio or llama.cpp's server for example: set
+`ollama_base_url` to its address (LM Studio's is usually
+`http://localhost:1234/v1`) and `ollama_model` to the model name that server
+uses. The model still needs both vision and tool calling.
+
+**If they skip:** change nothing. They can do this step any time; restart the bot
+afterwards.
+
+The bot refuses to start in AI mode with the chosen provider's key missing, with an
+unknown `llm_provider`, or with an empty `allowed_chat_ids` (step 6), rather than
+spending money for anyone who finds it.
 
 ## Step 8 · Start the bot 🤖 Agent
 
@@ -273,10 +305,12 @@ Tell the person:
 | `Couldn't reach Telegram`, or `telegram getMe failed: 401` | Token wrong or incomplete | 👤 Copy the token again from @BotFather, paste it again |
 | Running, but no reply in Telegram | Their chat id isn't in `allowed_chat_ids` (it ignores chats not on the list, on purpose) | 👤 Check the number with @userinfobot. 🤖 Fix the list, restart |
 | Warning that the bot is open to anyone | `allowed_chat_ids` empty | Do step 6 |
-| Refuses to start in AI mode | No OpenRouter key, or empty `allowed_chat_ids` | Step 7, or step 6 |
+| Refuses to start in AI mode | The chosen provider's key is missing, the provider name is wrong, or `allowed_chat_ids` is empty | Step 7, or step 6 |
 | No reminder at the time they picked | The bot wasn't running then, or the Mac slept | Step 9 (Mac). Elsewhere, keep `python3 bot.py` running. Each person picks their time during setup (`/setup` to change it); `nudge_hour` / `nudge_minute` in `config.json` is only the default |
 | `./install.sh: No python3 on PATH` | Python not visible to the service | 🤖 `which python3`; 👤 if empty, reinstall Python (step 1) |
 | A photo gets `I can't read photos yet` | AI mode is off | Step 7 |
+| A local model sees the receipt but logs nothing | The model has no tool calling | Step 7, option 4: check `ollama show` lists `tools` |
+| `Having trouble thinking right now` | The AI call failed: no credit left, a wrong key, or Ollama not running | 👤 Check credit and key; 🤖 for Ollama, `ollama list` and open the Ollama app |
 | Anything else | | 🤖 Run `./service/status.sh` (Mac service) or read the terminal output, then show the person the exact error |
 
 ## What it keeps, and where
