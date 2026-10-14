@@ -615,8 +615,7 @@ def exec_search_recipes(con, chat_id, args, today):
 #
 # The one write this client makes to Notes. It is never a model tool: only
 # bot.py's Save button reaches create_recipe_note, so a recipe page that
-# talks the model into "saving" can at most produce a draft the user sees
-# (spec: docs/superpowers/specs/2026-10-08-add-recipes-to-notes-design.md).
+# talks the model into "saving" can at most produce a draft the user sees.
 #
 # One osascript does the duplicate check and the create together. Title and
 # body arrive as argv, and the script itself goes in on stdin ("osascript -")
