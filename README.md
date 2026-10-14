@@ -1,8 +1,12 @@
 # Fridge Loop
 
-![Private](https://img.shields.io/badge/repo-private-red)
 
-A system for using food before it goes bad.
+A system for using food before it goes bad. Its Telegram bot goes by **Save Your
+Food**.
+
+**New here? Start with [INSTALL.md](./INSTALL.md), then
+[GETTING-STARTED.md](./GETTING-STARTED.md).** Both are written so an AI agent can
+follow them end to end, stopping to ask you only for what it can't do itself.
 
 It watches what's in your fridge, works out roughly when each thing turns, and
 sends one reminder a day naming what to do about it — with a recipe from your own
