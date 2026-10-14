@@ -17,6 +17,29 @@ other knowledge of the project. Every step says who does it:
 
 If you are a person following this alone, do every step yourself.
 
+## Or: no install, in Claude Desktop
+
+To try it with nothing to install, no bot and no API key, add the Save Your Food
+skill to the Claude app. Claude reads the receipt photo itself and replies with
+your food sorted, a use-by guess for each item, what to use first, and a list to
+paste into your own reminders app.
+
+**It does not nudge you later.** There is no bot running, so nothing arrives
+tomorrow and nothing is kept between chats. For reminders that come to you, install
+the Telegram bot below.
+
+1. Download [`desktop/save-your-food.zip`](desktop/save-your-food.zip).
+2. In the Claude app, open **Settings → Capabilities** and turn on **Code execution
+   and file creation**. Skills need it.
+3. Go to **Customize → Skills**, click **+**, then **Create skill → Upload a skill**,
+   and choose the zip. (Older versions of the app have this under
+   **Settings → Capabilities → Skills**.)
+4. Start a chat and send a photo of a grocery receipt.
+
+It works on every Claude plan, Free included. The skill is
+`desktop/save-your-food/SKILL.md`. After editing it, rebuild the zip from the
+`desktop` folder with `zip -X -r save-your-food.zip save-your-food`.
+
 ---
 
 ## Rules for agents
