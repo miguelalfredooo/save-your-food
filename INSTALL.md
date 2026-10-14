@@ -149,6 +149,18 @@ Ask:
 >
 > Or skip it for now and type your food in instead. Which would you like?"
 
+**This always uses the person's own account.** Each install keeps its own keys in
+its own `config.json`, so nothing goes through whoever wrote this bot, or anyone
+else's account. Say so if they ask.
+
+**Claude or ChatGPT, their choice.** Through OpenRouter one key reaches both, so they
+pick whichever they prefer. Tell them:
+
+> "A ChatGPT Plus or Claude Pro subscription doesn't cover this: those are for the
+> chat apps, not for other programs. You need your own API access, which is billed
+> separately and costs cents. OpenRouter gives you that for both Claude and ChatGPT
+> with one account."
+
 **If OpenRouter (👤 You, then 🤖 Agent).** Say:
 
 > "Go to https://openrouter.ai, sign up, add a few dollars of credit, then open
@@ -166,7 +178,19 @@ touching the key:
 
     python3 -c "import json;k=json.load(open('config.json')).get('openrouter_api_key','');print('OK' if k.startswith('sk-or-') and len(k)>20 else ('still the placeholder' if 'PUT_YOUR' in k else 'does not look like an OpenRouter key'))"
 
-The default model, `anthropic/claude-haiku-4.5`, reads photos. Leave it.
+**Which model:** ask "Claude or ChatGPT?" and set `llm_model` to match. Both read
+photos:
+
+| They want | `llm_model` |
+|---|---|
+| Claude (the default) | `anthropic/claude-haiku-4.5` |
+| ChatGPT | `openai/gpt-4o-mini` |
+
+    python3 -c "import json;p='config.json';c=json.load(open(p));c['llm_model']='anthropic/claude-haiku-4.5';json.dump(c,open(p,'w'),indent=2)"
+
+Swap in the ChatGPT model id if that's their choice. Any other model works if its
+page at https://openrouter.ai/models lists **image** as an input; a text-only model
+silently ignores photos.
 
 **If Ollama (👤 You, then 🤖 Agent).** They install Ollama from https://ollama.com
 and open it once. Then you run:

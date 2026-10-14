@@ -32,7 +32,7 @@ commas between things:
     milk, spinach, chicken thighs
 
 A photo gets `I can't read photos yet` when photo reading is off. Turning it on is
-step 7 of INSTALL.md.
+step 7 of INSTALL.md, with your own Claude or ChatGPT access (never someone else's).
 
 ## Step 2 · When the daily card arrives, tap one button per item
 
