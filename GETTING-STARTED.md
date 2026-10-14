@@ -1,96 +1,105 @@
 # Getting started with Save Your Food
 
-You have the bot running (if not, start with [INSTALL.md](./INSTALL.md)). This page
-is the first day: what setup does, how to add food, and what the daily reminder
-asks of you. Five minutes.
+You have the bot running (if not, start with [INSTALL.md](./INSTALL.md)).
 
-**Agents:** this page is for the person. Walk them through it in order, and send
-them the Telegram messages to try. You can check what the bot will say without
-Telegram (see the end of this page).
+**You only need to do one thing to start: next time you go grocery shopping, send
+the bot a photo of your receipt.** Everything else on this page can wait until you
+want it.
+
+**Agents:** this page is for the person. Give them step 1 and stop there. Bring up
+the rest only when they ask, or when the bot's daily card arrives. Don't walk them
+through all of it on the first day; that is what makes people give up on a system
+like this.
 
 ---
 
-## 1. Setup: send `/start`
+## Step 1 · Send a photo of your next receipt
 
-The bot walks you through four short steps, each one on your own food rather than a
-description:
+After you shop, open your bot in Telegram and send a photo of the receipt. No
+caption needed. You can even do it before `/start`.
 
-1. **Tell it one thing in your fridge.** It works out roughly when it turns, and
-   says when that's a guess.
-2. **Tell it something that doesn't go off**, like a spice. You'll watch it land in
-   the pantry, which is never nagged about.
-3. **Pick when the daily reminder arrives**, with buttons.
-4. **See how to undo or correct it**, before you need to.
+The bot reads the food lines (never the card number, the total or anything that
+isn't food), logs each item, and works out roughly when each one turns. It replies
+with what it added.
 
-Any step takes `/skip`, and `/setup` runs it again later.
+Why a receipt rather than a photo of your fridge: a receipt says exactly what's new
+and when you bought it. A fridge photo shows everything, including what it already
+knows about, and nothing about how old any of it is.
 
-## 2. Add food: just type it
+**No receipt handy, or photo reading not turned on?** Type what you bought, with
+commas between things:
 
-Send a list, the way you'd write it down:
+    milk, spinach, chicken thighs
 
-    milk, spinach, chicken thighs, oregano
+A photo gets `I can't read photos yet` when photo reading is off. Turning it on is
+step 7 of INSTALL.md.
 
-It sorts each thing into one of three places:
+## Step 2 · When the daily card arrives, tap one button per item
 
-| Place | What goes there | Reminded about? |
-|---|---|---|
-| **Fridge** | Things that go off: meat, dairy, greens, leftovers | Yes |
-| **Pantry** | Things that keep: spices, cans, oil, rice | Never |
-| **Counter** | Onions, garlic, potatoes and the like | No |
-
-Quantities are dropped (`2 bunches cilantro` becomes `cilantro`). If it sorted
-something wrong, say `those are pantry` or `those are fridge`, or send `/undo` to
-take the whole list back.
-
-## 3. The daily reminder
-
-Once a day, at the time you picked, it sends **one card** listing what to use soon,
-with three buttons per item:
+Once a day it sends **one card** listing what to use soon, with three buttons per
+item:
 
 | Button | Means |
 |---|---|
 | ✅ | Used it |
-| ❄️ | Froze it (it moves to the freezer list) |
+| ❄️ | Froze it |
 | 🗑 | Tossed it |
 
-Each tap updates the same card. When every line is done the card closes. **If
+Each tap updates the same card. When every line is done, the card closes. **If
 nothing needs using, nothing arrives**: silence means you're fine.
 
-Raw meat and fish that sit past their date get flagged `long gone, toss it?`.
-These are quality estimates, not food-safety guarantees: when in doubt, throw it out.
+That's the whole habit: a receipt photo after you shop, a few taps when the card
+comes. Keep doing just that for a week or two.
 
-## 4. Look things up
+These are quality estimates, not food-safety guarantees. Raw meat and fish past
+their date get flagged `long gone, toss it?`. When in doubt, throw it out.
+
+---
+
+## Later, when you're ready
+
+None of this is needed to get value from the bot. Pick things up one at a time.
+
+**Choose when the card arrives.** It comes at 16:30 unless you picked a time in
+`/start`. Send
+`/setup` for a short walkthrough on your own food: when the card arrives, how
+pantry items work, and how to undo.
+
+**Fix how something was sorted.** Food goes to one of three places: the **fridge**
+(reminded about), the **pantry** (spices, cans, oil, rice; never reminded about) or
+the **counter** (onions, garlic, potatoes). If something landed wrong, say
+`those are pantry` or `those are fridge`. `/undo` takes back the last thing you
+added.
+
+**Look things up.**
 
 | Send | You get |
 |---|---|
 | `/fridge` | Everything tracked, soonest first |
-| `/nudge` | The reminder now, instead of waiting |
+| `/nudge` | The card now, instead of waiting |
 | `/pantry` | What's remembered but never reminded about |
 | `/freezer` | What you froze, with buttons for finished or binned |
 | `/month` | What you used in time, and what went in the bin |
 | `/help` | The commands |
 
-## 5. Optional extras
+**Talk to it normally** (photo reading on): "put the butter chicken in the fridge as
+leftovers" works, and so does a photo of your fridge.
 
-- **Start with what's already in your fridge (owner only).** In
-  `clients/telegram`, copy `seed.example.json` to `seed.json`, replace the items
-  with yours (name, use-by date, risk), then send `/seed`. It only works once, on an
-  empty fridge.
-- **Share it with your household (owner only).** `/invite` makes a one-time link
-  that works for 7 days. `/members` lists who joined, with a button to remove them.
-  Everyone shares one fridge.
-- **AI mode** (INSTALL step 9): type normal sentences ("put the butter chicken in
-  the fridge as leftovers") and send photos of your fridge or a receipt. On a Mac,
-  the owner can also send a recipe or a recipe link and save it to the Recipes folder
-  in Apple Notes.
+**Share it with your household** (the owner only). `/invite` makes a one-time link
+that works for 7 days. `/members` lists who joined, with a button to remove them.
+Everyone shares one fridge.
 
-## 6. Your data
+**Save recipes** (the owner, on a Mac). Send a recipe or a recipe link and tap Save
+to add it to the Recipes folder in Apple Notes.
 
-- `/privacy`: what's kept, where, and who can see it.
-- `/clear`: wipe the food, keep your settings.
-- `/deleteme`: erase everything about you, after a confirm button.
+**Start from what's already in your fridge** (the owner only). In `clients/telegram`,
+copy `seed.example.json` to `seed.json`, replace the items with yours, then send
+`/seed`. It only works once, on an empty fridge. Most people skip this: the next
+receipt fills the fridge on its own.
 
-All of it lives on the computer running the bot, in `fridge.db`.
+**Your data.** `/privacy` says what's kept, where and who can see it. `/clear` wipes
+the food and keeps your settings. `/deleteme` erases everything about you, after a
+confirm button. All of it lives on the computer running the bot.
 
 ---
 
@@ -101,12 +110,13 @@ From `clients/telegram`, none of these needs a token or the network:
     python3 try_chat.py -i          # chat with the real bot logic in the terminal;
                                     # `tap 2 used` presses a card button
     python3 preview.py 2026-11-01   # the messages it would send on that date
-    python3 test_logic.py           # the 548 tests; exit code 0 means they pass
+    python3 test_logic.py           # the test suite; exit code 0 means it passes
 
-Use `try_chat.py` to show the person what a message will do before they send it, or
-to reproduce something odd they saw. If the bot logged something strange, have them
-send `/fridge` to see what it thinks it holds. A date marked `(est.)` was guessed
-because the item isn't in `shelf_life.py`; add it there.
+Use `try_chat.py` to show the person what a typed message will do, or to reproduce
+something odd they saw. Photos need AI mode and the network, so they can't be tried
+here. If the bot logged something strange, have them send `/fridge` to see what it
+thinks it holds. A date marked `(est.)` was guessed because the item isn't in
+`shelf_life.py`; add it there.
 
 The full command list, invites, AI mode and security notes are in
 `clients/telegram/README.md`. The reasoning behind the design is in

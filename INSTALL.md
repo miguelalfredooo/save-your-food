@@ -5,6 +5,9 @@ your fridge and nudges you before food goes off. This guide installs the Telegra
 client, which is the version almost everyone wants: it runs on any computer with
 Python, needs no Mac and installs nothing beyond Python itself.
 
+**The goal is one thing: the person can send a photo of their next grocery receipt
+and the bot logs their food.** Everything else can come later.
+
 **This guide is written so an AI agent can follow it from start to finish** with no
 other knowledge of the project. Every step says who does it:
 
@@ -129,7 +132,55 @@ config, replacing `123456789` with their number:
 The first id in the list is the **owner**. Only the owner can invite people, see
 costs and load a starting fridge.
 
-## Step 7 · Start the bot 🤖 Agent
+## Step 7 · Turn on photo reading (recommended) 👤 You decide
+
+**The easiest way to start is a photo of your next grocery receipt**, and reading a
+photo needs AI mode. Without it the bot still works, but you type your food in.
+Ask:
+
+> "The easiest way to use this is to send a photo of your grocery receipt after you
+> shop. To read photos, the bot needs an AI model. Two ways:
+>
+> - **OpenRouter (recommended):** a website that gives the bot access to an AI model.
+>   You pay per message; a receipt costs well under a cent. You'll need to create an
+>   account and add a few dollars of credit.
+> - **Ollama:** free and runs on your own computer, but needs a fairly powerful one
+>   (about 8 GB of free memory).
+>
+> Or skip it for now and type your food in instead. Which would you like?"
+
+**If OpenRouter (👤 You, then 🤖 Agent).** Say:
+
+> "Go to https://openrouter.ai, sign up, add a few dollars of credit, then open
+> https://openrouter.ai/keys and create a key. It starts with `sk-or-`. **Don't
+> paste it here.** I'll open the config file; replace
+> `PUT_YOUR_OPENROUTER_KEY_HERE` with it, keeping the quote marks, then save and tell
+> me."
+
+Open the file for them (`open -e config.json` on a Mac). Then set AI mode on, without
+touching the key:
+
+    python3 -c "import json;p='config.json';c=json.load(open(p));c['llm_mode']=True;c['llm_provider']='openrouter';json.dump(c,open(p,'w'),indent=2)"
+
+**Check** (prints `OK` or what is wrong, never the key):
+
+    python3 -c "import json;k=json.load(open('config.json')).get('openrouter_api_key','');print('OK' if k.startswith('sk-or-') and len(k)>20 else ('still the placeholder' if 'PUT_YOUR' in k else 'does not look like an OpenRouter key'))"
+
+The default model, `anthropic/claude-haiku-4.5`, reads photos. Leave it.
+
+**If Ollama (👤 You, then 🤖 Agent).** They install Ollama from https://ollama.com
+and open it once. Then you run:
+
+    ollama pull llama3.2-vision
+    python3 -c "import json;p='config.json';c=json.load(open(p));c['llm_mode']=True;c['llm_provider']='ollama';json.dump(c,open(p,'w'),indent=2)"
+
+**If they skip:** change nothing. They can do this step any time later; restart the
+bot afterwards.
+
+The bot refuses to start in AI mode with OpenRouter and no key, or with an empty
+`allowed_chat_ids` (step 6), rather than spending money for anyone who finds it.
+
+## Step 8 · Start the bot 🤖 Agent
 
 Start it as a background process; it keeps running until stopped:
 
@@ -141,27 +192,28 @@ Start it as a background process; it keeps running until stopped:
 Then say:
 
 > "Your bot is running. In Telegram, open your bot (search for the username you
-> picked) and send `/start`. It walks you through a short setup. Tell me what it
+> picked) and send `/start`. It asks you a few short questions; tell me what it
 > says."
 
 If they get no reply, use the troubleshooting table below.
 
 **Important:** the bot only works while this process runs. If the terminal closes or
-the computer sleeps, it stops. Step 8 fixes that on a Mac.
+the computer sleeps, it stops. Step 9 fixes that on a Mac.
 
-## Step 8 · Keep it running (Mac only, recommended) 🤖 Agent, then 👤 You
+## Step 9 · Keep it running (Mac only, recommended) 🤖 Agent, then 👤 You
 
 Skip this on anything other than a Mac, and tell the person the bot runs only while
 `python3 bot.py` is running.
 
-**🤖 Agent:** stop the bot from step 7, then install it as a service that starts at
+**🤖 Agent:** stop the bot from step 8, then install it as a service that starts at
 login and restarts itself if it crashes:
 
     cd service
     ./install.sh
     ./status.sh
 
-**Pass:** `status.sh` reports it running. `install.sh` is safe to run more than once.
+**Pass:** `status.sh` reports it running. `install.sh` is safe to run more than once,
+and is also how to restart the bot after a config change.
 
 **👤 You:** two Mac settings the agent cannot change. Say:
 
@@ -177,33 +229,13 @@ login and restarts itself if it crashes:
 Logs are in `~/Library/Logs/fridge-loop/`. To remove the service: `./uninstall.sh`
 (your `config.json` and data stay).
 
-## Step 9 · AI mode (optional) 👤 You decide
-
-By default the bot reads commands and typed lists, fast and free. AI mode lets it
-understand ordinary sentences and photos of your fridge or a receipt. Ask:
-
-> "Do you want AI mode? It understands normal sentences and photos. It can use
-> **OpenRouter** (paid per message, about a cent or less; needs an account and an API
-> key) or **Ollama** (free, runs on your computer, needs about 8 GB of free memory).
-> Or skip it for now."
-
-- **OpenRouter:** they create a key at https://openrouter.ai/keys. Same rule as the
-  token: they paste it into `config.json` themselves, in place of
-  `PUT_YOUR_OPENROUTER_KEY_HERE`. You set `"llm_mode": true`.
-- **Ollama:** they install it from https://ollama.com. You run
-  `ollama pull llama3.2-vision`, then set `"llm_mode": true` and
-  `"llm_provider": "ollama"`.
-
-Restart the bot afterwards (`./service/install.sh` on a Mac with the service, or
-stop and start `python3 bot.py`). It refuses to start in AI mode with OpenRouter and
-no key, or with an empty `allowed_chat_ids`, rather than spending money for anyone.
-
 ## Done
 
 Tell the person:
 
-> "Save Your Food is set up. Next, see GETTING-STARTED.md for how to use it day to
-> day: adding food, the daily reminder, and what the buttons do."
+> "Save Your Food is set up. **Your first step is simple: next time you go grocery
+> shopping, send the bot a photo of your receipt.** That's it for now.
+> GETTING-STARTED.md has the rest, whenever you want it."
 
 ---
 
@@ -216,9 +248,10 @@ Tell the person:
 | `Couldn't reach Telegram`, or `telegram getMe failed: 401` | Token wrong or incomplete | 👤 Copy the token again from @BotFather, paste it again |
 | Running, but no reply in Telegram | Their chat id isn't in `allowed_chat_ids` (it ignores chats not on the list, on purpose) | 👤 Check the number with @userinfobot. 🤖 Fix the list, restart |
 | Warning that the bot is open to anyone | `allowed_chat_ids` empty | Do step 6 |
-| Refuses to start in AI mode | No OpenRouter key, or empty `allowed_chat_ids` | Step 9, or step 6 |
-| No reminder at the time they picked | The bot wasn't running then, or the Mac slept | Step 8 (Mac). Elsewhere, keep `python3 bot.py` running. Each person picks their time during setup (`/setup` to change it); `nudge_hour` / `nudge_minute` in `config.json` is only the default |
+| Refuses to start in AI mode | No OpenRouter key, or empty `allowed_chat_ids` | Step 7, or step 6 |
+| No reminder at the time they picked | The bot wasn't running then, or the Mac slept | Step 9 (Mac). Elsewhere, keep `python3 bot.py` running. Each person picks their time during setup (`/setup` to change it); `nudge_hour` / `nudge_minute` in `config.json` is only the default |
 | `./install.sh: No python3 on PATH` | Python not visible to the service | 🤖 `which python3`; 👤 if empty, reinstall Python (step 1) |
+| A photo gets `I can't read photos yet` | AI mode is off | Step 7 |
 | Anything else | | 🤖 Run `./service/status.sh` (Mac service) or read the terminal output, then show the person the exact error |
 
 ## What it keeps, and where
