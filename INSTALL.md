@@ -216,7 +216,8 @@ Start it as a background process; it keeps running until stopped:
 Then say:
 
 > "Your bot is running. In Telegram, open your bot (search for the username you
-> picked) and send `/start`. It asks you a few short questions; tell me what it
+> picked) and send `/start`. With photo reading on, it asks for a photo of your
+> next grocery receipt; otherwise it asks a few short questions. Tell me what it
 > says."
 
 If they get no reply, use the troubleshooting table below.
