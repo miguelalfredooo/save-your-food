@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fridge Loop — Telegram client.
+"""Save Your Food — Telegram client.
 
 Standard library only. Nothing to install: if you can run python3, you can run this.
 
@@ -1779,7 +1779,7 @@ def main():
         tg.call("setMyCommands", scope={"type": "chat", "chat_id": owner(cfg)},
                 commands=[{"command": c, "description": d}
                           for c, d in COMMANDS + OWNER_COMMANDS])
-    print("Fridge Loop running as @%s. Nudging at %02d:%02d. Ctrl-C to stop."
+    print("Save Your Food running as @%s. Nudging at %02d:%02d. Ctrl-C to stop."
           % (me["result"]["username"], cfg["nudge_hour"], cfg["nudge_minute"]))
 
     offset = None

@@ -226,7 +226,7 @@ Start it as a background process; it keeps running until stopped:
     python3 bot.py
 
 **Pass:** within a few seconds it prints one line:
-`Fridge Loop running as @<botname>. Nudging at 16:30. Ctrl-C to stop.`
+`Save Your Food running as @<botname>. Nudging at 16:30. Ctrl-C to stop.`
 
 Then say:
 

@@ -1,6 +1,6 @@
 ---
 name: ascii-art-curator
-description: Authors and vets the small ASCII drawings Fridge Loop shows at closing moments. Use when adding a frame, reviewing one, or deciding whether a moment should carry art at all. Also use when art starts feeling like noise.
+description: Authors and vets the small ASCII drawings Save Your Food shows at closing moments. Use when adding a frame, reviewing one, or deciding whether a moment should carry art at all. Also use when art starts feeling like noise.
 tools: Read, Edit, Write, Bash, Grep, Glob
 model: sonnet
 ---

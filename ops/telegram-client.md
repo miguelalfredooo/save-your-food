@@ -1,6 +1,6 @@
 # The Telegram client
 
-Operational reference for the `fridge-loop` skill. Read before touching
+Operational reference for the Save Your Food skill (`skill/SKILL.md`). Read before touching
 `_fridge-bot/`.
 
 The same spec with a chat UI, for people without the Mac stack. Standard library

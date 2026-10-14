@@ -1,5 +1,5 @@
 #!/bin/bash
-# Stops and removes the Fridge Loop launchd service. Does not touch
+# Stops and removes the Save Your Food launchd service. Does not touch
 # config.json, fridge.db, or the logs.
 set -euo pipefail
 

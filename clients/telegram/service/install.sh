@@ -1,5 +1,5 @@
 #!/bin/bash
-# Installs the Fridge Loop bot as a per-user launchd service, so it starts at
+# Installs the Save Your Food bot as a per-user launchd service, so it starts at
 # login and restarts itself if it crashes. Safe to run more than once: it
 # boots out any existing copy of the service before installing fresh.
 set -euo pipefail
