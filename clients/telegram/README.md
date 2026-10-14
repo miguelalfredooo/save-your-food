@@ -283,15 +283,13 @@ message, a card, with a numbered line per item and a row of buttons for each:
     [ 2 ✅ ] [ 2 ❄️ ] [ 2 🗑 ]
 
 A tap edits the same card: the line becomes `✓ cilantro  used`, its buttons
-go, the footer counts up. When every line is handled the card closes with one
-drawing (none if everything was tossed). No extra messages arrive.
+go, the footer counts up. When every line is handled the card closes, with
+one line under it if this card crossed a milestone. No extra messages arrive.
 
 The card body is a monospace block padded to exactly 36 columns, so every
 card is the same width on a phone instead of each bubble sizing itself to its
 longest line. 36 fits a current phone at the default text size with a small
-margin (about 38 fit); the drawings stay 24 wide and sit inside it, and a
-message that is only a drawing gets the same full-width rule, so no bubble in
-the chat comes out narrower than a card. On a very
+margin (about 38 fit). On a very
 small phone or with very large text, lines can wrap: lower `card.WIDTH` then. A long list shows the soonest
 15 and says how many it left out. `card.py` has the reasoning.
 
@@ -408,71 +406,22 @@ The bot registers these with Telegram on startup, so they show in the `/` menu.
 
     python3 test_logic.py
 
-548 tests, no network needed. The interesting ones are the bucket collisions
+525 tests, no network needed. The interesting ones are the bucket collisions
 (`ground beef` vs `ground ginger`, `coconut milk` vs `oat milk`, `butternut
 squash` vs `peanut butter`) and the correction phrasings, including negation.
 
-## Delight
+## Outcomes
 
-`art.py` holds two kinds of drawing, with opposite rules.
+Outcomes get one plain line, never a picture. The bot used to draw small ASCII
+pictures at closing moments; they were removed to keep every message quick to
+read.
 
-**Glyphs are evergreen.** One per category, the same one every time. A can means
-pantry, an onion means the counter, a hen means raw poultry, a carton means
-dairy. Repetition is the point: used consistently they become a vocabulary, so
-you can see which bucket something landed in rather than read that it did.
+- **An empty nudge is said out loud:** `/nudge` with nothing at risk answers
+  "Nothing needs using today." It is the state the whole system is trying to
+  produce, and silence looks identical to the bot being broken.
+- **A toss gets one quiet line** ("Noted."), never a verdict.
+- **Milestones are held back:** 10, 25, 50, 100, 250, 500 things used before
+  they turned. One that arrived every Tuesday would not be one.
 
-    pantry      counter      poultry      dairy       greens
-    ,-----.       \|/          ,          ____         ,/|
-    |=====|      .-'-.        (o)        |\  /|        / /
-    | ### |     ( ( ) )      (   )>      | \/ |       / /
-    | ### |      '---'        ^ ^        |    |      (_/
-    '-----'                              |____|
-
-Full set: pantry, counter, fridge, poultry, meat, fish, greens, dairy, egg,
-cheese, leftovers, bread, fruit, frozen.
-
-`/pantry` used to put the can over the pantry list and the onion over the
-counter list. It is a card now, like every other list, with PANTRY and ON
-THE COUNTER as its two sections: the sort stays visible, and the lists all
-look alike. The glyphs still mark a used or frozen item that matches one.
-
-The glyph for what you just added opens the "Added to your fridge" card, in
-the same block: a hen for chicken, a carton for milk. That is where the
-vocabulary gets seen every day.
-
-**Frames rotate.** They mark a moment with no food behind it: an empty at-risk
-list, an empty fridge, freezer or pantry, nothing to undo, a recipe saved to
-Recipes, the end of setup, a milestone (10, 25, 50, 100, 250, 500 uses).
-
-**At most three drawings a day per person**, milestones aside. Past that,
-the same messages arrive without a picture: a drawing everywhere stops being
-a surprise.
-
-| | |
-|---|---|
-| A glyph **must** repeat | or it is not a vocabulary |
-| A frame **must not** | or it is not a surprise |
-
-Two cartons in a row is correct: it means two dairy items.
-
-A card gets at most one drawing, when its last line is handled, edited into
-the same message. Drawing after every tap turned a three-item nudge back into
-six messages.
-
-Where drawings never appear, and why:
-
-| Never | Why |
-|---|---|
-| A nudge needing a decision | It has to scan on a lock screen. A drawing pushes the item name down. |
-| A toss | Food was wasted. A picture over it reads as mockery. One quiet line instead. |
-| A question | Art marks an outcome; a disposal prompt is still open. |
-
-Limits: pure ASCII (a Cyrillic `o` renders as an empty box on some phones), 16
-characters wide, 6 lines tall, and a `<pre>` block with HTML parse mode, because
-Telegram's default font is proportional and destroys columns. Captions carry
-food names, so they go through `art.esc`.
-
-The `ascii-art-curator` agent in `.claude/agents/` authors and vets the set.
-Nothing is drawn at runtime: the bot is stdlib-only with no model behind it, and
-evergreen art would not want it to. A can that came out slightly different each
-time would be worse than no can.
+Food names come from users, so anything sent in HTML mode goes through
+`card.esc`.

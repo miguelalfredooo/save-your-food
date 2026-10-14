@@ -14,8 +14,7 @@ rule of the same width. Monospace makes every character the same width, so
 every card is the same width on a given phone, and the rule pins it even when
 every line is short. WIDTH is 36: on a current phone at the default text size
 a code block fits about 38 columns, so 36 keeps item names and dates on one
-line with a small margin. It was 24 to match the drawings' canvas, sized for
-the narrowest phones, then 32; the drawings stay 24 and sit inside the card.
+line with a small margin. It was 24, sized for the narrowest phones, then 32.
 On a very small phone, or with very large text, a line can wrap.
 
 Names, not buttons, carry the item
@@ -29,7 +28,6 @@ Pure functions only. Nothing here touches the network or the database.
 import textwrap
 from datetime import date
 
-import art
 import fridge
 import shelf_life as sl
 
@@ -185,24 +183,34 @@ def nudge_title(items, today):
     return "%d things to check" % len(tiers)
 
 
+def esc(text):
+    """Escape text for HTML parse mode.
+
+    Food names come from users. One stray angle bracket in "<3 cilantro" and
+    Telegram reads the rest of the message as a tag, silently dropping it.
+    Anything in an HTML message goes through here.
+    """
+    return (str(text).replace("&", "&amp;")
+                     .replace("<", "&lt;")
+                     .replace(">", "&gt;"))
+
+
 def _html(head, body, closing):
     # Clipped as a backstop: a heading wider than the card widens the bubble.
-    html = "<b>%s</b>\n<pre>%s</pre>" % (art.esc(_clip(head, WIDTH)),
-                                        "\n".join(art.esc(l) for l in body))
+    html = "<b>%s</b>\n<pre>%s</pre>" % (esc(_clip(head, WIDTH)),
+                                        "\n".join(esc(l) for l in body))
     return html + ("\n" + closing if closing else "")
 
 
 def render(head, items, today, footer, closing=None, label_one_tier=True,
-           notes=None, top=None, actionable=None, pick=None):
+           notes=None, actionable=None, pick=None):
     """(html, buttons) for a card.
 
     `items` keep their order for the life of the card, closed or not, so an
     item's number never changes under someone's thumb. Sections follow the
     tier each item was in on the day the card went out, not today, for the
-    same reason. `closing` is an already-rendered art block, or None.
+    same reason. `closing` is an already-escaped line under the card, or None.
     `notes` are short sentences under the footer, wrapped to the card.
-    `top` is a drawing for the head of the card, inside the same block: the
-    drawings are drawn to the card's width, so it costs no extra message.
     `actionable` picks which open items get buttons (all, by default); the
     rest are reachable through "Mark another item".
 
@@ -212,7 +220,7 @@ def render(head, items, today, footer, closing=None, label_one_tier=True,
     """
     tiers = {sl.tier(i["use_by_date"], today) for i in items}
     labelled = label_one_tier or len(tiers) > 1
-    body, seen = (top.split("\n") + [""] if top else []) + [RULE], None
+    body, seen = [RULE], None
     for n, item in enumerate(items, 1):
         t = sl.tier(item["use_by_date"], today)
         if t != seen:

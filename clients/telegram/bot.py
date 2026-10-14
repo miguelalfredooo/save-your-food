@@ -49,7 +49,6 @@ sys.path.insert(0, HERE)
 import fridge          # noqa: E402
 import shelf_life as sl  # noqa: E402
 import onboarding as onb  # noqa: E402
-import art  # noqa: E402
 import card  # noqa: E402
 import recipe_text  # noqa: E402
 import llm_agent  # noqa: E402
@@ -279,8 +278,8 @@ class Telegram:
     def send(self, chat_id, text, buttons=None, html=False):
         """html=True is only for messages carrying a pre block.
 
-        Telegram uses a proportional font unless told otherwise, which turns
-        every ASCII drawing into rubble. Nothing else asks for HTML, because
+        Telegram uses a proportional font unless told otherwise, which breaks
+        a card's columns. Nothing else asks for HTML, because
         turning it on means hand-escaping any stray angle bracket in a food
         name, and food names come from users.
         """
@@ -425,7 +424,7 @@ OWNER_COMMANDS = [
 ]
 
 
-def send_card(tg, con, chat_id, kind, head, items, today, notes=None, top=None):
+def send_card(tg, con, chat_id, kind, head, items, today, notes=None):
     """One card for these items, remembered so a tap can redraw it.
 
     This used to be one summary plus one buttoned message per item: three
@@ -435,9 +434,9 @@ def send_card(tg, con, chat_id, kind, head, items, today, notes=None, top=None):
     spec = {"kind": kind, "head": head, "day": today.isoformat(),
             "ids": [i["id"] for i in shown], "more": more,
             "used_before": fridge.count_closed(con, chat_id, "used"),
-            "notes": notes or [], "top": top,
+            "notes": notes or [],
             "pick": _picks(kind, shown, today)}
-    html, buttons = _render(kind, head, shown, today, more, notes=notes, top=top,
+    html, buttons = _render(kind, head, shown, today, more, notes=notes,
                             pick=spec["pick"])
     res = tg.send(chat_id, html, buttons=buttons, html=True)
     msg_id = ((res or {}).get("result") or {}).get("message_id")
@@ -446,27 +445,15 @@ def send_card(tg, con, chat_id, kind, head, items, today, notes=None, top=None):
     return len(shown)
 
 
-def close_card(con, chat_id, spec, items):
-    """The drawing that closes a finished card, or None.
+def close_card(con, chat_id, spec):
+    """The milestone line under a finished card, or None.
 
-    One per card, not one per tap: a drawing after every button turned a
-    three-item nudge back into six messages. A card that ends all tossed
-    gets none, for the same reason a toss never did.
+    Only when this card's taps crossed a milestone: a line on every finished
+    card would be noise, and the card's own ticks already say what happened.
     """
-    states = {i["state"] for i in items}
-    if states == {"tossed"}:
-        return None
     used_now = fridge.count_closed(con, chat_id, "used")
     crossed = [m for m in MILESTONES if spec["used_before"] < m <= used_now]
-    if crossed:
-        moment, caption = "milestone", milestone_line(crossed[-1])
-    else:
-        moment = "used" if "used" in states else "frozen"
-        caption = CLOSE_LINES[moment]
-    frame = draw(con, chat_id, moment)
-    if not frame:
-        return None
-    return art.render(frame, caption, width=card.WIDTH)
+    return card.esc(milestone_line(crossed[-1])) if crossed else None
 
 
 def _actionable(kind, today):
@@ -489,14 +476,14 @@ def _picks(kind, items, today):
         > card.DIRECT_MAX
 
 
-def _render(kind, head, items, today, more, closing=None, notes=None, top=None,
+def _render(kind, head, items, today, more, closing=None, notes=None,
             pick=None):
     footer = card.tally("fridge" if kind == "added" else kind, items, more)
     if kind == "freezer":
         return card.render_freezer(head, items, footer, pick=pick)
     html, buttons = card.render(head, items, today, footer, closing,
                                 label_one_tier=(kind != "nudge"), notes=notes,
-                                top=top, actionable=_actionable(kind, today),
+                                actionable=_actionable(kind, today),
                                 pick=pick)
     return html, (None if kind == "added" else buttons)
 
@@ -506,14 +493,14 @@ def refresh_card(tg, con, chat_id, message_id, spec):
     items = fridge.items_by_ids(con, chat_id, spec["ids"])
     today = date.fromisoformat(spec["day"])
     closing = None
-    # The freezer gets no closing drawing: it never drew on a settle before
-    # cards either, and its last tap is as likely to be a toss as not.
+    # The freezer gets no closing line: its last tap is as likely to be a
+    # toss as not.
     if (spec["kind"] != "freezer" and items
             and all(card.settled(spec["kind"], i) for i in items)):
-        closing = close_card(con, chat_id, spec, items)
+        closing = close_card(con, chat_id, spec)
     html, buttons = _render(spec["kind"], spec["head"], items, today,
                             spec["more"], closing, notes=spec.get("notes"),
-                            top=spec.get("top"), pick=spec.get("pick"))
+                            pick=spec.get("pick"))
     tg.edit(chat_id, message_id, html, buttons=buttons, html=True)
 
 
@@ -531,8 +518,7 @@ def send_fridge(tg, con, chat_id, today=None):
     today = today or date.today()
     items = fridge.open_items(con, chat_id)
     if not items:
-        send_delight(tg, con, chat_id, "empty",
-                     caption=fridge.compose_inventory(items))
+        tg.send(chat_id, fridge.compose_inventory(items))
         return
     send_card(tg, con, chat_id, "fridge", "In your fridge", items, today)
 
@@ -566,20 +552,18 @@ def send_freezer(tg, con, chat_id, today=None):
     today = today or date.today()
     items = fridge.frozen_items(con, chat_id)
     if not items:
-        send_delight(tg, con, chat_id, "empty",
-                     caption="Nothing in the freezer that I know about. "
-                             "Freezing something from a nudge puts it here.")
+        tg.send(chat_id, "Nothing in the freezer that I know about. "
+                         "Freezing something from a nudge puts it here.")
         return 0
     return send_card(tg, con, chat_id, "freezer", "In the freezer", items, today)
 
 
 def send_pantry(tg, con, chat_id, head="In your pantry"):
     """The pantry as a card, the same shape as every other list. It used to
-    be the one list drawn differently: big ASCII drawings over comma runs."""
+    be the one list drawn differently."""
     items = fridge.pantry_items(con, chat_id)
     if not items:
-        send_delight(tg, con, chat_id, "empty",
-                     caption=fridge.compose_pantry(items))
+        tg.send(chat_id, fridge.compose_pantry(items))
         return
     tg.send(chat_id, card.render_pantry(
         head, _capped_names([i["name"] for i in items if i["kind"] == "stable"]),
@@ -641,42 +625,6 @@ def answer_question(tg, con, chat_id, text):
         send_pantry(tg, con, chat_id)
         return
     tg.send(chat_id, fridge.answer_question(text))
-
-
-def draw(con, chat_id, moment, item=None, frame=None):
-    """The drawing for this moment, or None. Every drawing comes through here.
-
-    art.choose holds the rules about where art may go (never a nudge needing
-    a decision, a toss or a question) and keeps frames from repeating. This
-    adds the daily cap, which milestones are exempt from. `frame` passes a
-    drawing already picked, such as a food's glyph, through the same cap.
-    """
-    frame = frame or art.choose(moment, item=item,
-                                avoid=fridge.last_art(con, chat_id))
-    if not frame:
-        return None
-    if moment != "milestone":
-        if not fridge.art_left(con, chat_id):
-            return None
-        fridge.spend_art(con, chat_id)
-    fridge.note_art(con, chat_id, frame)
-    return frame
-
-
-def send_delight(tg, con, chat_id, moment, item=None, caption=None):
-    """A moment with a drawing over its caption, or the caption alone.
-
-    Returns True if something was drawn. A forbidden moment, or one past the
-    day's cap, sends the caption on its own rather than nothing: the outcome
-    still needs acknowledging, it just does not get a picture over it.
-    """
-    frame = draw(con, chat_id, moment, item=item)
-    if not frame:
-        if caption:
-            tg.send(chat_id, caption)
-        return False
-    tg.send(chat_id, art.render(frame, caption, width=card.WIDTH), html=True)
-    return True
 
 
 def run_onboarding(tg, con, chat_id, text, cfg):
@@ -795,7 +743,7 @@ def _markdown_to_html(text):
             continue
         header = _HEADER_RE.match(line)
         if header:
-            blocks.append("<b>%s</b>" % _inline_markdown(art.esc(header.group(1))))
+            blocks.append("<b>%s</b>" % _inline_markdown(card.esc(header.group(1))))
             i += 1
             continue
         if _BULLET_RE.match(line):
@@ -803,10 +751,10 @@ def _markdown_to_html(text):
             # code, with a copy icon, and a list of words has no columns
             # worth keeping. The cards keep <pre>; they do have columns.
             item = _BULLET_RE.sub("", line, count=1)
-            blocks.append("• " + _inline_markdown(art.esc(item)))
+            blocks.append("• " + _inline_markdown(card.esc(item)))
             i += 1
         else:
-            blocks.append(_inline_markdown(art.esc(line)))
+            blocks.append(_inline_markdown(card.esc(line)))
             i += 1
     return "\n".join(blocks)
 
@@ -1284,11 +1232,9 @@ def handle_message(tg, con, msg, cfg):
         return
     if low.startswith("/nudge"):
         if send_nudge(tg, con, chat_id) == 0:
-            # The one place a drawing earns its keep on an empty result: this is
-            # the state the whole system is trying to produce, and it otherwise
-            # looks identical to the bot being broken.
-            send_delight(tg, con, chat_id, "allclear",
-                         caption="Nothing needs using today.")
+            # Said out loud: this is the state the whole system is trying to
+            # produce, and silence here looks identical to the bot being broken.
+            tg.send(chat_id, "Nothing needs using today.")
         return
     if low.startswith("/"):
         tg.send(chat_id, HELP)
@@ -1375,13 +1321,8 @@ def send_capture(tg, con, chat_id, tracked, stable, outside, again):
     added = {name for name, _, _, _ in tracked} | set(again)
     items = [i for i in fridge.open_items(con, chat_id) if i["name"] in added]
     if items:
-        # The glyph for what came in, over the card: a hen for chicken, a
-        # carton for milk. The evergreen vocabulary, where it is seen daily.
-        glyph = next((g for g in (art.for_item(i["name"]) for i in items) if g),
-                     None)
-        top = draw(con, chat_id, "capture", frame=glyph) if glyph else None
         send_card(tg, con, chat_id, "added", "Added to your fridge", items,
-                  date.today(), notes=notes, top=top)
+                  date.today(), notes=notes)
     elif stable or outside:
         tg.send(chat_id, card.render_pantry(
             "Added to your pantry", _capped_names(stable), _capped_names(outside)),
@@ -1414,7 +1355,7 @@ def send_undo(tg, con, chat_id):
     """/undo, answered with a card naming what was taken back."""
     r = fridge.undo(con, chat_id)
     if not (r["tracked"] or r["pantry"]):
-        send_delight(tg, con, chat_id, "empty", caption=r["message"])
+        tg.send(chat_id, r["message"])
         return
     tg.send(chat_id, card.render_list(
         "Took back your last list",
@@ -1442,8 +1383,7 @@ def handle_pick(tg, con, chat_id, cb, msg, state, raw_id):
     if state == "unpick":
         _, buttons = _render(spec["kind"], spec["head"], items,
                              date.fromisoformat(spec["day"]), spec["more"],
-                             notes=spec.get("notes"), top=spec.get("top"),
-                             pick=spec.get("pick"))
+                             notes=spec.get("notes"), pick=spec.get("pick"))
     elif state == "pickall":
         buttons = card.picker(numbered)
     else:
@@ -1538,8 +1478,7 @@ def handle_callback(tg, con, cb, cfg):
             tg.edit(chat_id, msg["message_id"],
                     "%s: used out of the freezer." % row["name"])
             return
-        # A reversal. No drawing: the food was wasted in the end (§19,
-        # art.FORBIDDEN). And no verdict on it either: "freezing only to bin it
+        # A reversal: the food was wasted in the end (§19). No verdict on it: "freezing only to bin it
         # later is not a save" is doctrine written for the model, not a line to
         # say to the person, and as a message it is guilt, which §20 forbids
         # outright. State what happened to the figure and stop.
@@ -1572,7 +1511,7 @@ def handle_callback(tg, con, cb, cfg):
         tg.send(chat_id, onb.STEP4_HEAD)
         send_sample_nudge(tg, con, chat_id)
         onb.set_step(con, chat_id, onb.DONE)
-        send_delight(tg, con, chat_id, "welcome", caption=onb.finished(hour))
+        tg.send(chat_id, onb.finished(hour))
         return
 
     if state == "deleteme":
@@ -1632,17 +1571,14 @@ def handle_callback(tg, con, cb, cfg):
     # A message sent before cards existed: one item, its own buttons.
     tg.edit(chat_id, msg["message_id"], "%s: %s" % (row["name"], STATE_LABELS[state].lower()))
 
-    # Used or froze: a small drawing, matched to the food where there is one.
-    # Tossed gets a line and no picture, on purpose (see art.FORBIDDEN).
     if state == "tossed":
         tg.send(chat_id, "Noted.")
         return
     n = fridge.count_closed(con, chat_id, "used")
     if state == "used" and n in MILESTONES:
-        send_delight(tg, con, chat_id, "milestone", caption=milestone_line(n))
+        tg.send(chat_id, milestone_line(n))
         return
-    send_delight(tg, con, chat_id, state, item=row["name"],
-                 caption=CLOSE_LINES[state])
+    tg.send(chat_id, CLOSE_LINES[state])
 
 
 def handle_recipe_callback(tg, con, chat_id, cb, msg, raw, cfg):
@@ -1676,15 +1612,8 @@ def handle_recipe_callback(tg, con, chat_id, cb, msg, raw, cfg):
     if outcome == "created":
         llm_agent.clear_pending_recipe(con, chat_id)
         tg.answer(cb["id"], "Saved.")
-        frame = draw(con, chat_id, "recipe_saved")
-        if frame:
-            tg.edit(chat_id, msg["message_id"],
-                    art.render(frame, "Saved to Recipes: %s" % draft["title"],
-                               width=card.WIDTH),
-                    html=True)
-        else:
-            tg.edit(chat_id, msg["message_id"],
-                    "Saved to Recipes ✓ %s" % draft["title"])
+        tg.edit(chat_id, msg["message_id"],
+                "Saved to Recipes ✓ %s" % draft["title"])
     elif outcome == "duplicate":
         llm_agent.clear_pending_recipe(con, chat_id)
         tg.answer(cb["id"], "Already in Notes.")
