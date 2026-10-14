@@ -137,7 +137,7 @@ costs and load a starting fridge.
 **The easiest way to start is a photo of your next grocery receipt**, and reading a
 photo needs an AI model. Without one the bot still works, but you type your food in.
 
-**It always uses the person's own account or computer.** Each install keeps its own
+**It always uses the person's own account.** Each install keeps its own
 keys in its own `config.json`, so nothing goes through whoever wrote this bot, or
 anyone else. A ChatGPT Plus or Claude Pro subscription does **not** cover this:
 those are for the chat apps. Using a model from another program needs API access,
@@ -146,8 +146,7 @@ billed separately, usually a cent or less per receipt.
 Ask:
 
 > "The easiest way to use this is to send a photo of your grocery receipt after you
-> shop. To read photos the bot needs an AI model, on your own account or your own
-> computer. Four ways:
+> shop. To read photos the bot needs an AI model, on your own account. Three ways:
 >
 > 1. **OpenRouter:** one account and key that reaches Claude, ChatGPT and many
 >    cheaper models. Pay as you go; a receipt costs a cent or less.
@@ -155,13 +154,10 @@ Ask:
 >    Anthropic API account.
 > 3. **ChatGPT, from OpenAI directly:** if you already have, or want, an OpenAI API
 >    account.
-> 4. **On your own computer, free and private (Ollama):** nothing leaves your
->    machine, but it needs a fairly powerful computer (about 8 GB of free memory)
->    and each receipt takes a minute or two to read.
 >
 > Or skip it for now and type your food in. Which would you like?"
 
-The agent's job is the same for options 1 to 3: the person creates a key and pastes
+The agent's job is the same for all three: the person creates a key and pastes
 it into `config.json` themselves (**never in chat**), then you switch AI mode on and
 check the key without printing it.
 
@@ -171,7 +167,7 @@ check the key without printing it.
 | 2 · Claude | https://console.anthropic.com (Settings → API keys; add credit under Billing) | `sk-ant-` | `anthropic` | `anthropic_api_key` | `anthropic_model` (`claude-haiku-5-5`) |
 | 3 · ChatGPT | https://platform.openai.com/api-keys (add credit under Billing) | `sk-` | `openai` | `openai_api_key` | `openai_model` (`gpt-4o-mini`) |
 
-**For options 1 to 3 (👤 You, then 🤖 Agent).** Say, filling in their row:
+**👤 You, then 🤖 Agent.** Say, filling in their row:
 
 > "Go to [their link], sign in or sign up, add a few dollars of credit, and create
 > an API key. It starts with `[prefix]`. **Don't paste it here.** I'll open the
@@ -192,42 +188,6 @@ OpenRouter the person can still choose Claude or ChatGPT: set `llm_model` to
 `anthropic/claude-haiku-4.5` (Claude, the default) or `openai/gpt-4o-mini`
 (ChatGPT). Any other model must list **image** as an input on its page at
 https://openrouter.ai/models, or it will silently ignore photos.
-
-**For option 4, a model on their own computer (👤 You, then 🤖 Agent).**
-
-1. **👤** Say:
-
-   > "Install Ollama from https://ollama.com (on a Mac you can also run
-   > `brew install ollama`), open it once so it's running, and tell me when it's
-   > done. The model download is about 6 GB, so it's best on a good connection."
-
-2. **🤖** Check it's running, then download the model:
-
-       ollama --version
-       ollama pull qwen3-vl:8b
-
-3. **🤖** Confirm the model can do both jobs the bot needs:
-
-       ollama show qwen3-vl:8b
-
-   **Pass:** under **Capabilities** it lists both `vision` and `tools`. A model
-   without `tools` can read the receipt but never log it (`llama3.2-vision` is
-   one of those). A model without `vision` can't read photos at all.
-
-4. **🤖** Switch it on:
-
-       python3 -c "import json;p='config.json';c=json.load(open(p));c['llm_mode']=True;c['llm_provider']='ollama';c['ollama_model']='qwen3-vl:8b';json.dump(c,open(p,'w'),indent=2)"
-
-5. **👤** Tell them what to expect:
-
-   > "Your computer reads each photo itself, so a receipt takes a minute or two.
-   > That's normal. Nothing is sent anywhere."
-
-**Other local model servers.** Anything with an OpenAI-compatible `/v1` endpoint
-works the same way, LM Studio or llama.cpp's server for example: set
-`ollama_base_url` to its address (LM Studio's is usually
-`http://localhost:1234/v1`) and `ollama_model` to the model name that server
-uses. The model still needs both vision and tool calling.
 
 **If they skip:** change nothing. They can do this step any time; restart the bot
 afterwards.
@@ -309,15 +269,14 @@ Tell the person:
 | No reminder at the time they picked | The bot wasn't running then, or the Mac slept | Step 9 (Mac). Elsewhere, keep `python3 bot.py` running. Each person picks their time during setup (`/setup` to change it); `nudge_hour` / `nudge_minute` in `config.json` is only the default |
 | `./install.sh: No python3 on PATH` | Python not visible to the service | 🤖 `which python3`; 👤 if empty, reinstall Python (step 1) |
 | A photo gets `I can't read photos yet` | AI mode is off | Step 7 |
-| A local model sees the receipt but logs nothing | The model has no tool calling | Step 7, option 4: check `ollama show` lists `tools` |
-| `Having trouble thinking right now` | The AI call failed: no credit left, a wrong key, or Ollama not running | 👤 Check credit and key; 🤖 for Ollama, `ollama list` and open the Ollama app |
+| `Having trouble thinking right now` | The AI call failed: no credit left, or a wrong key | 👤 Check credit and key |
 | Anything else | | 🤖 Run `./service/status.sh` (Mac service) or read the terminal output, then show the person the exact error |
 
 ## What it keeps, and where
 
 Everything stays on the computer running the bot: `fridge.db` (created on first run)
 and `config.json`, both readable only by that account. Nothing is synced anywhere.
-In AI mode, messages also go to OpenRouter, or stay on the computer with Ollama. The
+In AI mode, messages also go to the provider picked in step 7. The
 bot explains this itself during setup, and `/privacy` shows it again. `/deleteme`
 erases everything it holds about whoever sends it.
 
