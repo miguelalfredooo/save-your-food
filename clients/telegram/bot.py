@@ -1217,7 +1217,12 @@ def handle_message(tg, con, msg, cfg):
         # tapping /start out of curiosity should not lose their fridge.
         if not onb.started(con, chat_id):
             tg.send(chat_id, privacy_note(con, cfg, chat_id))
-            tg.send(chat_id, onb.begin(con, chat_id, cfg.get("bot_name")))
+            # With AI on, a photo can be read, so the opening asks for the
+            # least work there is: the next receipt. /setup still runs the
+            # four steps for anyone who wants them.
+            opening = (onb.begin_receipt_first if ai_for(con, cfg, chat_id)
+                       else onb.begin)
+            tg.send(chat_id, opening(con, chat_id, cfg.get("bot_name")))
         else:
             tg.send(chat_id, WELCOME)
         return

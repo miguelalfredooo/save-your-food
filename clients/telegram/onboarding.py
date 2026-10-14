@@ -72,6 +72,21 @@ STEP1 = (
     "Name one thing in your fridge right now. Just one."
 )
 
+# With AI on, setup opens with the receipt instead of the four steps. A photo
+# of the next grocery receipt is the least work anyone can be asked for, and
+# it fills the fridge in one go; the steps are still one /setup away. Setup is
+# marked done straight away, because while a step is waiting it owns plain
+# text, and that would keep the model from reading what they type.
+RECEIPT_FIRST = (
+    "I help you use food before it goes bad. One message a day, and only "
+    "when something needs using.\n\n"
+    "The easiest way to start: next time you shop, send me a photo of your "
+    "grocery receipt. I'll log the food and work out when each thing turns.\n\n"
+    "No receipt handy? Tell me one thing in your fridge, or send a photo of it.\n\n"
+    "/setup any time to pick when I message you, and to see how to fix my "
+    "mistakes."
+)
+
 STEP2 = (
     "Now the part that matters.\n\n"
     "Send me three or four more things. Put something in there that does NOT "
@@ -128,6 +143,13 @@ def begin(con, chat_id, name=None):
     the only place it appears."""
     set_step(con, chat_id, "1")
     return ("I'm %s. " % name if name else "") + STEP1
+
+
+def begin_receipt_first(con, chat_id, name=None):
+    """The opening when this chat has AI on: ask for a receipt photo, and
+    nothing else. Marks setup done, so plain text goes to the model."""
+    set_step(con, chat_id, DONE)
+    return ("I'm %s. " % name if name else "") + RECEIPT_FIRST
 
 
 def skip(con, chat_id, hour):
