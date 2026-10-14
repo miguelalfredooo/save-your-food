@@ -22,7 +22,6 @@ import fridge
 import prices
 import shelf_life as sl
 import onboarding as onb
-import art
 import bot
 import card
 import llm_agent
@@ -898,9 +897,9 @@ class Onboarding(unittest.TestCase):
 
 
 
-class Delight(unittest.TestCase):
-    """The art is the easiest thing here to get wrong, because a drawing that
-    breaks a rule still looks fine in isolation. These tests hold the rules."""
+class Milestones(unittest.TestCase):
+    """Escaping, the pantry cap and milestones: the plain-text rules that
+    outlived the drawings."""
 
     def setUp(self):
         self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
@@ -911,247 +910,12 @@ class Delight(unittest.TestCase):
         self.con.close()
         os.unlink(self.tmp.name)
 
-    # --- the frames themselves ---
-
-    def test_every_frame_fits_a_phone(self):
-        for f in art.all_frames():
-            lines, width = art.measure(f)
-            self.assertLessEqual(width, art.MAX_WIDTH,
-                                 "too wide (%d): %r" % (width, f))
-            self.assertLessEqual(lines, art.MAX_LINES,
-                                 "too tall (%d): %r" % (lines, f))
-
-    def test_ascii_art_is_actually_ascii(self):
-        # A Cyrillic o got into the cheese wedge once. It renders as a box on
-        # some phones, which is worse than no drawing at all.
-        for f in art.all_frames():
-            for ch in f:
-                self.assertLess(ord(ch), 127,
-                                "non-ascii %r in %r" % (ch, f[:20]))
-
-    def test_no_frame_is_blank_or_ragged(self):
-        for f in art.all_frames():
-            self.assertTrue(f.strip(), "empty frame")
-            self.assertFalse(f.startswith("\n"), "leading blank line")
-            self.assertFalse(f.endswith("\n"), "trailing blank line")
-
-    def test_frames_are_distinct(self):
-        frames = art.all_frames()
-        self.assertEqual(len(frames), len(set(frames)))
-
-    # --- where art may not go ---
-
-    def test_a_nudge_never_carries_a_drawing(self):
-        self.assertIsNone(art.choose("nudge"))
-        self.assertIsNone(art.choose("nudge", item="milk"))
-
-    def test_a_toss_is_never_celebrated(self):
-        # Food was wasted. A picture over it reads as mockery.
-        self.assertIsNone(art.choose("tossed"))
-        self.assertIsNone(art.choose("tossed", item="spinach"))
-
-    def test_a_disposal_question_carries_no_drawing(self):
-        self.assertIsNone(art.choose("toss_prompt"))
-
-    def test_every_forbidden_moment_states_a_reason(self):
-        # A rule without a reason gets deleted by the next person.
-        for moment, why in art.FORBIDDEN.items():
-            self.assertTrue(why and len(why) > 15, moment)
-
-    # --- where it does go ---
-
-    def test_using_something_gets_a_drawing(self):
-        self.assertIsNotNone(art.choose("used"))
-        self.assertIsNotNone(art.choose("frozen"))
-        self.assertIsNotNone(art.choose("allclear"))
-        self.assertIsNotNone(art.choose("welcome"))
-
-    def test_the_drawing_matches_the_food(self):
-        self.assertEqual(art.choose("used", item="milk"), art.CARTON)
-        self.assertEqual(art.choose("used", item="oat milk"), art.CARTON)
-        self.assertEqual(art.choose("used", item="baby spinach"), art.LEAF)
-        self.assertEqual(art.choose("used", item="chicken thighs"), art.HEN)
-        self.assertEqual(art.choose("used", item="ground beef"), art.CHOP)
-        self.assertEqual(art.choose("used", item="salmon"), art.FISH)
-        self.assertEqual(art.choose("used", item="leftover guiso"), art.POT)
-        self.assertEqual(art.choose("used", item="eggs"), art.EGG)
-        self.assertEqual(art.choose("used", item="parmesan"), art.WEDGE)
-        self.assertEqual(art.choose("used", item="sourdough bread"), art.LOAF)
-        self.assertEqual(art.choose("used", item="strawberries"), art.APPLE)
-
-    def test_an_unmatched_food_still_gets_something(self):
-        frame = art.choose("used", item="dragonfruit curd")
-        self.assertIsNotNone(frame)
-        self.assertIn(frame, art.MOMENT_ART["used"])
-
-    def test_food_matching_does_not_leak_into_other_moments(self):
-        # A carton on the all-clear message would make no sense.
-        self.assertIn(art.choose("allclear", item="milk"),
-                      art.MOMENT_ART["allclear"])
-
-    # --- never twice running ---
-
-    def test_a_rotating_frame_never_lands_twice(self):
-        # Applies to frames only: an unmatched food falls through to the
-        # moment's own frames, and those are meant to surprise.
-        first = art.choose("used", item="dragonfruit curd")
-        second = art.choose("used", item="dragonfruit curd", avoid=first)
-        self.assertNotEqual(first, second)
-
-    def test_a_glyph_repeats_on_purpose(self):
-        # This inverts the rule that applies to frames, and the inversion is the
-        # point. A glyph is a label: two cartons in a row means two dairy items,
-        # which is correct. If the carton dodged itself it would stop meaning
-        # dairy, and the vocabulary would be worth nothing.
-        again = art.choose("used", item="milk", avoid=art.CARTON)
-        self.assertEqual(again, art.CARTON)
-
-    def test_a_glyph_is_the_same_every_time(self):
-        for _ in range(5):
-            self.assertEqual(art.glyph("pantry"), art.CAN)
-            self.assertEqual(art.for_item("chicken thighs"), art.HEN)
-
-    def test_every_category_has_exactly_one_glyph(self):
-        for key, frame in art.GLYPHS.items():
-            self.assertTrue(frame.strip(), key)
-        # No two categories share a drawing: a shared glyph means the
-        # vocabulary cannot distinguish the things it is meant to distinguish.
-        frames = list(art.GLYPHS.values())
-        self.assertEqual(len(frames), len(set(frames)))
-
-    def test_the_buckets_have_their_own_marks(self):
-        self.assertEqual(art.glyph("pantry"), art.CAN)
-        self.assertEqual(art.glyph("counter"), art.ONION)
-        self.assertEqual(art.glyph("fridge"), art.ICEBOX)
-        self.assertNotEqual(art.CAN, art.ONION)
-
-    def test_a_single_frame_moment_repeats_rather_than_vanishing(self):
-        # "frozen" only ever resolves to the flake, since it doubles as the
-        # frozen glyph and no other frame is wired to it. Better the same
-        # snowflake twice than nothing.
-        self.assertEqual(art.choose("frozen", avoid=art.FLAKE), art.FLAKE)
-
-    # --- general-purpose frames ---
-
-    def test_general_frames_are_wired_to_every_moment_they_fit(self):
-        # These are not owned by a single moment: a cake belongs to a
-        # milestone and to a scorecard, a stocked cupboard belongs to
-        # setup finishing and to an at-risk list turning up empty.
-        self.assertIn(art.CUPBOARD, art.MOMENT_ART["allclear"])
-        self.assertIn(art.CUPBOARD, art.MOMENT_ART["welcome"])
-        self.assertIn(art.BASKET, art.MOMENT_ART["allclear"])
-        self.assertIn(art.BASKET, art.MOMENT_ART["scorecard"])
-        self.assertIn(art.CAKE, art.MOMENT_ART["milestone"])
-        self.assertIn(art.CAKE, art.MOMENT_ART["scorecard"])
-        self.assertIn(art.MUG, art.MOMENT_ART["welcome"])
-        self.assertIn(art.BANNER, art.MOMENT_ART["milestone"])
-        self.assertIn(art.BANNER, art.MOMENT_ART["scorecard"])
-
-    def test_the_banner_is_not_a_repaint_of_the_other_celebrations(self):
-        # A fourth occasion marker only earns its place if it is not just
-        # CAKE, CROWN or STARS with different characters.
-        self.assertNotIn(art.BANNER, (art.CAKE, art.CROWN, art.STARS))
-        self.assertNotIn(art.BANNER, art.MOMENT_ART["allclear"])
-        self.assertNotIn(art.BANNER, art.MOMENT_ART["welcome"])
-
-    def test_no_frame_anywhere_draws_money(self):
-        # There is no "money saved" figure in this system to draw honestly:
-        # the only dollar amount is a loosely-reported toss cost that must
-        # never read as a verdict, so no frame gets to put a dollar sign on
-        # anything, celebratory or otherwise.
-        for f in art.all_frames():
-            self.assertNotIn("$", f, f)
-
-    def test_welcome_now_rotates_through_more_than_one_frame(self):
-        # Onboarding only finishes once per chat, but different chats should
-        # not all see the exact same door.
-        first = art.choose("welcome")
-        second = art.choose("welcome", avoid=first)
-        self.assertIn(first, art.MOMENT_ART["welcome"])
-        self.assertIn(second, art.MOMENT_ART["welcome"])
-        self.assertNotEqual(first, second)
-
-    def test_a_general_frame_does_not_repeat_across_moments_either(self):
-        # The same chat seeing a cupboard for finishing setup and then, right
-        # after, an empty at-risk list should not see the same cupboard
-        # twice running just because the two moments are different.
-        self.assertNotEqual(
-            art.choose("allclear", avoid=art.CUPBOARD), art.CUPBOARD)
-
-    def test_the_last_frame_is_remembered_per_chat(self):
-        fridge.note_art(self.con, 1, art.CARTON)
-        self.assertEqual(fridge.last_art(self.con, 1), art.CARTON)
-        self.assertIsNone(fridge.last_art(self.con, 2))
-
-    def test_noting_nothing_is_harmless(self):
-        fridge.note_art(self.con, 1, None)
-        self.assertIsNone(fridge.last_art(self.con, 1))
-
-    # --- rendering ---
-
-    def test_a_frame_renders_inside_a_pre_block(self):
-        out = art.render(art.CARTON)
-        self.assertTrue(out.startswith("<pre>"))
-        self.assertTrue(out.endswith("</pre>"))
-
-    def test_angle_brackets_in_a_frame_are_escaped(self):
-        # Unescaped, Telegram reads them as tags and drops the drawing.
-        out = art.render("<&>")
-        self.assertIn("&lt;", out)
-        self.assertIn("&gt;", out)
-        self.assertIn("&amp;", out)
-        self.assertNotIn("<&", out)
-
-    def test_a_caption_sits_inside_the_same_pre_block_as_the_drawing(self):
-        # The frame and its caption are one container, the same way a fridge
-        # or pantry list is one block rather than a box with a stray line of
-        # plain text bolted on after it.
-        out = art.render(art.CARTON, "That one did not go to waste.")
-        self.assertEqual(out.count("<pre>"), 1)
-        self.assertEqual(out.count("</pre>"), 1)
-        self.assertTrue(out.startswith("<pre>"))
-        self.assertTrue(out.endswith("</pre>"))
-        body = out[len("<pre>"):-len("</pre>")]
-        self.assertLess(body.index(art.CARTON.splitlines()[0]),
-                        body.index("That one"))
-
     def test_a_food_name_cannot_break_an_html_message(self):
         # "<3 cilantro" unescaped makes Telegram read the rest as a tag and
         # silently drop it.
-        out = art.render(art.CAN, "cumin & <3 cilantro")
+        out = card.esc("cumin & <3 cilantro")
         self.assertIn("&amp;", out)
         self.assertIn("&lt;3", out)
-
-    def test_a_long_caption_is_wrapped_to_the_phone_safe_width(self):
-        # A milestone line is a full sentence, well past MAX_WIDTH as one
-        # line. Sharing the frame's pre block must not reintroduce the
-        # sideways-scroll failure MAX_WIDTH exists to prevent.
-        caption = "10 things used before they turned. That is the whole idea."
-        out = art.render(art.STARS, caption)
-        body = out[len("<pre>"):-len("</pre>")]
-        for line in body.split("\n"):
-            self.assertLessEqual(len(line), art.MAX_WIDTH, repr(line))
-        # Nothing about the words themselves was lost or reordered.
-        wrapped = art._wrap_caption(caption)
-        self.assertEqual(" ".join(wrapped), caption)
-
-    def test_a_long_comma_list_caption_is_wrapped_too(self):
-        # compose_pantry_html's caption is a comma-joined list of whatever
-        # is actually in the pantry, so it is realistically long and has no
-        # natural line breaks of its own to fall back on.
-        items = ["black pepper", "chicken bouillon", "olive oil",
-                 "canned tomatoes", "basmati rice", "dried oregano",
-                 "apple cider vinegar", "honey"]
-        caption = "Pantry (%d)\n%s" % (len(items), ", ".join(items))
-        out = art.render(art.glyph("pantry"), caption)
-        body = out[len("<pre>"):-len("</pre>")]
-        for line in body.split("\n"):
-            self.assertLessEqual(len(line), art.MAX_WIDTH, repr(line))
-
-    def test_wrapping_keeps_a_header_line_separate_from_the_text_under_it(self):
-        # "Pantry (8)" must not bleed into the item list it introduces.
-        out = art._wrap_caption("Pantry (8)\n" + ", ".join(["thing"] * 10))
-        self.assertEqual(out[0], "Pantry (8)")
 
     def test_a_huge_pantry_does_not_grow_the_message_past_telegrams_hard_cap(self):
         # A pantry only grows over time. Telegram 400s a message over 4096
@@ -1172,15 +936,6 @@ class Delight(unittest.TestCase):
         out = bot._capped_item_list(names, max_chars=250)
         self.assertTrue(out.startswith("a" * 100))
         self.assertIn("more", out)
-
-    def test_a_plain_message_is_not_escaped(self):
-        # No pre block means no HTML, so escaping here would show the user
-        # "&amp;" instead of "&".
-        self.assertEqual(art.render(None, "cumin & spice"), "cumin & spice")
-
-    def test_no_frame_means_just_the_caption(self):
-        self.assertEqual(art.render(None, "Noted."), "Noted.")
-        self.assertEqual(art.render(None), "")
 
     # --- milestones stay rare ---
 
@@ -1207,6 +962,17 @@ class Delight(unittest.TestCase):
         item = fridge.open_items(self.con, 1)[0]
         fridge.close_item(self.con, 1, item["id"], "tossed")
         self.assertEqual(fridge.count_closed(self.con, 1, "used"), 0)
+
+
+    def test_a_card_that_crosses_a_milestone_says_so(self):
+        import bot
+        spec = {"used_before": 9}
+        for name in ["thing %d" % n for n in range(10)]:
+            fridge.add_items(self.con, 1, [name], TODAY)
+        for i in fridge.open_items(self.con, 1):
+            fridge.close_item(self.con, 1, i["id"], "used")
+        self.assertIn("10 things used", bot.close_card(self.con, 1, spec))
+        self.assertIsNone(bot.close_card(self.con, 1, {"used_before": 10}))
 
 
 class FakeTG:
@@ -2903,18 +2669,17 @@ class Cards(unittest.TestCase):
                             for l in self._pre_lines(self.tg.edits[-1])))
         self.assertEqual(len(self.tg.edit_buttons[-1]), 1)   # its row is gone
 
-    def test_finishing_a_card_draws_once_inside_it(self):
+    def test_finishing_a_card_closes_it_in_place(self):
         items = self._items(["milk", "spinach"])
         bot.send_nudge(self.tg, self.con, 1, self.day)
         self._tap("used", items[0]["id"])
-        self.assertEqual(self.tg.edits[-1].count("<pre>"), 1)   # no drawing yet
         self._tap("frozen", items[1]["id"])
         self.assertIn("All 2 handled", self.tg.edits[-1])
-        self.assertEqual(self.tg.edits[-1].count("<pre>"), 2)   # card + drawing
+        self.assertEqual(self.tg.edits[-1].count("<pre>"), 1)   # just the card
         self.assertIsNone(self.tg.edit_buttons[-1])
         self.assertEqual(len(self.tg.sent), 1)
 
-    def test_an_all_tossed_card_gets_no_drawing(self):
+    def test_an_all_tossed_card_adds_nothing(self):
         items = self._items(["milk"])
         bot.send_nudge(self.tg, self.con, 1, self.day)
         self._tap("tossed", items[0]["id"])
@@ -2988,7 +2753,7 @@ class Cards(unittest.TestCase):
         self._frz_tap("tossed", items[0]["id"])
         self.assertEqual(len(self.tg.sent), 1)   # no separate "Noted." message
         self.assertIn("off this month's count", self.tg.edits[-1])
-        self.assertEqual(self.tg.edits[-1].count("<pre>"), 1)   # and no drawing
+        self.assertEqual(self.tg.edits[-1].count("<pre>"), 1)
         row = self.con.execute("SELECT freezer_outcome FROM items WHERE id=?",
                                (items[0]["id"],)).fetchone()
         self.assertEqual(row["freezer_outcome"], "tossed")
@@ -4955,95 +4720,13 @@ class CorrectionCards(unittest.TestCase):
     def test_explanations_are_not_cards(self):
         self._say("/undo")
         self.assertIn("Nothing to undo.", self.tg.sent[-1])
-        self.assertNotIn("<b>", self.tg.sent[-1])     # maybe a drawing, never a card
+        self.assertNotIn("<b>", self.tg.sent[-1])     # plain text, never a card
         self._say("those are pantry")
         self.assertNotIn("<pre>", self.tg.sent[-1])
 
     def test_the_prose_versions_are_unchanged_for_the_model(self):
         fridge.add_items(self.con, 1, ["milk"], TODAY)
         self.assertEqual(fridge.undo_last(self.con, 1), "Took back 1 tracked thing.")
-
-
-class MoreDelight(unittest.TestCase):
-    """Drawings at the head of the capture card, on empty lists and on a
-    saved recipe, with at most three a day per person."""
-
-    CFG = dict(CFG, allowed_chat_ids=[1])
-
-    def setUp(self):
-        self.con = fridge.connect(tempfile.mktemp(suffix=".db"))
-        self.tg = FakeTG()
-        bot.reset_rate_limits()
-        onb.set_step(self.con, 1, onb.DONE)
-
-    def _say(self, text):
-        bot.handle_message(self.tg, self.con, {
-            "chat": {"id": 1, "type": "private"}, "text": text}, self.CFG)
-
-    def _pre(self, html):
-        return html.split("<pre>", 1)[1].split("</pre>", 1)[0]
-
-    def test_the_capture_card_opens_with_the_foods_glyph(self):
-        self._say("chicken thighs, milk")
-        glyph = art.for_item("chicken thighs")
-        self.assertTrue(self._pre(self.tg.sent[-1]).startswith(art.esc(glyph)))
-
-    def test_a_tap_keeps_the_glyph(self):
-        self._say("chicken thighs, milk")
-        item = fridge.open_items(self.con, 1)[0]
-        bot.handle_callback(self.tg, self.con, {
-            "id": "cb", "data": "used:%d" % item["id"],
-            "message": {"chat": {"id": 1, "type": "private"}, "message_id": 1}},
-            self.CFG)
-        self.assertTrue(self._pre(self.tg.edits[-1]).startswith(
-            art.esc(art.for_item("chicken thighs"))))
-
-    def test_an_empty_fridge_gets_a_drawing(self):
-        self._say("/fridge")
-        self.assertIn("<pre>", self.tg.sent[-1])
-        self.assertIn("Nothing tracked yet", self.tg.sent[-1])
-
-    def test_a_saved_recipe_gets_a_drawing(self):
-        llm_agent.exec_draft_recipe(self.con, 1, {"title": "Pozole",
-            "ingredients": ["1 lb pork", "2 cups hominy", "1 onion"], "steps": []},
-            TODAY)
-        draft = llm_agent.pending_recipe(self.con, 1)
-        orig = llm_agent.create_recipe_note
-        llm_agent.create_recipe_note = lambda d, **k: "created"
-        try:
-            bot.handle_callback(self.tg, self.con, {
-                "id": "cb", "data": "recipe:save:%s" % draft["id"],
-                "message": {"chat": {"id": 1, "type": "private"}, "message_id": 1}},
-                self.CFG)
-        finally:
-            llm_agent.create_recipe_note = orig
-        self.assertIn("<pre>", self.tg.edits[-1])
-        self.assertIn("Saved to Recipes: Pozole", self.tg.edits[-1])
-
-    def test_three_drawings_a_day_then_plain(self):
-        for _ in range(fridge.ART_DAILY_CAP):
-            self._say("/fridge")
-            self.assertIn("<pre>", self.tg.sent[-1])
-        self._say("/fridge")
-        self.assertNotIn("<pre>", self.tg.sent[-1])
-        self.assertIn("Nothing tracked yet", self.tg.sent[-1])
-
-    def test_the_cap_resets_the_next_day(self):
-        for _ in range(fridge.ART_DAILY_CAP):
-            fridge.spend_art(self.con, 1, TODAY)
-        self.assertEqual(fridge.art_left(self.con, 1, TODAY), 0)
-        self.assertEqual(fridge.art_left(self.con, 1, TODAY + timedelta(days=1)),
-                         fridge.ART_DAILY_CAP)
-
-    def test_milestones_ignore_the_cap(self):
-        for _ in range(fridge.ART_DAILY_CAP):
-            fridge.spend_art(self.con, 1)
-        self.assertIsNotNone(bot.draw(self.con, 1, "milestone"))
-        self.assertIsNone(bot.draw(self.con, 1, "empty"))
-
-    def test_the_forbidden_moments_still_get_nothing(self):
-        for moment in ("tossed", "nudge", "toss_prompt"):
-            self.assertIsNone(bot.draw(self.con, 1, moment))
 
 
 class FewerButtons(unittest.TestCase):
@@ -5198,36 +4881,6 @@ class BetterDates(unittest.TestCase):
         for name in ("tortilla chips", "pasta", "canned tuna", "dried cranberries"):
             self.assertTrue(sl.not_tracked(name)[0], name)
         self.assertFalse(sl.not_tracked("pasta salad")[0])
-
-
-class OneWidth(unittest.TestCase):
-    """Every monospace block in the chat is the card's width, drawings too,
-    so no bubble comes out narrower than the cards around it."""
-
-    def setUp(self):
-        self.con = fridge.connect(tempfile.mktemp(suffix=".db"))
-        self.tg = FakeTG()
-        bot.reset_rate_limits()
-        onb.set_step(self.con, 1, onb.DONE)
-
-    def _widest(self, html):
-        body = html.split("<pre>", 1)[1].split("</pre>", 1)[0]
-        return max(len(l.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">"))
-                   for l in body.split("\n"))
-
-    def test_a_drawing_message_is_card_width(self):
-        bot.handle_message(self.tg, self.con, {"chat": {"id": 1, "type": "private"},
-                                               "text": "/fridge"}, CFG)   # empty: a drawing
-        self.assertIn("<pre>", self.tg.sent[-1])
-        self.assertEqual(self._widest(self.tg.sent[-1]), card.WIDTH)
-
-    def test_a_long_caption_wraps_to_the_card(self):
-        html = art.render(art.MOMENT_ART["empty"][0], "word " * 40, width=card.WIDTH)
-        self.assertEqual(self._widest(html), card.WIDTH)
-
-    def test_without_a_width_render_is_unchanged(self):
-        html = art.render(art.MOMENT_ART["empty"][0], "Nothing yet.")
-        self.assertNotIn("\u2500", html)
 
 
 class Redate(unittest.TestCase):

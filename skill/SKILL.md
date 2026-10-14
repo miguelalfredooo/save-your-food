@@ -462,43 +462,18 @@ Rules that hold throughout:
 - No scheduled nudge fires at someone mid-onboarding.
 - An unreadable answer re-asks the same question. It does not advance.
 
-## 19. Delight — where a drawing earns its place
+## 19. Outcomes — one plain line, no pictures
 
-A small ASCII drawing at the right moment makes this feel like someone made it. In the wrong moment it undoes the one thing the system is for. So the rules are rules, not taste, and each one is a failure reasoned through rather than a preference.
+Acknowledge what happened in a line, and stop. No drawings anywhere: an earlier version drew small ASCII pictures at closing moments, and they were removed to keep every message quick to read.
 
 | Never | Why |
 |---|---|
-| In a nudge that needs a decision | It has to scan on a lock screen in one glance. A drawing pushes the item name down and buys nothing. Same reasoning as keeping money out of a nudge (§15). |
-| Celebrating a toss | Food was wasted, and a toss is already when someone feels worst about using this. A picture over it reads as mockery. One quiet line, no drawing. |
-| Twice running | Delight is a surprise. The same drawing three times is furniture. Remember the last frame per person and exclude it. |
-| On a question | Art marks an outcome. A disposal prompt is still open. |
+| Celebrating a toss | Food was wasted, and a toss is already when someone feels worst about using this. One quiet line, no verdict. |
+| Money in a nudge | Same reasoning as §15: a use-it-tonight reminder carrying a price is guilt with a number attached. |
 
-Art belongs on **using** something, **freezing** it, an **empty at-risk list**, **finishing setup**, and the **monthly scorecard**. The empty list is the one that matters most: it is the state the whole system is trying to produce, and without a mark it looks identical to the thing being broken.
+**Say the empty at-risk list out loud.** It is the state the whole system is trying to produce, and silence there looks identical to the thing being broken.
 
-### Two kinds of drawing, with opposite rules
-
-**Glyphs are evergreen.** One drawing per category, the same one every time: a can always means pantry, a hen always means raw poultry, an onion always means the counter. **Repetition is the point.** Used consistently they become a vocabulary, so he can *see* which bucket a thing landed in rather than read that it did — which matters most for pantry versus fridge, the distinction people actually get wrong. The can heads the pantry list and the onion heads the counter list, and that is the highest-value use of the set.
-
-**Frames rotate.** They mark a moment with no food behind it: an empty at-risk list, the end of setup, a milestone. Those are meant to surprise, so the same one twice makes it furniture.
-
-| | |
-|---|---|
-| A glyph **must** repeat | or it is not a vocabulary |
-| A frame **must not** | or it is not a surprise |
-
-So two cartons in a row is correct, not a bug: it means two dairy items. A carton that dodged itself would stop meaning dairy. Adding a glyph is a bigger decision than adding a frame — it is a word in a language learned by repetition, so one per category, never shared, and **never changed once it has shipped**.
-
-**Match the drawing to the food.** A tick is acknowledgement; a carton when he finishes the milk is recognition, and it costs nothing because the shelf-life categories already exist. Specific before general, same as §4 — `oat milk` reaches the carton, and a pantry item reaches nothing, because it is never closed out at all.
-
-**Keep rare things rare.** Milestones at 10, 25, 50, 100, 250, 500 uses. A crown every Tuesday is not a crown. Only `used` counts; a toss never does.
-
-**Hard limits:** pure ASCII under 127 (a Cyrillic `o` renders as an empty box on some phones, which is worse than no drawing), 16 characters wide, 6 lines tall. Simple kitchen objects, original work, no recognisable characters or logos, and no faces — a face reads as the system having a mood about someone's groceries.
-
-**In Telegram, force monospace.** The default font is proportional and turns every drawing into rubble. A `<pre>` block is the only thing that holds the columns, which means HTML parse mode and escaping `&`, `<` and `>` by hand — including in captions, which carry food names, which come from users. A message with no drawing in it must NOT be escaped, or he sees `&amp;`.
-
-**If the drawings start feeling like noise, subtract.** Drop art from the moment it fires most often, then widen the milestone gaps, then keep only the two that are rare by nature. Never fix noise by adding frames.
-
-The **`ascii-art-curator` agent** owns this. It authors and vets frames ahead of time; nothing draws at runtime.
+**Hold milestones back:** 10, 25, 50, 100, 250, 500 things used before they turned. A milestone that arrives every Tuesday is not one.
 
 ## 20. Tone
 
