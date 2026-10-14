@@ -15,7 +15,7 @@ including a chat with Claude.
 
 **2. Put the token in a config file.** In Terminal:
 
-    cd ~/Recipes/_fridge-bot
+    cd clients/telegram
     cp config.example.json config.json
     open -e config.json
 
@@ -32,8 +32,12 @@ environment, so it still needs `config.json`.
 
 Leave that Terminal window open. It prints one line and then waits. Ctrl-C stops it.
 
-**4. Message your bot** in Telegram. Send `/start`, then `/seed` to load the
-fridge contents as of Sep 23.
+**4. Message your bot** in Telegram. Send `/start`. To begin with what's
+already in your fridge, copy `seed.example.json` to `seed.json`, edit it, and
+send `/seed`.
+
+A fuller, step-by-step version of this, written so an agent can run it, is in
+[`INSTALL.md`](../../INSTALL.md) at the top of the repo.
 
 ## Run it on startup
 
