@@ -40,6 +40,9 @@ If you'd rather not touch settings, open [the prompt](desktop/paste-this.md),
 copy it into any Claude chat, then send your receipt. It ends with a list you can
 paste into your reminders app instead of a calendar file.
 
+**You'll know it worked** when Claude answers "Ready. Send a receipt photo or a
+list." and then sorts what you send it.
+
 **Next step up:** option 2 adds the calendar check-ins.
 
 ## 3 · Your own Telegram bot
