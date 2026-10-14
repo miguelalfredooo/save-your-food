@@ -48,9 +48,9 @@ Read these before step 1. They are not optional.
 
 1. **Never ask for the bot token in chat, and never read, print or log it.** The
    token is a password to the bot. The person pastes it into a file on their own
-   computer (step 4). You check that it is there with the command given, which
+   computer (step 5). You check that it is there with the command given, which
    prints only `OK` or what is wrong, never the token.
-2. **The same goes for an OpenRouter API key**, if they turn on AI mode (step 9).
+2. **The same goes for any AI API key** (OpenRouter, Anthropic or OpenAI), if they turn on AI mode (step 7).
 3. **Stop at every 👤 step.** Say what to do, then wait. Do not guess at what they did.
 4. **Check every step with its check command** before the next one. If a check fails,
    use the table at the end. If it is not covered there, stop and show the person the
@@ -73,7 +73,7 @@ Python 3 should work.
 > (on a Mac you can also run `brew install python`), then tell me when it's done."
 
 Also note the operating system (`uname -s` prints `Darwin` on a Mac). The bot runs
-anywhere, but two optional parts are Mac only: starting it automatically (step 8)
+anywhere, but two optional parts are Mac only: starting it automatically (step 9)
 and saving recipes to Apple Notes.
 
 ## Step 2 · Get the code 🤖 Agent
