@@ -1,4 +1,4 @@
-"""Shelf life and risk classes — the fridge-loop skill's section 4 and 6, as code.
+"""Shelf life and risk classes — the Save Your Food skill's section 4 and 6, as code.
 
 Deliberately free of any Telegram or storage code so it can be tested on its own.
 Days are the LOW end of each range: it is better to nudge a day early than a day late.

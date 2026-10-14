@@ -1,9 +1,13 @@
-# Installing Save Your Food
+# Installing Save Your Food: your own Telegram bot
 
-Save Your Food (this repo, `save-your-food`) is a Telegram bot that tracks what is in
-your fridge and nudges you before food goes off. This guide installs the Telegram
-client, which is the version almost everyone wants: it runs on any computer with
-Python, needs no Mac and installs nothing beyond Python itself.
+This guide sets up option 3 from the [README](./README.md): **your own** Telegram
+bot that tracks what is in your fridge and nudges you before food goes off. You
+make the bot, it runs on your computer, and photo reading uses your own AI key.
+It runs on any computer with Python and installs nothing beyond Python itself.
+
+**Want something quicker?** The Claude app skill (option 2) takes about two
+minutes and needs no bot, no key and no computer left on. See the
+[README](./README.md#2--start-here-the-claude-app-skill).
 
 **The goal is one thing: the person can send a photo of their next grocery receipt
 and the bot logs their food.** Everything else can come later.
@@ -16,29 +20,6 @@ other knowledge of the project. Every step says who does it:
   do using the words given, and wait until they say it is done.
 
 If you are a person following this alone, do every step yourself.
-
-## Or: no install, in Claude Desktop
-
-To try it with nothing to install, no bot and no API key, add the Save Your Food
-skill to the Claude app. Claude reads the receipt photo itself and replies with
-your food sorted, a use-by guess for each item, what to use first, and a list to
-paste into your own reminders app.
-
-**It does not nudge you later.** There is no bot running, so nothing arrives
-tomorrow and nothing is kept between chats. For reminders that come to you, install
-the Telegram bot below.
-
-1. Download [`desktop/save-your-food.zip`](desktop/save-your-food.zip).
-2. In the Claude app, open **Settings → Capabilities** and turn on **Code execution
-   and file creation**. Skills need it.
-3. Go to **Customize → Skills**, click **+**, then **Create skill → Upload a skill**,
-   and choose the zip. (Older versions of the app have this under
-   **Settings → Capabilities → Skills**.)
-4. Start a chat and send a photo of a grocery receipt.
-
-It works on every Claude plan, Free included. The skill is
-`desktop/save-your-food/SKILL.md`. After editing it, rebuild the zip from the
-`desktop` folder with `zip -X -r save-your-food.zip save-your-food`.
 
 ---
 
@@ -226,7 +207,7 @@ Start it as a background process; it keeps running until stopped:
     python3 bot.py
 
 **Pass:** within a few seconds it prints one line:
-`Fridge Loop running as @<botname>. Nudging at 16:30. Ctrl-C to stop.`
+`Save Your Food running as @<botname>. Nudging at 16:30. Ctrl-C to stop.`
 
 Then say:
 

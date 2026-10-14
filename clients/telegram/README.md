@@ -1,4 +1,4 @@
-# Fridge Loop — Telegram client
+# Save Your Food: Telegram client
 
 The Mac version is v1. This is the same system with a chat UI, for people who
 don't have a Mac Mini, an iCloud account set up for it, or the patience for a
@@ -339,7 +339,7 @@ link, then a Save tap, create-only) are LLM mode only, and adding a recipe
 from a photo isn't supported in the bot. No cook log, no scorecard, no
 geofences. This is the thinnest loop that can prove whether a Telegram nudge
 gets answered more often than a Reminders alert. Everything else is in the
-`fridge-loop` skill and can come across once that question is settled.
+Apple Reminders skill (`skill/SKILL.md`) and can come across once that question is settled.
 
 ## Files
 

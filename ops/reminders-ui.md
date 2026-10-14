@@ -1,6 +1,6 @@
 # Driving Reminders and Notes
 
-Operational reference for the `fridge-loop` skill. Read this before any
+Operational reference for the Save Your Food skill (`skill/SKILL.md`). Read this before any
 `computer_app_*` work; it is not needed for reasoning, only for acting.
 
 Background mode, `com.apple.reminders` and `com.apple.notes`.

@@ -3,7 +3,7 @@ name: "fridge-loop"
 description: "Log fridge, freezer and pantry items into Apple Reminders and drive timed nudges that persist until you tick them off as used, frozen or tossed, with recipe matches from your Apple Notes recipes. Learns what you re-buy, flags what you already have, prices what you waste and what you rescue, and answers questions about your own kitchen."
 ---
 
-# Fridge Loop
+# Save Your Food
 
 Goal: use food before it goes bad. Turn fridge and freezer contents into timed reminders that name what to do, persist until ticked, and stop cleanly instead of nagging forever.
 

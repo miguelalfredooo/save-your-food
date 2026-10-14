@@ -1,5 +1,5 @@
 #!/bin/bash
-# Shows whether the Fridge Loop service is running, its pid and last exit
+# Shows whether the Save Your Food service is running, its pid and last exit
 # code, and the tail of both logs.
 set -euo pipefail
 

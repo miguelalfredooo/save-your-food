@@ -103,7 +103,7 @@
 
 **BLS never tracked these:** fresh herbs (cilantro, parsley), spinach and bagged greens, mushrooms, berries other than strawberries, avocados, yogurt, sour cream, tofu, oat and nut milk, deli meat, fish and shellfish, cooked leftovers.
 
-**The awkward part is that these are the items most likely to be tossed.** Cilantro is the example `fridge-loop` itself uses (§15). So this table prices the meat, which is the costly part of most tosses, and leaves most of the produce unpriced.
+**The awkward part is that these are the items most likely to be tossed.** Cilantro is the example the skill itself uses (§15). So this table prices the meat, which is the costly part of most tosses, and leaves most of the produce unpriced.
 
 **Your receipts close this gap.** Every receipt with cilantro on it gives cilantro a real price. Coverage grows with use and doesn't depend on BLS.
 
