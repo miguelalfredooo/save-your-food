@@ -3767,6 +3767,49 @@ class MonthCard(unittest.TestCase):
         self.assertNotIn("<pre>", tg.sent[0])
 
 
+class ReceiptFirstStart(unittest.TestCase):
+    """With AI on, /start asks for a receipt photo and nothing else; the four
+    steps stay behind /setup. With AI off, /start is unchanged."""
+
+    AI = dict(CFG, llm_mode=True, allowed_chat_ids=[1], openrouter_api_key="sk-or-test")
+    PLAIN = dict(CFG, allowed_chat_ids=[1])
+
+    def setUp(self):
+        self.con = fridge.connect(tempfile.mktemp(suffix=".db"))
+        self.tg = FakeTG()
+        bot.reset_rate_limits()
+
+    def _say(self, text, cfg):
+        bot.handle_message(self.tg, self.con, {
+            "chat": {"id": 1, "type": "private", "first_name": "Ana"},
+            "text": text}, cfg)
+
+    def test_ai_on_start_asks_for_the_receipt(self):
+        self._say("/start", self.AI)
+        self.assertIn("photo of your grocery receipt", self.tg.sent[-1])
+        self.assertNotIn("Name one thing", self.tg.sent[-1])
+
+    def test_ai_on_start_leaves_plain_text_to_the_model(self):
+        self._say("/start", self.AI)
+        self.assertFalse(onb.active(self.con, 1))
+
+    def test_ai_on_start_still_sends_the_privacy_note_first(self):
+        self._say("/start", self.AI)
+        self.assertEqual(len(self.tg.sent), 2)
+        self.assertIn("who can see it", self.tg.sent[0])
+
+    def test_ai_off_start_is_the_four_steps(self):
+        self._say("/start", self.PLAIN)
+        self.assertIn("Name one thing", self.tg.sent[-1])
+        self.assertNotIn("receipt", self.tg.sent[-1])
+        self.assertTrue(onb.active(self.con, 1))
+
+    def test_setup_still_runs_the_four_steps_with_ai_on(self):
+        self._say("/start", self.AI)
+        self._say("/setup", self.AI)
+        self.assertIn("Name one thing", self.tg.sent[-1])
+
+
 class Invites(unittest.TestCase):
     """Friends get in with a one-use link from the owner, not a chat id."""
 
@@ -4364,14 +4407,18 @@ class OnboardingWithAI(unittest.TestCase):
         bot.handle_message(self.tg, self.con, {
             "chat": {"id": 1, "type": "private"}, "text": text}, self.CFG)
 
-    def test_start_onboards_with_the_privacy_note(self):
+    def test_start_sends_the_privacy_note_and_never_the_model(self):
+        # With AI on, /start opens with the receipt rather than the four
+        # steps (ReceiptFirstStart), but it is still the bot's, not the
+        # model's, and the privacy note still comes first.
         self._say("/start")
         self.assertEqual(self.calls, [])
         self.assertIn("who can see it", self.tg.sent[0])
-        self.assertTrue(onb.active(self.con, 1))
 
     def test_setup_answers_go_to_setup_not_the_model(self):
-        self._say("/start")
+        # The four steps now start from /setup when AI is on; while one is
+        # waiting, an answer is still setup's, never the model's.
+        self._say("/setup")
         self._say("milk")
         self.assertEqual(self.calls, [])
         self.assertEqual(onb.step(self.con, 1), "2")
