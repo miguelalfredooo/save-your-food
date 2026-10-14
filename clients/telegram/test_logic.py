@@ -4181,6 +4181,168 @@ class Privacy(unittest.TestCase):
         self.assertFalse(onb.started(self.con, self.OWNER))
 
 
+class OwnProviders(unittest.TestCase):
+    """Claude and ChatGPT on the person's own keys, beside OpenRouter. Anthropic
+    is reached through its own Messages API, translated both ways, so the rest
+    of the bot never sees a second wire format."""
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.orig_config_path = bot.CONFIG_PATH
+        bot.CONFIG_PATH = os.path.join(self.tmp_dir, "config.json")
+
+    def tearDown(self):
+        bot.CONFIG_PATH = self.orig_config_path
+
+    def _write(self, **extra):
+        cfg = {"token": "123:abc", "llm_mode": True, "allowed_chat_ids": [1]}
+        cfg.update(extra)
+        with open(bot.CONFIG_PATH, "w") as f:
+            json.dump(cfg, f)
+
+    def _exit(self):
+        with self.assertRaises(SystemExit) as ctx:
+            bot.load_config()
+        return str(ctx.exception)
+
+    # --- choosing a provider -------------------------------------------------
+
+    def test_each_provider_reaches_its_own_function(self):
+        seen = []
+        saved = {n: getattr(llm_agent, n) for n in
+                 ("call_openrouter", "call_openai", "call_anthropic", "call_ollama")}
+        try:
+            for n in saved:
+                setattr(llm_agent, n, lambda *a, _n=n, **k: seen.append(_n))
+            for provider in ("openrouter", "openai", "anthropic", "ollama"):
+                cfg = bot.with_defaults(dict(llm_provider=provider, openrouter_api_key="k",
+                                             openai_api_key="k", anthropic_api_key="k"))
+                llm_agent._default_caller(cfg)([])
+        finally:
+            for n, f in saved.items():
+                setattr(llm_agent, n, f)
+        self.assertEqual(seen, ["call_openrouter", "call_openai", "call_anthropic", "call_ollama"])
+
+    def test_defaults_name_a_model_for_every_provider(self):
+        cfg = bot.with_defaults({})
+        self.assertEqual(cfg["anthropic_model"], "claude-haiku-5-5")
+        self.assertEqual(cfg["openai_model"], "gpt-4o-mini")
+        self.assertEqual(cfg["llm_provider"], "openrouter")
+
+    # --- refusing to start without the right key ------------------------------
+
+    def test_anthropic_without_a_key_refuses_to_start(self):
+        self._write(llm_provider="anthropic", anthropic_api_key="PUT_YOUR_ANTHROPIC_KEY_HERE")
+        msg = self._exit()
+        self.assertIn("anthropic_api_key", msg)
+        self.assertNotIn("\n", msg)
+
+    def test_openai_without_a_key_refuses_to_start(self):
+        self._write(llm_provider="openai")
+        self.assertIn("openai_api_key", self._exit())
+
+    def test_an_unknown_provider_refuses_to_start(self):
+        self._write(llm_provider="gemini")
+        self.assertIn("not one of", self._exit())
+
+    def test_ollama_needs_no_key(self):
+        self._write(llm_provider="ollama")
+        self.assertEqual(bot.load_config()["llm_provider"], "ollama")
+
+    def test_anthropic_with_a_key_starts(self):
+        self._write(llm_provider="anthropic", anthropic_api_key="sk-ant-real")
+        self.assertEqual(bot.load_config()["anthropic_api_key"], "sk-ant-real")
+
+    # --- keys never reach a log ---------------------------------------------
+
+    def test_every_providers_key_is_redacted(self):
+        cfg = {"openrouter_api_key": "sk-or-AAA", "openai_api_key": "sk-BBB",
+               "anthropic_api_key": "sk-ant-CCC"}
+        out = llm_agent._redact("a sk-or-AAA b sk-BBB c sk-ant-CCC", cfg)
+        for key in cfg.values():
+            self.assertNotIn(key, out)
+
+    def test_a_placeholder_is_not_treated_as_a_key(self):
+        cfg = {"anthropic_api_key": "PUT_YOUR_ANTHROPIC_KEY_HERE"}
+        self.assertEqual(llm_agent._redact("PUT_YOUR_ANTHROPIC_KEY_HERE", cfg),
+                         "PUT_YOUR_ANTHROPIC_KEY_HERE")
+
+    def test_the_privacy_note_names_the_company(self):
+        con = fridge.connect(tempfile.mktemp(suffix=".db"))
+        for provider, name in (("anthropic", "Anthropic"), ("openai", "OpenAI"),
+                               ("openrouter", "OpenRouter")):
+            cfg = bot.with_defaults(dict(llm_mode=True, allowed_chat_ids=[1],
+                                         llm_provider=provider))
+            self.assertIn(name, bot.privacy_note(con, cfg, 1), provider)
+
+    # --- the Anthropic translation ------------------------------------------
+
+    def test_the_request_uses_anthropic_headers_not_a_bearer_token(self):
+        url, headers, body = llm_agent.anthropic_request(
+            "sk-ant-x", "claude-haiku-5-5",
+            [{"role": "system", "content": "be brief"}, {"role": "user", "content": "hi"}], [])
+        self.assertEqual(url, "https://api.anthropic.com/v1/messages")
+        self.assertEqual(headers["x-api-key"], "sk-ant-x")
+        self.assertEqual(headers["anthropic-version"], "2023-06-01")
+        self.assertNotIn("Authorization", headers)
+        self.assertEqual(body["system"], "be brief")
+        self.assertEqual(body["thinking"], {"type": "disabled"})
+        self.assertEqual(body["messages"], [{"role": "user", "content": "hi"}])
+
+    def test_a_photo_becomes_a_base64_image_block(self):
+        _, msgs, _ = llm_agent.to_anthropic([{"role": "user", "content": [
+            {"type": "text", "text": "receipt"},
+            {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,QUJD"}}]}], [])
+        self.assertEqual(msgs[0]["content"][1], {"type": "image", "source": {
+            "type": "base64", "media_type": "image/jpeg", "data": "QUJD"}})
+
+    def test_a_tool_round_translates_and_results_share_one_message(self):
+        call = {"role": "assistant", "content": None, "tool_calls": [
+            {"id": "t1", "type": "function", "function": {"name": "add_items", "arguments": '{"items": ["milk"]}'}},
+            {"id": "t2", "type": "function", "function": {"name": "list_items", "arguments": "{}"}}]}
+        _, msgs, tools = llm_agent.to_anthropic([
+            {"role": "user", "content": "add milk"}, call,
+            {"role": "tool", "tool_call_id": "t1", "content": "ok"},
+            {"role": "tool", "tool_call_id": "t2", "content": "[]"}], llm_agent.TOOLS)
+        self.assertEqual([m["role"] for m in msgs], ["user", "assistant", "user"])
+        self.assertEqual(msgs[1]["content"][0], {"type": "tool_use", "id": "t1",
+                                                 "name": "add_items", "input": {"items": ["milk"]}})
+        self.assertEqual([b["tool_use_id"] for b in msgs[2]["content"]], ["t1", "t2"])
+        self.assertIn("input_schema", tools[0])
+
+    def test_a_reply_comes_back_in_the_shape_the_loop_reads(self):
+        out = llm_agent.from_anthropic({"content": [
+            {"type": "text", "text": "Adding "},
+            {"type": "tool_use", "id": "t9", "name": "add_items", "input": {"items": ["eggs"]}}],
+            "usage": {"input_tokens": 10, "cache_read_input_tokens": 5, "output_tokens": 7}})
+        msg = out["choices"][0]["message"]
+        self.assertEqual(msg["content"], "Adding ")
+        self.assertEqual(json.loads(msg["tool_calls"][0]["function"]["arguments"]), {"items": ["eggs"]})
+        self.assertEqual(out["usage"], {"prompt_tokens": 15, "completion_tokens": 7})
+
+    def test_a_whole_turn_runs_through_the_translation(self):
+        """run_agent, unchanged, driving a fake Anthropic: the first reply asks
+        for add_items, the second answers. The milk has to land in the fridge."""
+        con = fridge.connect(tempfile.mktemp(suffix=".db"))
+        sent = []
+        replies = iter([
+            {"content": [{"type": "tool_use", "id": "a1", "name": "add_items",
+                          "input": {"items": [{"name": "milk", "estimated_days": 7}]}}],
+             "usage": {}},
+            {"content": [{"type": "text", "text": "Got it."}], "usage": {}},
+        ])
+
+        def fake(messages):
+            sent.append(llm_agent.to_anthropic(messages, llm_agent.TOOLS)[1])
+            return llm_agent.from_anthropic(next(replies))
+
+        cfg = bot.with_defaults(dict(llm_mode=True, allowed_chat_ids=[1], llm_provider="anthropic"))
+        reply = llm_agent.run_agent(con, 1, "add milk", cfg, today=TODAY, caller=fake)
+        self.assertEqual(reply, "Got it.")
+        self.assertIn("milk", [i["name"] for i in fridge.open_items(con, 1)])
+        self.assertEqual(sent[1][-1]["content"][0]["type"], "tool_result")
+
+
 class OnboardingWithAI(unittest.TestCase):
     """AI mode takes every message, so setup has to be carved out of it, or
     someone with AI on never gets onboarding or the privacy note."""

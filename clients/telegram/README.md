@@ -163,33 +163,38 @@ self-contained mode that hands every typed message (and now photos too) to a
 model instead, so it can read natural phrasing and correct itself in
 conversation. Off by default.
 
-**Two providers, same code path.** Pick one with `llm_provider`:
+**Three providers, one code path.** Every install uses its own keys, never
+anyone else's. Pick one with `llm_provider`:
 
-    "llm_mode": true,
-    "llm_provider": "openrouter",
-    "openrouter_api_key": "sk-or-...",
-    "llm_model": "anthropic/claude-haiku-4.5"
+| `llm_provider` | Needs | Model setting | Default model |
+|---|---|---|---|
+| `openrouter` | `openrouter_api_key` (`sk-or-...`) | `llm_model` | `anthropic/claude-haiku-4.5` |
+| `anthropic` | `anthropic_api_key` (`sk-ant-...`) | `anthropic_model` | `claude-haiku-5-5` |
+| `openai` | `openai_api_key` (`sk-...`) | `openai_model` | `gpt-4o-mini` |
 
-or, to run entirely on your own machine with [Ollama](https://ollama.com)
-instead, free and offline once the model is pulled:
+OpenRouter is one key for Claude, ChatGPT and many cheaper models; it charges
+the providers' own prices plus a small fee on credits. `anthropic` goes to
+Anthropic's own Messages API (translated to and from the format the rest of
+this file uses), with thinking off. `openai` goes to OpenAI directly. A
+ChatGPT or Claude subscription does not include API access: these need an
+API key, billed separately.
 
-    "llm_mode": true,
-    "llm_provider": "ollama",
-    "ollama_base_url": "http://localhost:11434/v1",
-    "ollama_model": "llama3.2-vision"
+**Local models (Ollama): not ready for receipts yet.** The `ollama` provider
+is still in the code, but no local model reads a receipt end to end today.
+The model must read images AND call tools (`ollama show <model>` lists both
+under Capabilities), and the one that does, `qwen3-vl:8b`, thinks before it
+answers and ignores every switch for turning that off. With the bot's real
+system prompt it ran past a 240-second timeout and logged nothing (measured
+2026-10-13, Ollama 0.33.3). Use one of the three hosted providers above.
 
-`ollama pull llama3.2-vision` first (needs Ollama running locally). Every
-message on OpenRouter costs money on your account; Ollama costs nothing per
-message but needs a machine that can actually run the model — a vision
-model wants real RAM (roughly 8GB+ free for an 11B model in Q4). The bot
-refuses to start with `llm_mode` on and OpenRouter selected with no key set,
-rather than silently falling back to a different path.
+The bot refuses to start with `llm_mode` on and the chosen provider's key
+missing, or with an unknown `llm_provider`, rather than silently falling back
+to a different path.
 
 **Photos work in this mode too.** Send a photo of your fridge or a receipt,
 with or without a caption, and it goes to the model as an image alongside
 any text you typed — provided the model you picked actually supports vision
-("Capabilities: vision" in `ollama show <model>`, or a vision-capable
-OpenRouter model). A text-only model just never mentions the photo. Outside
+(all three defaults do; on OpenRouter, pick a vision-capable model). A text-only model just never mentions the photo. Outside
 this mode, a photo gets a plain "I can't read photos yet."
 
 **Who gets it.** `llm_mode` turns the AI on for the chats in
