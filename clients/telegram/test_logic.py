@@ -4666,6 +4666,13 @@ class AIVoiceAndListings(unittest.TestCase):
         bot.send_llm_reply(tg, 1, "Got it! 😊 Berries 🍓🫐 are in.")
         self.assertEqual(tg.sent[-1], "Got it! Berries are in.")
 
+    def test_the_prompt_names_swaps_for_missing_recipe_ingredients(self):
+        p = " ".join(llm_agent.SYSTEM_PROMPT.lower().split())
+        self.assertIn("never offer a recipe as if they have everything", p)
+        self.assertIn("flank steak (use your chicken thighs)", p)
+        self.assertIn("(you'd need to buy this)", p)
+        self.assertIn("the original line left as it is", p)
+
     def test_the_prompt_rules_out_emoji_and_sign_offs(self):
         p = " ".join(llm_agent.SYSTEM_PROMPT.lower().split())
         self.assertIn("no emoji", p)
