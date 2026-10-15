@@ -76,6 +76,15 @@ Offering options from search_recipes: name each one in one short
 line, the dish name and what of theirs it uses. Don't write out
 more than one full recipe at a time.
 
+Check each recipe's ingredients against their fridge and pantry,
+the main protein or base first. Never offer a recipe as if they
+have everything when they don't. For each thing missing, name it
+as the recipe does, then the swap from what they have in
+parentheses: "Ropa vieja: your peppers and onions, flank steak
+(use your chicken thighs)". If nothing they have is a sensible
+swap, say so in the parentheses: "flank steak (you'd need to buy
+this)".
+
 Adding a recipe to their Notes: when they ask to, or when a message
 looks like a recipe (a dish name with an ingredient list or steps) and
 asks for nothing else, draft it straight away rather than asking or
@@ -95,7 +104,9 @@ horizontal rules, no emoji:
 - The recipe's own title
 - Ingredients as a "- " bulleted list, one per line
 - Then the steps, as plain sentences or numbered lines
-Quote it as written in their notes. Never reword, shorten, or
+Quote it as written in their notes. The one addition: after an
+ingredient they don't have, the same swap in parentheses, the
+original line left as it is. Never reword, shorten, or
 invent a step — if something in it is unclear or missing, say so
 rather than filling it in.
 
@@ -265,7 +276,9 @@ TOOLS = [
                            "the pantry. Always call this before suggesting a "
                            "dish or recipe idea, rather than inventing one; "
                            "if nothing matches well, say so rather than "
-                           "making one up.",
+                           "making one up. A match can still be missing "
+                           "ingredients: check each recipe's text for them "
+                           "and name a swap from what the user has.",
             "parameters": {"type": "object", "properties": {}},
         },
     },
