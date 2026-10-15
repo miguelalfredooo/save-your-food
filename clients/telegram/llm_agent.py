@@ -72,9 +72,11 @@ Rice, dry lentils, cans, spices go to the pantry quietly. Don't
 explain the system unless asked.
 
 RECIPES
-Offering options from search_recipes: name each one in one short
-line, the dish name and what of theirs it uses. Don't write out
-more than one full recipe at a time.
+Offering options from search_recipes: send the lines it gives you
+as they are, one per line. Call it again every time they ask what
+to cook, even if you answered a moment ago: the fridge may have
+changed, and an earlier answer is not a list to repeat. Don't write
+out more than one full recipe at a time.
 
 Check each recipe's ingredients against their fridge and pantry,
 the main protein or base first. Never offer a recipe as if they
@@ -592,19 +594,41 @@ def fetch_recipes(timeout=RECIPE_FETCH_TIMEOUT):
     return cached
 
 
-def rank_recipes(recipes, available):
-    """Recipes containing at least one available ingredient, most overlap
-    first. A close match ("4 of 5, missing basil") is still worth surfacing,
-    not just an exact one."""
+def _mentions(name, text):
+    """Whether lowercased recipe text mentions a tracked item. A note in
+    brackets is dropped and the last word is matched on its stem, so
+    "Celery (enough for two dishes)" finds "celery" and "Roma tomatoes"
+    finds "2 tomatoes, diced". A stem match skips broth and sauce lines."""
+    core = name.split("(")[0].strip().lower()
+    if not core:
+        return False
+    if core in text:
+        return True
+    last = core.split()[-1]
+    stem = re.sub(r"(es|s)$", "", last) if len(last) > 3 else last
+    if len(stem) < 3:
+        return False
+    # On the stem alone, "ground beef" would find "beef broth".
+    return any(re.search(r"\b" + re.escape(stem), line)
+               and not any(w in line for w in _NOT_MAIN)
+               for line in text.splitlines())
+
+
+def rank_recipes(recipes, available, pantry=()):
+    """Recipes mentioning at least one tracked item, the ones using the most
+    fridge food first and pantry items only as the tiebreak: every recipe
+    uses salt, so salt says nothing about what to cook. A close match ("4
+    of 5, missing basil") is still worth surfacing, not just an exact one."""
     scored = []
     for r in recipes:
         n = r["text"].lower()
-        matched = [a for a in available if a and a.lower() in n]
-        if matched:
-            scored.append((len(matched), matched, r))
-    scored.sort(key=lambda t: -t[0])
+        matched = [a for a in available if a and _mentions(a, n)]
+        from_pantry = [a for a in pantry if a and _mentions(a, n)]
+        if matched or from_pantry:
+            scored.append((len(matched), len(from_pantry), matched, r))
+    scored.sort(key=lambda t: (-t[0], -t[1]))
     return [{"title": r["title"], "text": r["text"], "matched_ingredients": matched}
-            for _, matched, r in scored]
+            for _, _, matched, r in scored]
 
 
 # The main thing a dish is built on. A recipe whose protein isn't in the
@@ -619,70 +643,157 @@ _MAIN_WORDS = ("steak", "beef", "chicken", "pork", "lamb", "turkey", "veal",
 # on, and a pantry full of them mustn't make a beef recipe look covered.
 _NOT_MAIN = ("broth", "stock", "bouillon", "consomm", "powder", "sauce", "fat",
              "cream of", "noodle", "soup")
-# Longer than this, once any note is cut off, a line is a step, not an
-# ingredient: "In a pan, heat up a tablespoon of oil and add pork belly".
-_MAX_INGREDIENT_LINE = 45
+# An ingredient line starts with an amount ("3 lbs. chicken pieces, bone
+# in"), however long, or is a few words with none ("Extra firm tofu").
+# Anything else is a step: "Fry tofu on wok, set aside".
+_AMOUNT = re.compile(r"^[\d⅓⅔½¼¾⅛]")
+_NUMBERED_STEP = re.compile(r"^\d+[.)]\s")
+_MAX_BARE_WORDS = 4
+# Words that leave a name a plain cut of something: "boneless chicken
+# thighs" can stand in for chicken in a recipe, "butter chicken" can't.
+_CUT_WORDS = frozenset("""
+    thigh thighs breast breasts wing wings leg legs drumstick drumsticks
+    fillet fillets filet filets loin tenderloin chop chops belly strip strips
+    slice slices sliced deli smoked boneless skinless bone in raw fresh frozen
+    ground minced lean whole skirt flank sirloin ribeye chuck shoulder rib
+    ribs cutlet cutlets stew extra firm silken medium large jumbo peeled
+    shelled lb lbs pack
+""".split())
+# What can stand in for what. Nothing crosses a family: tofu isn't offered
+# for a pork chop.
+_FAMILIES = (
+    ("steak", "beef", "pork", "lamb", "veal", "goat", "oxtail", "brisket"),
+    ("chicken", "turkey", "duck"),
+    ("fish", "salmon", "tuna", "cod", "tilapia", "shrimp", "prawn", "crab",
+     "scallop", "mussel", "clam"),
+    ("sausage", "chorizo", "bacon", "ham"),
+    ("tofu",),
+)
+_QUANTITY = re.compile(
+    r"^[\d\s/⅓⅔½¼¾⅛.,\-–]+(?:(?:lbs?|pounds?|oz|ounces?|cups?|slices?|"
+    r"tbsp|tsp|g|kg)\b\.?)?\s*", re.I)
+
+
+def _main_word(text):
+    low = text.lower()
+    for w in _MAIN_WORDS:
+        if re.search(r"\b%ss?\b" % w, low):
+            return w
+    return None
 
 
 def proteins(names):
-    """The names that are something a dish is built on, broths and sauces
-    left out."""
+    """The names that are a plain cut of something a dish is built on.
+    Broths and sauces are left out, and so are dishes: "butter chicken" is
+    dinner, not chicken for a recipe."""
     out = []
     for name in names:
-        low = name.lower()
-        if any(w in low for w in _NOT_MAIN):
+        core = name.split("(")[0].lower()
+        if any(w in core for w in _NOT_MAIN):
             continue
-        if any(re.search(r"\b%ss?\b" % w, low) for w in _MAIN_WORDS):
+        words = re.findall(r"[a-z]+", core)
+        mains = [t for t in words if _main_word(t)]
+        if mains and all(t in _CUT_WORDS or _main_word(t) for t in words):
             out.append(name)
     return out
 
 
-def missing_mains(title, text, available):
-    """The recipe's protein lines that nothing tracked covers, cut before
-    any note: "2lbs flank or skirt steak (season...)" comes back as "2lbs
-    flank or skirt steak". Each protein counts once, so the steps naming
-    the steak again don't repeat it. The title line and long step lines are
-    skipped."""
+def _missing(title, text, available):
+    """[(line, main word)] for the recipe's protein lines that nothing
+    tracked covers, cut before any note: "2lbs flank or skirt steak
+    (season...)" comes back as "2lbs flank or skirt steak". Each protein
+    counts once, so the steps naming the steak again don't repeat it. The
+    title line and step lines are skipped."""
     have = " ".join(proteins(available)).lower()
+    # Not a plain cut, but the very thing the recipe names: "Vienna
+    # sausages" covers "1 can vienna sausage". "Butter chicken" covers
+    # nothing but a recipe calling for butter chicken.
+    named = [n.split("(")[0] for n in available
+             if _main_word(n) and not any(w in n.lower() for w in _NOT_MAIN)]
+    titles = {title.strip().lower(), title.split("(")[0].strip().lower()}
     seen, missing = set(), []
-    for line in text.splitlines():
-        item = re.split(r"\(|\. ", line)[0].strip()
+    for line in text.replace("\xa0", " ").splitlines():
+        item = line.split("(")[0].strip()
         low = item.lower()
-        if (not item or low == title.strip().lower()
-                or len(item) > _MAX_INGREDIENT_LINE
+        if (not item or low in titles or _NUMBERED_STEP.match(item)
+                or (not _AMOUNT.match(item) and len(item.split()) > _MAX_BARE_WORDS)
                 or any(w in low for w in _NOT_MAIN)):
             continue
-        for w in _MAIN_WORDS:
-            if re.search(r"\b%ss?\b" % w, low):
-                if w not in seen:
-                    seen.add(w)
-                    if w not in have:
-                        missing.append(item)
-                break
+        w = _main_word(low)
+        if w and w not in seen:
+            seen.add(w)
+            if w not in have and not any(_singular(n) in _singular(low) for n in named):
+                missing.append((item, w))
     return missing
 
 
+def _singular(text):
+    return " ".join(re.sub(r"s$", "", t) for t in re.findall(r"[a-z]+", text.lower()))
+
+
+def missing_mains(title, text, available):
+    """The recipe's protein lines that nothing tracked covers."""
+    return [item for item, _ in _missing(title, text, available)]
+
+
+def _swap(word, available):
+    """A tracked plain cut from the same family as word, or None."""
+    family = next((f for f in _FAMILIES if word in f), (word,))
+    return next((p for p in proteins(available) if _main_word(p) in family), None)
+
+
+def _and(names):
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+
+
+def recipe_line(title, text, fridge_names, pantry_names):
+    """One finished line for a recipe offer, so a small model only has to
+    copy it: "Ropa Vieja: your tomatoes and dill; flank or skirt steak
+    (you'd need to buy this)". The original ingredient comes first and the
+    swap goes in brackets after it."""
+    low = text.lower()
+    used, stems = [], set()
+    for n in fridge_names:
+        core = n.split("(")[0].strip().lower()
+        stem = re.sub(r"(es|s)$", "", core.split()[-1]) if core else ""
+        if core and stem not in stems and _mentions(n, low):
+            stems.add(stem)          # "fresh dill" and "living dill" say dill once
+            used.append(core)
+    used = used[:4]
+    line = title.strip() + ": " + ("your " + _and(used) if used
+                                   else "mostly pantry staples")
+    gaps = []
+    for item, word in _missing(title, text, list(fridge_names) + list(pantry_names)):
+        name = _QUANTITY.sub("", item).strip().lower() or item.lower()
+        # Drop the prep note after the meat: "bacon, roughly chopped",
+        # "pork chops no bone. Season with...".
+        at = re.search(r"\b%s" % word, name)
+        cut = re.search(r",|\. ", name[at.end() if at else 0:])
+        name = name[:(at.end() if at else 0) + cut.start()] if cut else name
+        swap = _swap(word, list(fridge_names) + list(pantry_names))
+        gaps.append("%s (%s)" % (name, "use your %s" % swap.split("(")[0].strip().lower()
+                                 if swap else "you'd need to buy this"))
+    return line + ("; " + ", ".join(gaps) if gaps else "")
+
+
 def exec_search_recipes(con, chat_id, args, today):
-    available = ([i["name"] for i in fridge.open_items(con, chat_id)]
-                + [i["name"] for i in fridge.pantry_items(con, chat_id)])
-    if not available:
+    in_fridge = [i["name"] for i in fridge.open_items(con, chat_id)]
+    in_pantry = [i["name"] for i in fridge.pantry_items(con, chat_id)]
+    if not in_fridge and not in_pantry:
         return {"matches": [], "note": "Nothing tracked yet to match a recipe against."}
     recipes = fetch_recipes()
     if recipes is None:
         return {"error": "Could not reach Apple Notes right now, and there's "
                          "no saved copy yet to fall back on."}
-    top = rank_recipes(recipes, available)[:MAX_RECIPE_MATCHES]
+    top = rank_recipes(recipes, in_fridge, in_pantry)[:MAX_RECIPE_MATCHES]
     return {
-        "available_ingredients": available,
-        "available_proteins": proteins(available),
-        "how_to_list": "For a match with missing_main, name each missing item "
-                       "as the recipe does, then a swap from available_proteins "
-                       "in parentheses, e.g. \"flank steak (use your chicken "
-                       "thighs)\". No sensible swap: \"(you'd need to buy "
-                       "this)\". Never list it as if they have everything.",
-        "matches": [{"title": m["title"], "matched_ingredients": m["matched_ingredients"],
-                     "missing_main": missing_mains(m["title"], m["text"], available),
-                     "text": m["text"][:MAX_RECIPE_CHARS]} for m in top],
+        "how_to_list": "Offer these lines as they are, each on its own line "
+                       "starting with \"- \". Keep the part in brackets: it "
+                       "says what they're missing and what to use instead. "
+                       "Don't add ingredient lists.",
+        "lines": [recipe_line(m["title"], m["text"], in_fridge, in_pantry) for m in top],
+        "matches": [{"title": m["title"], "text": m["text"][:MAX_RECIPE_CHARS]}
+                    for m in top],
     }
 
 

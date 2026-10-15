@@ -1409,17 +1409,74 @@ class RecipeSearch(unittest.TestCase):
         self.assertEqual(
             llm_agent.missing_mains("Honey Garlic Pork Chops", text, []), ["4 pork chops"])
 
-    def test_exec_search_recipes_flags_the_missing_main_and_the_swaps(self):
-        fridge.add_items(self.con, 1, ["onion", "bell pepper", "chicken thighs"], TODAY)
+    def test_exec_search_recipes_writes_each_line_with_the_swap(self):
+        fridge.add_items(self.con, 1, ["Roma tomatoes", "chicken thighs"], TODAY)
         original = llm_agent.fetch_recipes
-        llm_agent.fetch_recipes = lambda: [{"title": "Ropa Vieja", "text": self.ROPA_VIEJA}]
+        llm_agent.fetch_recipes = lambda: [
+            {"title": "Ropa Vieja", "text": self.ROPA_VIEJA + "\n2 tomatoes"},
+            {"title": "Pollo Guisado", "text": "2 lbs chicken thighs\n1 tomato"}]
         try:
             result = llm_agent.exec_search_recipes(self.con, 1, {}, TODAY)
         finally:
             llm_agent.fetch_recipes = original
-        self.assertEqual(result["matches"][0]["missing_main"], ["2lbs flank or skirt steak"])
-        self.assertEqual(result["available_proteins"], ["chicken thighs"])
-        self.assertIn("in parentheses", result["how_to_list"])
+        pollo, ropa = result["lines"]   # Pollo uses more fridge food, so it comes first
+        self.assertTrue(pollo.startswith("Pollo Guisado: your "))
+        self.assertNotIn("(", pollo)
+        self.assertEqual(
+            ropa, "Ropa Vieja: your roma tomatoes; flank or skirt steak (you'd need to buy this)")
+        self.assertIn("as they are", result["how_to_list"])
+
+    def test_recipe_line_offers_a_swap_from_the_same_family(self):
+        line = llm_agent.recipe_line("Ropa Vieja", self.ROPA_VIEJA,
+                                     ["ground beef"], ["deli ham"])
+        self.assertEqual(line, "Ropa Vieja: mostly pantry staples; "
+                               "flank or skirt steak (use your ground beef)")
+
+    def test_long_ingredient_lines_count_and_steps_dont(self):
+        text = ("Pollo Fricasse\n3 lbs. chicken pieces bone in, skinned\n"
+                "2 pounds boneless, skinless chicken thighs, cut into strands\n"
+                "Fry tofu on wok, set aside\n1. Brown the pork in batches")
+        self.assertEqual(llm_agent.missing_mains("Pollo Fricasse", text, []),
+                         ["3 lbs. chicken pieces bone in, skinned"])
+
+    def test_recipe_line_trims_amounts_notes_and_repeats(self):
+        line = llm_agent.recipe_line(
+            "Beef Bourguignon (Julia)",
+            "Beef Bourguignon\n6 slices bacon, roughly chopped\n2 sprigs dill",
+            ["Fresh dill", "Living Dill"], ["Deli ham"])
+        self.assertEqual(line, "Beef Bourguignon (Julia): your fresh dill; "
+                               "bacon (use your deli ham)")
+
+    def test_an_item_the_recipe_names_outright_covers_it(self):
+        self.assertEqual(llm_agent.missing_mains(
+            "Arroz con Salchichas", "2 vienna sausage cans", ["Vienna sausages"]), [])
+
+    def test_recipe_line_stops_at_a_sentence_after_the_meat(self):
+        line = llm_agent.recipe_line(
+            "Chuletas", "6-8 thin pork chops no bone. Season with sazon", [], [])
+        self.assertEqual(line, "Chuletas: mostly pantry staples; "
+                               "thin pork chops no bone (you'd need to buy this)")
+
+    def test_a_cooked_dish_is_not_a_protein_on_hand(self):
+        self.assertEqual(llm_agent.proteins(
+            ["Butter chicken", "Vienna sausages", "Deli ham", "boneless chicken thighs"]),
+            ["Deli ham", "boneless chicken thighs"])
+        self.assertEqual(llm_agent.missing_mains(
+            "Chicken Stew", "2 lbs chicken breast", ["Butter chicken"]),
+            ["2 lbs chicken breast"])
+
+    def test_fridge_food_outranks_pantry_staples(self):
+        recipes = [{"title": "Spice rub", "text": "salt, cumin, paprika, oregano"},
+                   {"title": "Leek soup", "text": "3 leeks, salt"}]
+        ranked = llm_agent.rank_recipes(recipes, ["Leeks"], ["salt", "cumin", "paprika", "oregano"])
+        self.assertEqual([r["title"] for r in ranked], ["Leek soup", "Spice rub"])
+
+    def test_a_note_in_brackets_or_a_plural_still_matches(self):
+        ranked = llm_agent.rank_recipes(
+            [{"title": "Soup", "text": "2 stalks celery\n1 tomato, diced"}],
+            ["Celery (enough for two dishes)", "Roma tomatoes"])
+        self.assertEqual(ranked[0]["matched_ingredients"],
+                         ["Celery (enough for two dishes)", "Roma tomatoes"])
 
     def test_exec_search_recipes_handles_notes_being_unreachable(self):
         fridge.add_items(self.con, 1, ["milk"], TODAY)
@@ -4717,6 +4774,7 @@ class AIVoiceAndListings(unittest.TestCase):
         self.assertIn("never offer a recipe as if they have everything", p)
         self.assertIn("flank steak (use your chicken thighs)", p)
         self.assertIn("(you'd need to buy this)", p)
+        self.assertIn("call it again every time they ask what to cook", p)
         self.assertIn("the original line left as it is", p)
 
     def test_the_prompt_rules_out_emoji_and_sign_offs(self):
