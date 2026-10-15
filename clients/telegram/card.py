@@ -1,53 +1,49 @@
-"""The card: one fixed-width message that holds a whole list and edits itself.
+"""The card: one message that holds a whole list and edits itself.
 
 The nudge used to be one summary plus one buttoned message per item, so three
-things at risk meant four notifications and twelve meant thirteen, and every
-bubble was a different width because Telegram sizes a bubble to its longest
-line. A card is one message instead. Each item is a numbered line, each open
-item gets one row of buttons, and a tap edits the same message in place: the
-line flips to its outcome, its buttons go, the footer counts up.
+things at risk meant four notifications and twelve meant thirteen. A card is
+one message instead. Each item is a numbered line, each open item gets one
+row of buttons, and a tap edits the same message in place: the line flips to
+its outcome, its buttons go, the footer counts up.
 
-Why monospace and a fixed width
--------------------------------
-The body sits in a <pre> block padded to exactly WIDTH columns, framed by a
-rule of the same width. Monospace makes every character the same width, so
-every card is the same width on a given phone, and the rule pins it even when
-every line is short. WIDTH is 36: on a current phone at the default text size
-a code block fits about 38 columns, so 36 keeps item names and dates on one
-line with a small margin. It was 24, sized for the narrowest phones, then 32.
-On a very small phone, or with very large text, a line can wrap.
+Plain text, not a code block
+----------------------------
+Cards used to sit in a <pre> block padded to a fixed width, so dates lined
+up in a column. That broke for the people who most need it to work: large
+text wrapped every padded line, a screen reader read the padding and the
+ruled lines, and a tap on a code block copies it. Now each item is one
+sentence-like line, "1. Spinach, tomorrow (date is a guess)", that wraps
+wherever the phone likes and reads in order. Headings are bold, in sentence
+case, rather than in capitals.
 
 Names, not buttons, carry the item
 ----------------------------------
 A Telegram button label is one line and gets truncated, so the item's name,
-date and warning live in the text, and the buttons only carry its number.
+date and warning live in the text, and the buttons carry its number and a
+word: "1 Used", not "1 ✅", which a screen reader reads as "check mark".
 
 Pure functions only. Nothing here touches the network or the database.
 """
 
-import textwrap
 from datetime import date
 
 import fridge
 import shelf_life as sl
 
-WIDTH = 36
-RULE = "─" * WIDTH
-RIGHT = 8                 # the date column: "14d past", "tomorrow", "Oct 14"
 MAX_ITEMS = 15            # 3 buttons each stays well under Telegram's 100
 
-# Plain marks, not emoji: an emoji is two columns wide on some phones and one
-# on others, which breaks the one guarantee this file makes.
-MARK = {"used": "✓", "frozen": "✓", "tossed": "·"}
+# What a closed line starts with.
+MARK = {"used": "✓", "frozen": "✓", "tossed": "✗"}
 OUTCOME = {"used": "used", "frozen": "frozen", "tossed": "tossed"}
-BUTTONS = (("used", "✅"), ("frozen", "❄️"), ("tossed", "\U0001f5d1"))
+STATES = ("used", "frozen", "tossed")
 # Something already frozen has no "froze it": only finished, or binned.
-FREEZER_BUTTONS = (("used", "✅"), ("tossed", "\U0001f5d1"))
+FREEZER_STATES = ("used", "tossed")
 WORDS = {"used": "Used", "frozen": "Froze", "tossed": "Tossed"}
 
 # Past this many items with buttons, a card shows one row of numbers instead
 # of a row of three buttons per item: tap a number, then choose. Fifteen rows
-# of [n ✅] [n ❄️] [n 🗑] is a wall to read before you can answer anything.
+# of [1 Used] [1 Froze] [1 Tossed] is a wall to read before you can answer
+# anything.
 DIRECT_MAX = 4
 PICKER_ROW = 6
 
@@ -69,12 +65,12 @@ def keyboard(numbered, freezer=False, others=False, pick=None):
     """
     if not numbered and not others:
         return None
-    states = FREEZER_BUTTONS if freezer else BUTTONS
+    states = FREEZER_STATES if freezer else STATES
     if pick is None:
         pick = len(numbered) > DIRECT_MAX
     if not pick:
-        rows = [[{"text": "%d %s" % (n, icon), "callback_data": _data(st, item, freezer)}
-                 for st, icon in states] for n, item in numbered]
+        rows = [[{"text": "%d %s" % (n, WORDS[st]), "callback_data": _data(st, item, freezer)}
+                 for st in states] for n, item in numbered]
     else:
         nums = [{"text": str(n), "callback_data": "pick:%d" % item["id"]}
                 for n, item in numbered]
@@ -97,23 +93,23 @@ def picker(numbered):
 
 def actions(n, item, freezer=False):
     """The choices for one picked item, and the way back to the numbers."""
-    states = FREEZER_BUTTONS if freezer else BUTTONS
-    return [[{"text": "%s %s %d" % (icon, WORDS[st], n),
-              "callback_data": _data(st, item, freezer)} for st, icon in states],
+    states = FREEZER_STATES if freezer else STATES
+    return [[{"text": "%d %s" % (n, WORDS[st]),
+              "callback_data": _data(st, item, freezer)} for st in states],
             [{"text": "\u2039 Back", "callback_data": "unpick:0"}]]
 
 
 def rel(use_by, today):
-    """The right-hand column. Short enough to fit RIGHT, relative when near."""
+    """When it's due, in words: "today", "in 3 days", "2 days past", "Oct 14"."""
     days = (use_by - today).days
     if days < 0:
-        return "%dd past" % -days
+        return "%d day%s past" % (-days, "" if days == -1 else "s")
     if days == 0:
         return "today"
     if days == 1:
         return "tomorrow"
     if days < 7:
-        return "in %dd" % days
+        return "in %d days" % days
     return use_by.strftime("%b ") + str(use_by.day)
 
 
@@ -130,50 +126,24 @@ def note(item, today):
     return None
 
 
-def _clip(text, width):
-    return text if len(text) <= width else text[:width - 1] + "…"
-
-
 def _row(left, right):
-    """left and right on one WIDTH line. When they won't fit, the name wraps
-    onto as many lines as it needs and the right column goes under it: the
-    width never changes, and the name is never cut short, since a card is
-    also how someone checks what was saved."""
-    room = WIDTH - len(right) - 1
-    if len(left) <= room:
-        return [left + " " * (WIDTH - len(left) - len(right)) + right]
-    lines = textwrap.wrap(left, WIDTH, subsequent_indent="  ",
-                          break_on_hyphens=False) or [left[:WIDTH]]
-    last = lines[-1]
-    if len(last) + 1 + len(right) <= WIDTH:
-        lines[-1] = last + " " * (WIDTH - len(last) - len(right)) + right
-        return lines
-    return lines + [right.rjust(WIDTH)]
+    """One line: "3 items, about $12". The phone wraps it, not us."""
+    return ["%s, %s" % (left, right) if right else left]
 
 
 def lines_for(n, item, today):
     if item["state"] == "open":
-        left = "%d %s" % (n, item["name"])
-        right = rel(item["use_by_date"], today)
+        line = "%d. %s, %s" % (n, item["name"], rel(item["use_by_date"], today))
     else:
-        left = "%s %s" % (MARK[item["state"]], item["name"])
-        right = OUTCOME[item["state"]]
-    out = _row(left, right)
+        line = "%s %s, %s" % (MARK[item["state"]], item["name"], OUTCOME[item["state"]])
     extra = note(item, today)
-    if extra:
-        out.append(_clip("  " + extra, WIDTH))
-    return out
+    return [line + (" (%s)" % extra if extra else "")]
 
 
 def nudge_title(items, today):
-    """The nudge card's heading, never wider than the card.
-
-    The heading sits outside the monospace block, so a long one widened the
-    bubble past the card: "3 things past their best: check before eating"
-    made every nudge wider than /fridge. With one tier, the heading is that
-    tier, which is also the label the card then drops; the count is already
-    in the footer. With two, a short count, and the sections keep labels.
-    """
+    """The nudge card's heading. With one tier, the heading is that tier,
+    which is also the label the card then drops; the count is already in
+    the footer. With two, a short count, and the sections keep labels."""
     tiers = [sl.tier(i["use_by_date"], today) for i in items]
     if len(set(tiers)) == 1:
         return sl.TIERS[tiers[0]]
@@ -195,10 +165,15 @@ def esc(text):
                      .replace(">", "&gt;"))
 
 
+class Bold(str):
+    """A body line shown in bold: a section heading."""
+
+
 def _html(head, body, closing):
-    # Clipped as a backstop: a heading wider than the card widens the bubble.
-    html = "<b>%s</b>\n<pre>%s</pre>" % (esc(_clip(head, WIDTH)),
-                                        "\n".join(esc(l) for l in body))
+    lines = ["<b>%s</b>" % esc(l) if isinstance(l, Bold) else esc(l) for l in body]
+    # Two bold lines in a row read as one heading: space them apart.
+    gap = "\n" if body and isinstance(body[0], Bold) else ""
+    html = "<b>%s</b>\n%s%s" % (esc(head), gap, "\n".join(lines))
     return html + ("\n" + closing if closing else "")
 
 
@@ -220,23 +195,19 @@ def render(head, items, today, footer, closing=None, label_one_tier=True,
     """
     tiers = {sl.tier(i["use_by_date"], today) for i in items}
     labelled = label_one_tier or len(tiers) > 1
-    body, seen = [RULE], None
+    body, seen = [], None
     for n, item in enumerate(items, 1):
         t = sl.tier(item["use_by_date"], today)
         if t != seen:
             if seen is not None:
                 body.append("")
             if labelled:
-                body.append(sl.TIERS[t].upper())
+                body.append(Bold(sl.TIERS[t]))
             seen = t
-        elif n > 1:
-            # A blank line between items: a name, its date and its warning
-            # read as one unit, and the eye can find item 7 without counting.
-            body.append("")
         body.extend(lines_for(n, item, today))
-    body += [RULE, footer]
+    body += ["", footer]
     for note in notes or ():
-        body += [""] + _wrap(note)
+        body += ["", note]
     html = _html(head, body, closing)
     is_open = [(n, i) for n, i in enumerate(items, 1) if i["state"] == "open"]
     act = actionable or (lambda i: True)
@@ -267,22 +238,21 @@ def settled(kind, item):
 
 def render_freezer(head, items, footer, pick=None):
     """(html, buttons) for /freezer. No tier sections: once frozen, a use-by
-    date stops meaning anything, so the right column is when it went in."""
-    body = [RULE, "FROZEN ON".rjust(WIDTH)]
+    date stops meaning anything, so each line says when it went in."""
+    body = []
     for n, item in enumerate(items, 1):
-        if n > 1:
-            body.append("")
         outcome = item.get("freezer_outcome")
         if outcome:
-            body.extend(_row("%s %s" % (MARK[outcome], item["name"]),
-                             OUTCOME[outcome]))
+            line = "%s %s, %s" % (MARK[outcome], item["name"], OUTCOME[outcome])
             # A binned rescue comes back off the month. Said once, on its
             # line, as a fact about the figure: no verdict (SKILL §20).
             if outcome == "tossed" and fridge.is_rescue("frozen", item["tier"]):
-                body.append("  off this month's count")
+                line += " (off this month's count)"
+            body.append(line)
         else:
-            body.extend(_row("%d %s" % (n, item["name"]), frozen_on(item)))
-    body += [RULE, footer]
+            when = frozen_on(item)
+            body.append("%d. %s%s" % (n, item["name"], ", frozen " + when if when else ""))
+    body += ["", footer]
     numbered = [(n, i) for n, i in enumerate(items, 1)
                 if not i.get("freezer_outcome")]
     return _html(head, body, None), keyboard(numbered, freezer=True, pick=pick)
@@ -310,28 +280,23 @@ def tally(kind, items, more=0):
 
 # --- /month -----------------------------------------------------------------
 
-def _wrap(text, indent=""):
-    return textwrap.wrap(text, width=WIDTH, initial_indent=indent,
-                         subsequent_indent=indent) or [indent]
-
-
 def _month_side(label, items):
     """One side of the ledger: count and money on a line, then how much of it
     was priced and from where. No dollar figure when nothing is priced, for
     the same reason compose_month gives none: "$0" would claim it cost
     nothing, from no data."""
     total, n, by_source = fridge._price_side(items)
-    out = [label]
+    out = [Bold(label)]
     if not n:
-        return out + ["  nothing yet"]
-    count = "  %d item%s" % (n, "" if n == 1 else "s")
+        return out + ["Nothing yet"]
+    count = "%d item%s" % (n, "" if n == 1 else "s")
     n_priced = sum(by_source.values())
     out += _row(count, "about $%d" % total if n_priced else "unpriced")
     if n_priced:
-        priced = "all priced" if n_priced == n else "%d of %d priced" % (n_priced, n)
+        priced = "All priced" if n_priced == n else "%d of %d priced" % (n_priced, n)
         split = ", ".join("%d %s" % (k, src.replace("your ", ""))
                           for src, k in sorted(by_source.items()))
-        out += _wrap("%s: %s" % (priced, split), "  ")
+        out.append("%s: %s" % (priced, split))
     return out
 
 
@@ -345,16 +310,14 @@ def render_month(fig):
     """
     if not fig["rescued"] and not fig["tossed"]:
         return None
-    body = [RULE]
-    body += _month_side("USED BEFORE IT WENT OFF", fig["rescued"])
+    body = _month_side("Used before it went off", fig["rescued"])
     if fig["reversals"]:
         total, n, by_source = fridge._price_side(fig["reversals"])
         money = " (about $%d)" % total if sum(by_source.values()) else ""
-        body += _wrap("%d frozen earlier %s tossed this month%s."
-                      % (n, "was" if n == 1 else "were", money), "  ")
+        body.append("%d frozen earlier %s tossed this month%s."
+                    % (n, "was" if n == 1 else "were", money))
     body.append("")
-    body += _month_side("THROWN AWAY", fig["tossed"])
-    body.append(RULE)
+    body += _month_side("Thrown away", fig["tossed"])
 
     notes = []
     priced = any(fridge._price_side(fig[k])[2] for k in ("rescued", "tossed"))
@@ -365,49 +328,36 @@ def render_month(fig):
         notes.append("%d tier%s reconstructed from before I recorded %s."
                      % (k, "" if k == 1 else "s", "it" if k == 1 else "them"))
     notes.append("Counts only what you've told me here.")
-    for i, note in enumerate(notes):
-        body += ([""] if i else []) + _wrap(note)
+    for note in notes:
+        body += ["", note]
     return _html(fridge._month_name(fig["month"]), body, None)
 
 
 # --- /pantry ----------------------------------------------------------------
 
-def _wrap_names(names, indent=""):
-    """Names joined with commas, wrapped between names, never inside one:
-    "olive / oil" across two lines reads as two things."""
-    lines, cur = [], ""
-    for i, name in enumerate(names):
-        piece = name + ("," if i < len(names) - 1 else "")
-        piece = _clip(piece, WIDTH - len(indent))
-        if cur and len(indent) + len(cur) + 1 + len(piece) > WIDTH:
-            lines.append(indent + cur)
-            cur = piece
-        else:
-            cur = piece if not cur else cur + " " + piece
-    if cur:
-        lines.append(indent + cur)
-    return lines
+def _names(names):
+    """Names on one line, comma-separated: the phone wraps between words."""
+    return ", ".join(names)
 
 
 def render_list(head, sections, footer, notes=None):
     """A card of plain names, no buttons: what was moved, taken back, or is
     remembered. `sections` is [(label, names)]; empty ones are skipped."""
-    body = [RULE]
+    body = []
     for label, names in sections:
         if not names:
             continue
-        if len(body) > 1:
+        if body:
             body.append("")
-        body.append("%s (%d)" % (label, len(names)))
-        body += _wrap_names(names, "  ")
-    body += [RULE, footer]
+        body += [Bold("%s (%d)" % (label, len(names))), _names(names)]
+    body += ["", footer]
     for note in notes or ():
-        body += [""] + _wrap(note)
+        body += ["", note]
     return _html(head, body, None)
 
 
 def render_pantry(head, stable, outside, notes=None):
     """What is remembered but never nudged. Two sections, because pantry and
     counter are the split people get wrong. Names already capped."""
-    return render_list(head, [("PANTRY", stable), ("ON THE COUNTER", outside)],
+    return render_list(head, [("Pantry", stable), ("On the counter", outside)],
                        "Remembered, never nudged", notes)

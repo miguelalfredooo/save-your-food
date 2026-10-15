@@ -235,7 +235,7 @@ model: most recipe sites carry the recipe as structured data, so this is
 fast, free and doesn't depend on the model choosing to fetch. A page without
 that data goes to the model with its text. Owner only, and it works with AI
 mode off too. Lists in AI replies are plain
-`•` lines rather than a monospace block, which Telegram draws as code.
+`•` lines rather than a code block.
 
 **What it costs.** Every model call is logged per person and day, with the
 tokens and, on OpenRouter, the dollar cost the provider reports. The owner
@@ -270,28 +270,28 @@ understanding problem, so the model never touches them.
 Once a day at 16:30 (change `nudge_hour` in `config.json`) it sends **one**
 message, a card, with a numbered line per item and a row of buttons for each:
 
-    1 TONIGHT, 1 TO CHECK
-    ────────────────────────
-    CHECK BEFORE EATING
-    1 cilantro       1d past
+    1 tonight, 1 to check
 
-    TONIGHT OR FREEZE IT
-    2 chicken thighs   today
-    ────────────────────────
+    Check before eating
+    1. cilantro, 1 day past
+
+    Tonight or freeze it
+    2. chicken thighs, today
+
     0 of 2 handled
-    [ 1 ✅ ] [ 1 ❄️ ] [ 1 🗑 ]
-    [ 2 ✅ ] [ 2 ❄️ ] [ 2 🗑 ]
+    [ 1 Used ] [ 1 Froze ] [ 1 Tossed ]
+    [ 2 Used ] [ 2 Froze ] [ 2 Tossed ]
 
-A tap edits the same card: the line becomes `✓ cilantro  used`, its buttons
+A tap edits the same card: the line becomes `✓ cilantro, used`, its buttons
 go, the footer counts up. When every line is handled the card closes, with
 one line under it if this card crossed a milestone. No extra messages arrive.
 
-The card body is a monospace block padded to exactly 36 columns, so every
-card is the same width on a phone instead of each bubble sizing itself to its
-longest line. 36 fits a current phone at the default text size with a small
-margin (about 38 fit). On a very
-small phone or with very large text, lines can wrap: lower `card.WIDTH` then. A long list shows the soonest
-15 and says how many it left out. `card.py` has the reasoning.
+Cards are plain text, one line per item, so they wrap cleanly at any text
+size and a screen reader reads each item in order with its date. They used
+to be a fixed-width code block, which broke apart at large text sizes and
+copied itself on a tap. Buttons say what they do (`1 Used`) rather than
+showing an emoji. A long list shows the soonest 15 and says how many it left
+out. `card.py` has the reasoning.
 
 **Everything that lists food is a card**: the nudge, `/fridge`, `/freezer`,
 `/month`, `/pantry`, the reply to a typed list ("Added to your fridge", with
@@ -307,16 +307,14 @@ due tonight or tomorrow, plus **Mark another item ›** for the rest
 (**Mark an item ›** when nothing is at risk). The card
 after adding food has none: you bought it a moment ago. Past four items with
 buttons, a card shows one row of numbers instead of a row of three buttons
-per item: tap a number, then ✅ Used / ❄️ Froze / 🗑 Tossed, or ‹ Back. A
+per item: tap a number, then Used / Froze / Tossed, or ‹ Back. A
 card keeps the layout it was sent with until it is finished.
 
-The bold heading sits outside the block, so it is kept short enough never to
-widen the card: a nudge whose items share one urgency is headed with that
-urgency ("Check before eating"), and a mixed one with a count ("1 tonight, 1
-to check").
+A nudge whose items share one urgency is headed with that urgency ("Check
+before eating"), and a mixed one with a count ("1 tonight, 1 to check").
 
-`/freezer` is a card too, with two buttons per item: ✅ when it is finished,
-🗑 if it ended up in the bin. Binning something that had counted as used in
+`/freezer` is a card too, with two buttons per item: Used when it is
+finished, Tossed if it ended up in the bin. Binning something that had counted as used in
 time marks its line `off this month's count`.
 
 `/month` is a card with no buttons: what was used before it went off, then
@@ -345,9 +343,9 @@ Apple Reminders skill (`skill/SKILL.md`) and can come across once that question 
 |---|---|
 | `bot.py` | Telegram transport and conversation. The only file that touches the network |
 | `fridge.py` | Storage, list parsing, composing messages |
-| `card.py` | The fixed-width card the nudge, `/fridge` and `/freezer` are drawn as |
+| `card.py` | The card the nudge, `/fridge`, `/freezer` and other lists are drawn as |
 | `shelf_life.py` | The use-by table and risk classes, ported from the skill |
-| `test_logic.py` | 548 tests. `python3 test_logic.py` |
+| `test_logic.py` | 541 tests. `python3 test_logic.py` |
 | `preview.py` | Renders the messages for any date, no token needed. `python3 preview.py 2026-09-26` |
 | `try_chat.py` | Chat with the real handlers in a terminal, no token. `tap 2 used` presses a card button. `python3 try_chat.py -i` |
 | `redate.py` | One-time fix for dates saved as guesses before the table came first. Dry run by default; `--apply` backs up `fridge.db` first |
