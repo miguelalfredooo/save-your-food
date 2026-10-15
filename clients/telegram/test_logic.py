@@ -1420,17 +1420,17 @@ class RecipeSearch(unittest.TestCase):
         finally:
             llm_agent.fetch_recipes = original
         pollo, ropa = result["lines"]   # Pollo uses more fridge food, so it comes first
-        self.assertTrue(pollo.startswith("Pollo Guisado: your "))
+        self.assertTrue(pollo.startswith("**Pollo Guisado**\nUses your "))
         self.assertNotIn("(", pollo)
-        self.assertEqual(
-            ropa, "Ropa Vieja: your roma tomatoes; flank or skirt steak (you'd need to buy this)")
+        self.assertEqual(ropa, "**Ropa Vieja**\nUses your roma tomatoes\n"
+                               "Missing: flank or skirt steak (*you'd need to buy this*)")
         self.assertIn("as they are", result["how_to_list"])
 
     def test_recipe_line_offers_a_swap_from_the_same_family(self):
         line = llm_agent.recipe_line("Ropa Vieja", self.ROPA_VIEJA,
                                      ["ground beef"], ["deli ham"])
-        self.assertEqual(line, "Ropa Vieja: mostly pantry staples; "
-                               "flank or skirt steak (use your ground beef)")
+        self.assertEqual(line, "**Ropa Vieja**\nUses mostly pantry staples\n"
+                               "Missing: flank or skirt steak (*use your ground beef*)")
 
     def test_long_ingredient_lines_count_and_steps_dont(self):
         text = ("Pollo Fricasse\n3 lbs. chicken pieces bone in, skinned\n"
@@ -1444,8 +1444,8 @@ class RecipeSearch(unittest.TestCase):
             "Beef Bourguignon (Julia)",
             "Beef Bourguignon\n6 slices bacon, roughly chopped\n2 sprigs dill",
             ["Fresh dill", "Living Dill"], ["Deli ham"])
-        self.assertEqual(line, "Beef Bourguignon (Julia): your fresh dill; "
-                               "bacon (use your deli ham)")
+        self.assertEqual(line, "**Beef Bourguignon (Julia)**\nUses your fresh dill\n"
+                               "Missing: bacon (*use your deli ham*)")
 
     def test_an_item_the_recipe_names_outright_covers_it(self):
         self.assertEqual(llm_agent.missing_mains(
@@ -1454,8 +1454,19 @@ class RecipeSearch(unittest.TestCase):
     def test_recipe_line_stops_at_a_sentence_after_the_meat(self):
         line = llm_agent.recipe_line(
             "Chuletas", "6-8 thin pork chops no bone. Season with sazon", [], [])
-        self.assertEqual(line, "Chuletas: mostly pantry staples; "
-                               "thin pork chops no bone (you'd need to buy this)")
+        self.assertEqual(line, "**Chuletas**\nUses mostly pantry staples\n"
+                               "Missing: thin pork chops no bone (*you'd need to buy this*)")
+
+    def test_a_recipe_offer_renders_bold_title_and_italic_swap(self):
+        line = llm_agent.recipe_line("Ropa Vieja", self.ROPA_VIEJA, ["onion"], [])
+        html = bot._markdown_to_html(line)
+        self.assertEqual(html, "<b>Ropa Vieja</b>\nUses your onion\n"
+                               "Missing: flank or skirt steak (<i>you'd need to buy this</i>)")
+
+    def test_a_dish_name_is_bold_even_without_its_stars(self):
+        html = bot._markdown_to_html("Ropa Vieja\nUses your onion\n\nPollo\nUses mostly pantry staples")
+        self.assertEqual(html, "<b>Ropa Vieja</b>\nUses your onion\n\n"
+                               "<b>Pollo</b>\nUses mostly pantry staples")
 
     def test_a_cooked_dish_is_not_a_protein_on_hand(self):
         self.assertEqual(llm_agent.proteins(
@@ -2859,8 +2870,7 @@ class Cards(unittest.TestCase):
         items = self._freeze(["milk"])
         self._frz_tap("tossed", items[0]["id"])
         self.assertEqual(len(self.tg.sent), 1)   # no separate "Noted." message
-        self.assertIn("✗ milk, tossed (off this month's count)",
-                      self._body_lines(self.tg.edits[-1]))
+        self.assertIn("✗ milk, tossed\n<i>off this month's count</i>", self.tg.edits[-1])
         self.assertNotIn("<pre>", self.tg.edits[-1])
         row = self.con.execute("SELECT freezer_outcome FROM items WHERE id=?",
                                (items[0]["id"],)).fetchone()
@@ -4712,13 +4722,22 @@ class OneLookForLists(unittest.TestCase):
         label = lines.index("<b>Pantry (7)</b>")
         self.assertEqual(lines[label + 1], ", ".join(names))   # every name whole
 
-    def test_items_in_a_section_sit_on_consecutive_lines(self):
+    def test_items_are_separated_by_a_blank_line(self):
         fridge.add_items(self.con, 1, ["milk", "yogurt", "cheddar"], TODAY)
         html, _ = card.render("h", fridge.open_items(self.con, 1), TODAY, "f")
         body = html.split("\n")
         starts = [i for i, l in enumerate(body) if l[:1].isdigit()]
         self.assertEqual(len(starts), 3)
-        self.assertEqual(starts, list(range(starts[0], starts[0] + 3)))
+        for i in starts[1:]:
+            self.assertEqual(body[i - 1], "")
+
+    def test_a_warning_sits_in_italics_under_its_item(self):
+        fridge.add_items(self.con, 1, ["spinach"], TODAY)
+        self.con.execute("UPDATE items SET estimated=1")
+        html, _ = card.render("h", fridge.open_items(self.con, 1), TODAY, "f")
+        self.assertIn("1. spinach, ", html)
+        self.assertIn("\n<i>date is a guess</i>", html)
+        self.assertNotIn("(date is a guess)", html)
 
     def test_a_long_name_is_never_cut_short(self):
         name = "butter chicken (leftovers) from sunday with the extra sauce"
