@@ -216,7 +216,7 @@ One parent per day, one subtask per expiring item. Title carries the action for 
 
 **Never overstate readiness.** `Ready` and `Need N` are claims about the whole ingredient list. If any ingredient is `?` in `Pantry.md`, the honest title is `check pantry`, and the notes name the unverified items.
 
-**Never put money in a nudge.** No prices, no "that cost $2.49", no running total. A use-it-tonight reminder carrying a price tag is guilt with a number attached. Dollars live in the scorecard (§17) and in answers he asked for (§19).
+**Never put money in a nudge.** No prices, no "that cost $2.49", no running total. A use-it-tonight reminder carrying a price tag is guilt with a number attached. Dollars live in the scorecard (§17) and in answers he asked for (§21).
 
 **Keep parseable dates out of titles.** Reminders reads them and silently attaches a due date.
 
