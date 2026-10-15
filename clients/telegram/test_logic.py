@@ -1430,7 +1430,7 @@ class RecipeSearch(unittest.TestCase):
         line = llm_agent.recipe_line("Ropa Vieja", self.ROPA_VIEJA,
                                      ["ground beef"], ["deli ham"])
         self.assertEqual(line, "**Ropa Vieja**\nUses mostly pantry staples\n"
-                               "Missing: flank or skirt steak (*use your ground beef*)")
+                               "Swap: flank or skirt steak (*use your ground beef*)")
 
     def test_long_ingredient_lines_count_and_steps_dont(self):
         text = ("Pollo Fricasse\n3 lbs. chicken pieces bone in, skinned\n"
@@ -1445,7 +1445,7 @@ class RecipeSearch(unittest.TestCase):
             "Beef Bourguignon\n6 slices bacon, roughly chopped\n2 sprigs dill",
             ["Fresh dill", "Living Dill"], ["Deli ham"])
         self.assertEqual(line, "**Beef Bourguignon (Julia)**\nUses your fresh dill\n"
-                               "Missing: bacon (*use your deli ham*)")
+                               "Swap: bacon (*use your deli ham*)")
 
     def test_an_item_the_recipe_names_outright_covers_it(self):
         self.assertEqual(llm_agent.missing_mains(
@@ -1475,7 +1475,7 @@ class RecipeSearch(unittest.TestCase):
     def test_offers_are_put_back_when_the_model_bullets_them(self):
         reply = ("Here's what you can make:\n"
                  "- Spaghetti Bolognese: your carrots; ground beef (you'd need to buy this)\n"
-                 "- **Lentil Soup**\n  - Uses your leeks\n"
+                 "- **Lentil Soup**\n  - Uses your leeks\n  - Swap: nothing\n"
                  "Want the full recipe for one?")
         self.assertEqual(llm_agent.place_offers(reply, self.OFFERS),
                          "Here's what you can make:\n\n" + self.OFFERS[0] + "\n\n"
@@ -1605,6 +1605,41 @@ class RecipeSearch(unittest.TestCase):
         listing = "\n".join("- item %d" % i for i in range(8))
         reply = self._turn({"choices": [{"message": {"role": "assistant", "content": listing}}]})
         self.assertEqual(reply, listing)
+
+    def test_another_cut_of_the_same_meat_is_offered_as_a_swap(self):
+        line = llm_agent.recipe_line(
+            "Chicken Piccata", "2 boneless chicken breasts\n1 lemon",
+            ["Chicken thighs", "Chicken legs (bone-in)", "Lemon"], [])
+        self.assertEqual(line, "**Chicken Piccata**\nUses your lemon\n"
+                               "Swap: boneless chicken breasts (*use your chicken thighs or chicken legs*)")
+
+    def test_the_cut_they_have_needs_no_note(self):
+        text = "2 lbs boneless, skinless chicken thighs\n1 onion"
+        self.assertEqual(llm_agent.recipe_line("Stew", text, ["chicken thighs (2 lbs)"], []),
+                         "**Stew**\nUses your chicken thighs")
+        self.assertEqual(llm_agent.recipe_line("Stew", "1 whole chicken", ["chicken"], []),
+                         "**Stew**\nUses your chicken")
+
+    def test_a_swap_and_a_buy_get_their_own_lines(self):
+        line = llm_agent.recipe_line(
+            "Surf and Turf", "1 lb chicken breast\n1 lb shrimp", ["chicken thighs"], [])
+        self.assertEqual(line, "**Surf and Turf**\nUses mostly pantry staples\n"
+                               "Swap: chicken breast (*use your chicken thighs*)\n"
+                               "Missing: shrimp (*you'd need to buy this*)")
+
+    def test_a_full_recipe_notes_the_cut_to_use(self):
+        msg = llm_agent.recipe_message("Piccata", "Piccata\n2 chicken breasts\nCook it.",
+                                       ["chicken thighs"], [])
+        self.assertIn("2 chicken breasts (*use your chicken thighs*)", msg)
+
+    def test_pork_and_ham_are_not_offered_ground_beef(self):
+        line = llm_agent.recipe_line(
+            "Pork Night", "4 pork chops\n1/3 cup ham steak\n1 lb of chicken breast",
+            ["ground beef", "chicken thighs"], [])
+        self.assertEqual(line, "**Pork Night**\nUses mostly pantry staples\n"
+                               "Swap: chicken breast (*use your chicken thighs*)\n"
+                               "Missing: pork chops (*you'd need to buy this*), "
+                               "ham steak (*you'd need to buy this*)")
 
     def test_a_cooked_dish_is_not_a_protein_on_hand(self):
         self.assertEqual(llm_agent.proteins(
