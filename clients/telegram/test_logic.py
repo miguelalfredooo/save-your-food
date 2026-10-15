@@ -1468,6 +1468,82 @@ class RecipeSearch(unittest.TestCase):
         self.assertEqual(html, "<b>Ropa Vieja</b>\nUses your onion\n\n"
                                "<b>Pollo</b>\nUses mostly pantry staples")
 
+    OFFERS = ["**Spaghetti Bolognese**\nUses your carrots\n"
+              "Missing: ground beef (*you'd need to buy this*)",
+              "**Lentil Soup**\nUses your leeks"]
+
+    def test_offers_are_put_back_when_the_model_bullets_them(self):
+        reply = ("Here's what you can make:\n"
+                 "- Spaghetti Bolognese: your carrots; ground beef (you'd need to buy this)\n"
+                 "- **Lentil Soup**\n  - Uses your leeks\n"
+                 "Want the full recipe for one?")
+        self.assertEqual(llm_agent.place_offers(reply, self.OFFERS),
+                         "Here's what you can make:\n\n" + self.OFFERS[0] + "\n\n"
+                         + self.OFFERS[1] + "\n\nWant the full recipe for one?")
+
+    def test_a_reply_that_names_no_offer_is_left_alone(self):
+        self.assertEqual(llm_agent.place_offers("Nothing close, sorry.", self.OFFERS),
+                         "Nothing close, sorry.")
+
+    def test_a_recipe_turn_is_remembered_by_dish_names_only(self):
+        fridge.add_items(self.con, 1, ["carrots"], TODAY)
+        original = llm_agent.fetch_recipes
+        llm_agent.fetch_recipes = lambda: [{"title": "Lentil Soup", "text": "2 carrots"}]
+        turns = iter([
+            {"choices": [{"message": {"role": "assistant", "tool_calls": [
+                {"id": "t1", "type": "function", "function": {
+                    "name": "search_recipes", "arguments": "{}"}}]}}]},
+            {"choices": [{"message": {"role": "assistant",
+                                      "content": "- Lentil Soup: your carrots"}}]},
+        ])
+        try:
+            reply = llm_agent.run_agent(self.con, 1, "what can I make?", CFG,
+                                        today=TODAY, caller=lambda m: next(turns))
+        finally:
+            llm_agent.fetch_recipes = original
+        self.assertEqual(reply, "**Lentil Soup**\nUses your carrots")
+        remembered = json.loads(fridge.get_pref(self.con, 1, llm_agent.HISTORY_KEY))
+        self.assertNotIn("Uses your", remembered[-1]["reply"])
+        self.assertIn("Lentil Soup", remembered[-1]["reply"])
+        self.assertIn("call search_recipes again", remembered[-1]["reply"])
+
+    def test_an_old_recipe_list_in_memory_is_not_shown_to_the_model(self):
+        now = datetime.now()
+        fridge.set_pref(self.con, 1, llm_agent.HISTORY_KEY, json.dumps([
+            {"at": now.isoformat(), "user": "what can I make",
+             "reply": "- Bolognese: your carrots; ground beef (you'd need to buy this)"},
+            {"at": now.isoformat(), "user": "ate the kale", "reply": "Got it."}]))
+        msgs = llm_agent._history_messages(self.con, 1, now)
+        self.assertNotIn("Bolognese", msgs[1]["content"])
+        self.assertIn("call search_recipes again", msgs[1]["content"])
+        self.assertEqual(msgs[3]["content"], "Got it.")
+
+    def _reply_without_searching(self, content):
+        fridge.add_items(self.con, 1, ["carrots"], TODAY)
+        original = llm_agent.fetch_recipes
+        llm_agent.fetch_recipes = lambda: [{"title": "Lentil Soup", "text": "2 carrots"}]
+        try:
+            return llm_agent.run_agent(
+                self.con, 1, "what else?", CFG, today=TODAY,
+                caller=lambda m: {"choices": [{"message": {"role": "assistant",
+                                                           "content": content}}]})
+        finally:
+            llm_agent.fetch_recipes = original
+
+    def test_a_copied_recipe_list_is_replaced_by_a_real_search(self):
+        reply = self._reply_without_searching(
+            "- Bolognese: your carrots; ground beef (you'd need to buy this)")
+        self.assertEqual(reply, "**Lentil Soup**\nUses your carrots")
+
+    def test_an_echoed_memory_note_is_replaced_by_a_real_search(self):
+        reply = self._reply_without_searching(
+            "(I offered these from search_recipes: Chicken and Rice Skillet.)")
+        self.assertEqual(reply, "**Lentil Soup**\nUses your carrots")
+
+    def test_an_ordinary_reply_is_not_searched(self):
+        self.assertEqual(self._reply_without_searching("Got it, kale's gone."),
+                         "Got it, kale's gone.")
+
     def test_a_cooked_dish_is_not_a_protein_on_hand(self):
         self.assertEqual(llm_agent.proteins(
             ["Butter chicken", "Vienna sausages", "Deli ham", "boneless chicken thighs"]),

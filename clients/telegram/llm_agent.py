@@ -1436,11 +1436,23 @@ def _history(con, chat_id, now):
     return [t for t in turns if t.get("at", "") >= cutoff][-HISTORY_TURNS:]
 
 
+# Marks of a recipe list, in this shape or an older one.
+_OFFER_MARKS = re.compile(r"you'd need to buy this|\(\*?use your |^\s*uses (your|mostly) ",
+                          re.I | re.M)
+
+
 def _history_messages(con, chat_id, now):
     out = []
     for t in _history(con, chat_id, now):
+        reply = t["reply"]
+        # A remembered recipe list, even one saved before replies were
+        # trimmed, is shown as a note: a small model given the list copies
+        # it rather than calling search_recipes, and then remembers the copy.
+        if _OFFER_MARKS.search(reply):
+            reply = ("(I offered recipes from search_recipes here. For another "
+                     "list, call search_recipes again.)")
         out += [{"role": "user", "content": t["user"]},
-                {"role": "assistant", "content": t["reply"]}]
+                {"role": "assistant", "content": reply}]
     return out
 
 
@@ -1457,6 +1469,58 @@ def _remember(con, chat_id, user_text, reply, now):
 
 
 _LINK_RE = re.compile(r"https://[^\s<>\"')\]]+")
+_LIST_MARK = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s+")
+# Lines a model splits an offer into, or keeps from an older shape of one.
+_OFFER_TAIL = re.compile(r"^(uses|missing|your)\b", re.I)
+
+
+def _offer_title(block):
+    return block.split("\n", 1)[0].strip().strip("*").strip()
+
+
+def place_offers(reply, offers):
+    """The model's reply with each recipe it offered put back in the shape
+    search_recipes wrote, whatever the model did to it: a small model turns
+    the blocks into one-line bullets, drops the stars, runs them together.
+    A line naming an offered dish becomes that dish's block, the lines it
+    split the block into go, and the blocks get a blank line between them.
+    Anything else the model said stays as it was."""
+    by_title = {_offer_title(b).lower(): b for b in offers}
+
+    def title_of(line):
+        bare = _LIST_MARK.sub("", line).strip().strip("*").strip().lower()
+        return next((t for t in by_title if bare.startswith(t)), None)
+
+    out, lines, i = [], reply.split("\n"), 0
+    while i < len(lines):
+        t = title_of(lines[i])
+        if t is None:
+            out.append(lines[i])
+            i += 1
+            continue
+        if out and out[-1].strip():
+            out.append("")
+        out += [by_title[t], ""]
+        i += 1
+        while (i < len(lines) and lines[i].strip() and title_of(lines[i]) is None
+               and _OFFER_TAIL.match(_LIST_MARK.sub("", lines[i]).strip().strip("*"))):
+            i += 1
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip()
+
+
+def _looks_like_offers(reply):
+    return bool(_OFFER_MARKS.search(reply)) or "search_recipes" in reply
+
+
+def _remembered_reply(reply, offers):
+    """What the next turn sees of this one. A recipe list is kept as its
+    dish names only: given the whole list, a small model answers the next
+    "what can I make?" by copying it, old shape and stale fridge included,
+    instead of searching again."""
+    if not offers:
+        return reply
+    return ("(I offered these from search_recipes: %s. For another list, "
+            "call search_recipes again.)" % ", ".join(_offer_title(b) for b in offers))
 
 
 def run_agent(con, chat_id, text, cfg, today=None, caller=None, image_b64=None,
@@ -1503,6 +1567,7 @@ def run_agent(con, chat_id, text, cfg, today=None, caller=None, image_b64=None,
         {"role": "user", "content": user_content},
     ]
 
+    offers = []   # recipe blocks search_recipes wrote this turn
     for _ in range(MAX_TOOL_ROUNDS):
         try:
             resp = call(messages)
@@ -1522,8 +1587,17 @@ def run_agent(con, chat_id, text, cfg, today=None, caller=None, image_b64=None,
         tool_calls = choice.get("tool_calls")
         if not tool_calls:
             reply = choice.get("content") or "..."
+            if not offers and recipes and _looks_like_offers(reply):
+                # It answered with a recipe list without searching: a copy
+                # of an earlier turn, or names it made up. Search for it.
+                found = exec_search_recipes(con, chat_id, {}, today)
+                offers = list(found.get("lines") or [])
+                reply = ("\n\n".join(offers) if offers else
+                         "I didn't find a recipe of yours that fits what you have.")
+            if offers:
+                reply = place_offers(reply, offers)
             try:
-                _remember(con, chat_id, remembered, reply, now)
+                _remember(con, chat_id, remembered, _remembered_reply(reply, offers), now)
             except Exception as e:   # memory must never cost the user a reply
                 print("! llm_agent history not saved: %s" % e)
             return reply
@@ -1559,6 +1633,8 @@ def run_agent(con, chat_id, text, cfg, today=None, caller=None, image_b64=None,
                           % (name, " ".join(str(e).split())[:200]))
                     result = {"error": "That didn't work; check the details "
                                        "and try again."}
+            if name == "search_recipes" and isinstance(result, dict):
+                offers = list(result.get("lines") or [])
             messages.append({
                 "role": "tool",
                 "tool_call_id": tc["id"],
