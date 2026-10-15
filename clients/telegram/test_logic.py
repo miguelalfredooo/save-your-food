@@ -1544,6 +1544,68 @@ class RecipeSearch(unittest.TestCase):
         self.assertEqual(self._reply_without_searching("Got it, kale's gone."),
                          "Got it, kale's gone.")
 
+    BOLOGNESE = {"title": "Spaghetti Bolognese",
+                 "text": "Spaghetti Bolognese\n\nIngredients\n\n1 carrot, grated\n"
+                         "3/4 pound ground beef\n1 can whole tomatoes\n\n"
+                         "Brown the beef. Add the rest."}
+
+    def test_find_recipe_takes_the_words_people_use(self):
+        recipes = [self.BOLOGNESE, {"title": "Bolognese Lasagna Bake", "text": ""},
+                   {"title": "Lentil Soup", "text": ""}]
+        self.assertEqual(llm_agent.find_recipe(recipes, "the bolognese")["title"],
+                         "Spaghetti Bolognese")
+        self.assertEqual(llm_agent.find_recipe(recipes, "Lentil Soup")["title"], "Lentil Soup")
+        self.assertIsNone(llm_agent.find_recipe(recipes, "pad thai"))
+
+    def test_recipe_message_is_the_note_as_written_plus_the_swap(self):
+        msg = llm_agent.recipe_message(self.BOLOGNESE["title"], self.BOLOGNESE["text"],
+                                       ["carrots"], [])
+        self.assertEqual(msg, "**Spaghetti Bolognese**\n\nIngredients\n\n1 carrot, grated\n"
+                              "3/4 pound ground beef (*you'd need to buy this*)\n"
+                              "1 can whole tomatoes\n\nBrown the beef. Add the rest.")
+
+    def test_a_long_recipe_is_cut_at_a_line_with_a_pointer_to_notes(self):
+        text = "Big Stew\n" + "\n".join("line %d of the stew" % i for i in range(400))
+        msg = llm_agent.recipe_message("Big Stew", text, [], [])
+        self.assertLess(len(msg), 4096)
+        self.assertTrue(msg.endswith("(The rest is in your Notes.)"))
+
+    def _turn(self, *messages):
+        fridge.add_items(self.con, 1, ["carrots"], TODAY)
+        original = llm_agent.fetch_recipes
+        llm_agent.fetch_recipes = lambda: [self.BOLOGNESE]
+        turns = iter(messages)
+        try:
+            return llm_agent.run_agent(self.con, 1, "show me the bolognese", CFG,
+                                       today=TODAY, caller=lambda m: next(turns))
+        finally:
+            llm_agent.fetch_recipes = original
+
+    def test_show_recipe_sends_the_saved_text_not_the_model_s(self):
+        reply = self._turn(
+            {"choices": [{"message": {"role": "assistant", "tool_calls": [
+                {"id": "t1", "type": "function", "function": {
+                    "name": "show_recipe", "arguments": '{"title": "the bolognese"}'}}]}}]},
+            {"choices": [{"message": {"role": "assistant",
+                                      "content": "Here it is:\n- 1 lb ground beef"}}]})
+        self.assertTrue(reply.startswith("**Spaghetti Bolognese**"))
+        self.assertIn("3/4 pound ground beef", reply)
+        self.assertNotIn("1 lb", reply)
+        remembered = json.loads(fridge.get_pref(self.con, 1, llm_agent.HISTORY_KEY))
+        self.assertEqual(remembered[-1]["reply"], "Sent the full recipe for Spaghetti Bolognese.")
+
+    def test_a_recipe_the_model_writes_out_is_swapped_for_the_saved_one(self):
+        invented = ("Spaghetti Bolognese\n- 1 lb ground beef\n- 1 onion\n- 2 garlic\n"
+                    "- 1 carrot\n1. Brown the beef.\n2. Add the rest.")
+        reply = self._turn({"choices": [{"message": {"role": "assistant", "content": invented}}]})
+        self.assertIn("3/4 pound ground beef", reply)
+        self.assertNotIn("1 lb", reply)
+
+    def test_a_long_list_that_is_not_a_saved_recipe_is_left_alone(self):
+        listing = "\n".join("- item %d" % i for i in range(8))
+        reply = self._turn({"choices": [{"message": {"role": "assistant", "content": listing}}]})
+        self.assertEqual(reply, listing)
+
     def test_a_cooked_dish_is_not_a_protein_on_hand(self):
         self.assertEqual(llm_agent.proteins(
             ["Butter chicken", "Vienna sausages", "Deli ham", "boneless chicken thighs"]),
@@ -1998,7 +2060,7 @@ class RecipeDraft(unittest.TestCase):
     def test_no_model_tool_writes_to_notes(self):
         names = {t["function"]["name"] for t in llm_agent.TOOLS}
         self.assertEqual(names, {"add_items", "update_item", "remove_item", "list_items",
-                                 "month_summary", "search_recipes",
+                                 "month_summary", "search_recipes", "show_recipe",
                                  "fetch_recipe_page", "draft_recipe"})
         self.assertEqual(set(llm_agent.TOOL_EXECUTORS), names)
 

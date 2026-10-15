@@ -101,16 +101,10 @@ draft with Save and Cancel buttons, and only their tap saves it. Never
 say it's saved.
 
 Showing one recipe in full, once they pick it or ask for it
-directly: the same shape every time, plain text, no headers, no
-horizontal rules, no emoji:
-- The recipe's own title
-- Ingredients as a "- " bulleted list, one per line
-- Then the steps, as plain sentences or numbered lines
-Quote it as written in their notes. The one addition: after an
-ingredient they don't have, the same swap in parentheses, the
-original line left as it is. Never reword, shorten, or
-invent a step — if something in it is unclear or missing, say so
-rather than filling it in.
+directly: call show_recipe with its name. The bot sends the recipe
+exactly as saved, with any swap for an ingredient they don't have,
+the original line left as it is. Never write out a recipe, its
+ingredients or its steps yourself: you'd be inventing them.
 
 HOW YOU TALK
 - 1-3 short sentences, like a text from a friend.
@@ -282,6 +276,20 @@ TOOLS = [
                            "ingredients: check each recipe's text for them "
                            "and name a swap from what the user has.",
             "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "show_recipe",
+            "description": "Send one of the user's saved recipes in full, "
+                           "exactly as written in their notes. Call it "
+                           "whenever they pick a recipe or ask to see one, "
+                           "with its title or the words they used (\"the "
+                           "bolognese\"). The bot sends the recipe itself: "
+                           "never write a recipe out yourself.",
+            "parameters": {"type": "object", "properties": {
+                "title": {"type": "string"}}, "required": ["title"]},
         },
     },
     {
@@ -742,6 +750,13 @@ def _swap(word, available):
     return next((p for p in proteins(available) if _main_word(p) in family), None)
 
 
+def _swap_note(word, available):
+    """What goes in the brackets after a missing protein."""
+    swap = _swap(word, available)
+    return ("use your %s" % swap.split("(")[0].strip().lower() if swap
+            else "you'd need to buy this")
+
+
 def _and(names):
     return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
 
@@ -774,12 +789,74 @@ def recipe_line(title, text, fridge_names, pantry_names):
         at = re.search(r"\b%s" % word, name)
         cut = re.search(r",|\. ", name[at.end() if at else 0:])
         name = name[:(at.end() if at else 0) + cut.start()] if cut else name
-        swap = _swap(word, list(fridge_names) + list(pantry_names))
-        gaps.append("%s (*%s*)" % (name, "use your %s" % swap.split("(")[0].strip().lower()
-                                   if swap else "you'd need to buy this"))
+        gaps.append("%s (*%s*)" % (name, _swap_note(word, list(fridge_names) + list(pantry_names))))
     if gaps:
         lines.append("Missing: " + ", ".join(gaps))
     return "\n".join(lines)
+
+
+# A recipe sent in full has to fit one Telegram message (4096).
+MAX_RECIPE_MESSAGE = 3500
+_FILLER = {"the", "a", "an", "my", "recipe", "for", "of", "your", "that", "one"}
+
+
+def find_recipe(recipes, query):
+    """The saved recipe a name or a few words point at, or None: "the
+    bolognese" finds "Spaghetti Bolognese". An exact title wins, then a
+    title containing the words, the shortest such title first."""
+    q = (query or "").strip().lower()
+    if not q:
+        return None
+    for r in recipes:
+        if r["title"].strip().lower() == q:
+            return r
+    words = [w for w in re.findall(r"[\w']+", q) if w not in _FILLER]
+    if not words:
+        return None
+    hits = [r for r in recipes
+            if all(re.search(r"\b" + re.escape(w), r["title"].lower()) for w in words)]
+    return min(hits, key=lambda r: len(r["title"])) if hits else None
+
+
+def recipe_message(title, text, fridge_names, pantry_names):
+    """A saved recipe as the bot sends it: the title in bold, then the note
+    exactly as written. The one addition is the same swap the offers give,
+    in italic brackets after a protein line they don't have. Nothing is
+    reworded: the model never writes this, so it can't invent a step."""
+    available = list(fridge_names) + list(pantry_names)
+    lines = text.replace("\xa0", " ").split("\n")
+    while lines and (not lines[0].strip() or lines[0].strip().lower() == title.strip().lower()):
+        lines.pop(0)
+    notes = {item: _swap_note(word, available) for item, word in _missing(title, text, available)}
+    out = []
+    for line in lines:
+        item = line.split("(")[0].strip()
+        if item in notes:
+            line = "%s (*%s*)" % (line.rstrip(), notes.pop(item))
+        out.append(line)
+    body = re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip()
+    if len(body) > MAX_RECIPE_MESSAGE:
+        body = body[:body.rfind("\n", 0, MAX_RECIPE_MESSAGE)].rstrip() + \
+            "\n\n(The rest is in your Notes.)"
+    return "**%s**\n\n%s" % (title.strip(), body)
+
+
+def exec_show_recipe(con, chat_id, args, today):
+    recipes = fetch_recipes()
+    if recipes is None:
+        return {"error": "Could not reach Apple Notes right now, and there's "
+                         "no saved copy yet to fall back on."}
+    r = find_recipe(recipes, args.get("title"))
+    if r is None:
+        return {"error": "No saved recipe by that name.",
+                "titles": [x["title"] for x in recipes][:80]}
+    return {"shown": r["title"],
+            "note": "The bot sends this recipe itself, exactly as saved. "
+                    "Don't write any of it out.",
+            "_message": recipe_message(
+                r["title"], r["text"],
+                [i["name"] for i in fridge.open_items(con, chat_id)],
+                [i["name"] for i in fridge.pantry_items(con, chat_id)])}
 
 
 def exec_search_recipes(con, chat_id, args, today):
@@ -1174,6 +1251,7 @@ TOOL_EXECUTORS = {
     "remove_item": lambda con, chat_id, args, today: exec_remove_item(con, chat_id, args),
     "list_items": lambda con, chat_id, args, today: exec_list_items(con, chat_id, today),
     "search_recipes": lambda con, chat_id, args, today: exec_search_recipes(con, chat_id, args, today),
+    "show_recipe": lambda con, chat_id, args, today: exec_show_recipe(con, chat_id, args, today),
     "fetch_recipe_page": lambda con, chat_id, args, today: exec_fetch_recipe_page(con, chat_id, args, today),
     "draft_recipe": lambda con, chat_id, args, today: exec_draft_recipe(con, chat_id, args, today),
 }
@@ -1382,7 +1460,7 @@ def call_ollama(base_url, model, messages, tools, timeout=LOCAL_REQUEST_TIMEOUT)
 # Every tool that reads, drafts toward or fetches for the owner's Notes.
 # Fetching counts too: it only exists to feed a draft, and it is the one
 # tool that makes the owner's computer connect somewhere.
-RECIPE_TOOLS = frozenset({"search_recipes", "fetch_recipe_page", "draft_recipe"})
+RECIPE_TOOLS = frozenset({"search_recipes", "show_recipe", "fetch_recipe_page", "draft_recipe"})
 
 
 def tools_for(recipes=True):
@@ -1508,6 +1586,16 @@ def place_offers(reply, offers):
     return re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip()
 
 
+def _looks_like_a_recipe(reply):
+    """Six or more list or numbered lines: an ingredient list and steps."""
+    return sum(1 for l in reply.split("\n") if _LIST_MARK.match(l)) >= 6
+
+
+def _first_line(reply):
+    first = next((l for l in reply.split("\n") if l.strip()), "")
+    return re.sub(r"[*#_:]", "", _LIST_MARK.sub("", first)).strip()
+
+
 def _looks_like_offers(reply):
     return bool(_OFFER_MARKS.search(reply)) or "search_recipes" in reply
 
@@ -1568,6 +1656,7 @@ def run_agent(con, chat_id, text, cfg, today=None, caller=None, image_b64=None,
     ]
 
     offers = []   # recipe blocks search_recipes wrote this turn
+    shown = None  # (title, message) show_recipe found this turn
     for _ in range(MAX_TOOL_ROUNDS):
         try:
             resp = call(messages)
@@ -1587,6 +1676,19 @@ def run_agent(con, chat_id, text, cfg, today=None, caller=None, image_b64=None,
         tool_calls = choice.get("tool_calls")
         if not tool_calls:
             reply = choice.get("content") or "..."
+            if not shown and recipes and _looks_like_a_recipe(reply):
+                # It wrote a recipe out instead of calling show_recipe. If
+                # it named one of theirs, send that one as saved.
+                found = exec_show_recipe(con, chat_id, {"title": _first_line(reply)}, today)
+                if found.get("shown"):
+                    shown = (found["shown"], found["_message"])
+            if shown:
+                try:
+                    _remember(con, chat_id, remembered,
+                              "Sent the full recipe for %s." % shown[0], now)
+                except Exception as e:   # memory must never cost the user a reply
+                    print("! llm_agent history not saved: %s" % e)
+                return shown[1]
             if not offers and recipes and _looks_like_offers(reply):
                 # It answered with a recipe list without searching: a copy
                 # of an earlier turn, or names it made up. Search for it.
@@ -1635,6 +1737,9 @@ def run_agent(con, chat_id, text, cfg, today=None, caller=None, image_b64=None,
                                        "and try again."}
             if name == "search_recipes" and isinstance(result, dict):
                 offers = list(result.get("lines") or [])
+            if name == "show_recipe" and isinstance(result, dict) and result.get("shown"):
+                # The recipe goes to the user, not back through the model.
+                shown = (result["shown"], result.pop("_message"))
             messages.append({
                 "role": "tool",
                 "tool_call_id": tc["id"],
