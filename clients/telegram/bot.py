@@ -528,7 +528,7 @@ def _capped_item_list(names, max_chars=MAX_CAPTION_LIST_CHARS):
     Telegram's hard message length limit. Truncating the finished HTML at
     send time would risk cutting a message off mid-tag; capping the list
     itself, while it is still plain names, can't ever produce a broken
-    <pre> block."""
+    tag."""
     joined = ", ".join(names)
     if len(joined) <= max_chars:
         return joined
@@ -684,9 +684,8 @@ def send_sample_nudge(tg, con, chat_id, today=None):
 #
 # The model writes plain markdown (**bold**, *italic*, `code`) and, when
 # asked to list more than one thing, "- " bulleted lines (the system prompt
-# asks for exactly this). Telegram needs HTML to render any of it: a run of
-# bulleted lines goes in a <pre> block so a phone's proportional font can't
-# scramble the alignment, and everything else gets ordinary inline markdown.
+# asks for exactly this). Telegram needs HTML to render any of it: bulleted
+# lines become plain "•" lines, and everything gets ordinary inline markdown.
 
 _BULLET_RE = re.compile(r"^\s*[-*•]\s+")
 _HEADER_RE = re.compile(r"^\s*#{1,6}\s+(.*)$")
@@ -749,7 +748,7 @@ def _markdown_to_html(text):
         if _BULLET_RE.match(line):
             # Plain "•" lines, not a <pre> block: Telegram draws <pre> as
             # code, with a copy icon, and a list of words has no columns
-            # worth keeping. The cards keep <pre>; they do have columns.
+            # worth keeping. The cards are plain text too.
             item = _BULLET_RE.sub("", line, count=1)
             blocks.append("• " + _inline_markdown(card.esc(item)))
             i += 1
@@ -1359,8 +1358,8 @@ def send_undo(tg, con, chat_id):
         return
     tg.send(chat_id, card.render_list(
         "Took back your last list",
-        [("TRACKED", _capped_names(r["tracked"])),
-         ("PANTRY", _capped_names(r["pantry"]))],
+        [("Tracked", _capped_names(r["tracked"])),
+         ("Pantry", _capped_names(r["pantry"]))],
         "Removed. Nothing kept."), html=True)
 
 

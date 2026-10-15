@@ -2704,7 +2704,7 @@ class BotHandlers(unittest.TestCase):
 
 
 class Cards(unittest.TestCase):
-    """The nudge and /fridge are one fixed-width message that edits itself."""
+    """The nudge and /fridge are one plain-text message that edits itself."""
 
     def setUp(self):
         self.con = fridge.connect(tempfile.mktemp(suffix=".db"))
@@ -2715,8 +2715,10 @@ class Cards(unittest.TestCase):
         fridge.add_items(self.con, 1, names, TODAY)
         return fridge.open_items(self.con, 1)
 
-    def _pre_lines(self, html):
-        body = html.split("<pre>", 1)[1].split("</pre>", 1)[0]
+    def _body_lines(self, html):
+        """The card's lines under its heading, unescaped. Section labels keep
+        their <b> tags, so a test can tell a label from an item."""
+        body = html.split("\n", 1)[1]
         return [l.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
                 for l in body.split("\n")]
 
@@ -2726,20 +2728,20 @@ class Cards(unittest.TestCase):
                           "message_id": message_id}}
         bot.handle_callback(self.tg, self.con, cb, CFG)
 
-    def test_every_line_is_exactly_card_width(self):
+    def test_no_card_is_a_code_block(self):
         items = self._items(["milk", "chicken thighs", "a very long name for leftover curry"])
         html, _ = card.render("head", items, self.day, card.tally("nudge", items))
-        for line in self._pre_lines(html):
-            if line:
-                self.assertLessEqual(len(line), card.WIDTH, line)
-        self.assertIn(card.RULE, self._pre_lines(html))
+        self.assertNotIn("<pre>", html)
+        self.assertNotIn("\u2500", html)          # no ruled line either
+        self.assertTrue(any("a very long name for leftover curry, " in l
+                            for l in self._body_lines(html)))
 
-    def test_item_lines_are_padded_to_the_full_width(self):
+    def test_each_open_item_is_one_line_with_its_date(self):
         items = self._items(["milk"])
         html, _ = card.render("head", items, self.day, card.tally("nudge", items))
-        row = [l for l in self._pre_lines(html) if l.startswith("1 milk")][0]
-        self.assertEqual(len(row), card.WIDTH)
-        self.assertTrue(row.endswith("past"))
+        rows = [l for l in self._body_lines(html) if l.startswith("1. ")]
+        self.assertEqual(rows, ["1. milk, %s" % card.rel(items[0]["use_by_date"], self.day)])
+        self.assertTrue(rows[0].endswith("days past"))
 
     def test_a_food_name_is_escaped(self):
         items = self._items(["<3 cilantro"])
@@ -2768,8 +2770,7 @@ class Cards(unittest.TestCase):
         self.assertEqual(len(self.tg.sent), 1)
         self.assertEqual(len(self.tg.edits), 1)
         self.assertIn("1 of 2 handled", self.tg.edits[-1])
-        self.assertTrue(any(l.startswith("✓ " + items[0]["name"]) and l.endswith("used")
-                            for l in self._pre_lines(self.tg.edits[-1])))
+        self.assertIn("✓ %s, used" % items[0]["name"], self._body_lines(self.tg.edits[-1]))
         self.assertEqual(len(self.tg.edit_buttons[-1]), 1)   # its row is gone
 
     def test_finishing_a_card_closes_it_in_place(self):
@@ -2778,7 +2779,8 @@ class Cards(unittest.TestCase):
         self._tap("used", items[0]["id"])
         self._tap("frozen", items[1]["id"])
         self.assertIn("All 2 handled", self.tg.edits[-1])
-        self.assertEqual(self.tg.edits[-1].count("<pre>"), 1)   # just the card
+        self.assertEqual(self.tg.edits[-1].count("handled"), 1)   # just the card
+        self.assertNotIn("<pre>", self.tg.edits[-1])
         self.assertIsNone(self.tg.edit_buttons[-1])
         self.assertEqual(len(self.tg.sent), 1)
 
@@ -2787,7 +2789,8 @@ class Cards(unittest.TestCase):
         bot.send_nudge(self.tg, self.con, 1, self.day)
         self._tap("tossed", items[0]["id"])
         self.assertIn("All 1 handled", self.tg.edits[-1])
-        self.assertEqual(self.tg.edits[-1].count("<pre>"), 1)
+        self.assertEqual(self.tg.edits[-1].count("handled"), 1)   # just the card
+        self.assertIn("✗ milk, tossed", self._body_lines(self.tg.edits[-1]))
         self.assertEqual(len(self.tg.sent), 1)   # and no "Noted." either
 
     def test_a_long_list_is_capped_and_says_so(self):
@@ -2810,7 +2813,8 @@ class Cards(unittest.TestCase):
         self._items(["milk"])
         bot.handle_message(self.tg, self.con,
                            {"chat": {"id": 1, "type": "private"}, "text": "/fridge"}, CFG)
-        self.assertIn("<pre>", self.tg.sent[-1])
+        self.assertTrue(self.tg.sent[-1].startswith("<b>In your fridge</b>\n"))
+        self.assertNotIn("<pre>", self.tg.sent[-1])
         self.assertIn("1 tracked", self.tg.sent[-1])
         self.assertTrue(self.tg.buttons[-1])
 
@@ -2837,12 +2841,12 @@ class Cards(unittest.TestCase):
         self.assertEqual(len(self.tg.buttons[0][0]), 2)
         self.assertTrue(self.tg.buttons[0][0][0]["callback_data"].startswith("frz:used:"))
 
-    def test_freezer_lines_are_card_width_and_show_when_it_went_in(self):
+    def test_freezer_lines_say_when_it_went_in(self):
         self._freeze(["milk"])
-        lines = self._pre_lines(self.tg.sent[0])
-        row = [l for l in lines if l.startswith("1 milk")][0]
-        self.assertEqual(len(row), card.WIDTH)
-        self.assertTrue(row.endswith(date.today().strftime("%b ") + str(date.today().day)))
+        lines = self._body_lines(self.tg.sent[0])
+        when = date.today().strftime("%b ") + str(date.today().day)
+        self.assertIn("1. milk, frozen " + when, lines)
+        self.assertNotIn("FROZEN ON", self.tg.sent[0])
 
     def test_a_freezer_tap_edits_the_card(self):
         items = self._freeze(["milk", "spinach"])
@@ -2855,8 +2859,9 @@ class Cards(unittest.TestCase):
         items = self._freeze(["milk"])
         self._frz_tap("tossed", items[0]["id"])
         self.assertEqual(len(self.tg.sent), 1)   # no separate "Noted." message
-        self.assertIn("off this month's count", self.tg.edits[-1])
-        self.assertEqual(self.tg.edits[-1].count("<pre>"), 1)
+        self.assertIn("✗ milk, tossed (off this month's count)",
+                      self._body_lines(self.tg.edits[-1]))
+        self.assertNotIn("<pre>", self.tg.edits[-1])
         row = self.con.execute("SELECT freezer_outcome FROM items WHERE id=?",
                                (items[0]["id"],)).fetchone()
         self.assertEqual(row["freezer_outcome"], "tossed")
@@ -2880,8 +2885,8 @@ class Cards(unittest.TestCase):
     def test_a_one_tier_nudge_drops_the_label_its_heading_repeats(self):
         self._items(["milk", "spinach"])                # both past by self.day
         bot.send_nudge(self.tg, self.con, 1, self.day)
-        self.assertIn("check before eating", self.tg.sent[0].split("<pre>")[0].lower())
-        self.assertNotIn("CHECK BEFORE EATING", self._pre_lines(self.tg.sent[0]))
+        self.assertEqual(self._head(self.tg.sent[0]), "Check before eating")
+        self.assertNotIn("<b>Check before eating</b>", self._body_lines(self.tg.sent[0]))
 
     def _head(self, html):
         return html.split("</b>", 1)[0].replace("<b>", "")
@@ -2897,33 +2902,39 @@ class Cards(unittest.TestCase):
         bot.send_nudge(self.tg, self.con, 1, self.day)
         self.assertEqual(self._head(self.tg.sent[0]), "1 tonight, 1 to check")
 
-    def test_nudge_headings_never_widen_the_card(self):
+    def test_a_nudge_heading_is_its_tier_or_a_short_count(self):
         for n0, n1 in ((0, 1), (1, 0), (15, 0), (0, 15), (15, 15), (7, 8)):
             items = ([{"use_by_date": self.day - timedelta(days=2)}] * n0
                      + [{"use_by_date": self.day}] * n1)
-            self.assertLessEqual(len(card.nudge_title(items, self.day)), card.WIDTH)
+            title = card.nudge_title(items, self.day)
+            self.assertTrue(title in sl.TIERS.values()
+                            or re.fullmatch(r"\d+ tonight, \d+ to check", title), title)
 
-    def test_a_long_heading_is_clipped_to_the_card(self):
+    def test_a_long_heading_is_never_cut_short(self):
         items = self._items(["milk"])
         html, _ = card.render("x" * 40, items, self.day, "f")
-        self.assertEqual(len(self._head(html)), card.WIDTH)
+        self.assertEqual(self._head(html), "x" * 40)
 
     def test_a_mixed_nudge_keeps_its_section_labels(self):
         fridge.add_items(self.con, 1, ["milk"], TODAY)                 # 7d: past
         fridge.add_items(self.con, 1, ["chicken thighs"], self.day)    # due today
         bot.send_nudge(self.tg, self.con, 1, self.day)
-        lines = self._pre_lines(self.tg.sent[0])
-        self.assertIn("CHECK BEFORE EATING", lines)
-        self.assertIn("TONIGHT OR FREEZE IT", lines)
+        lines = self._body_lines(self.tg.sent[0])
+        self.assertIn("<b>Check before eating</b>", lines)    # bold, sentence case
+        self.assertIn("<b>Tonight or freeze it</b>", lines)
+        self.assertNotIn("CHECK BEFORE EATING", self.tg.sent[0])
 
     def test_a_one_tier_fridge_card_keeps_its_label(self):
         self._items(["milk"])
         bot.send_fridge(self.tg, self.con, 1, self.day)
-        self.assertIn("CHECK BEFORE EATING", self._pre_lines(self.tg.sent[0]))
+        self.assertIn("<b>Check before eating</b>", self._body_lines(self.tg.sent[0]))
 
-    def test_rel_column_fits(self):
-        for d in (-30, -1, 0, 1, 3, 40):
-            self.assertLessEqual(len(card.rel(TODAY + timedelta(days=d), TODAY)), card.RIGHT)
+    def test_rel_says_days_in_words(self):
+        day = date(2026, 10, 1)
+        for d, want in ((-30, "30 days past"), (-2, "2 days past"), (-1, "1 day past"),
+                        (0, "today"), (1, "tomorrow"), (3, "in 3 days"),
+                        (40, "Nov 10")):
+            self.assertEqual(card.rel(day + timedelta(days=d), day), want)
 
 
 class TierAtClose(unittest.TestCase):
@@ -3540,7 +3551,7 @@ class MonthlyText(unittest.TestCase):
 
 
 class MonthCard(unittest.TestCase):
-    """/month as a fixed-width card. Same rules as the text: no net figure,
+    """/month as a card. Same rules as the text: no net figure,
     no counterfactual, prices called estimates, unpriced means no dollars."""
 
     # The fixture only: subclassing would run every MonthlyText test twice.
@@ -3553,18 +3564,23 @@ class MonthCard(unittest.TestCase):
     def _card(self):
         return card.render_month(fridge.month_figures(self.con, 1, self.DAY))
 
-    def _pre(self, html):
-        body = html.split("<pre>", 1)[1].split("</pre>", 1)[0]
+    def _body(self, html):
+        """The lines under the month heading, unescaped, labels still bold."""
+        body = html.split("\n", 1)[1]
         return [l.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
                 for l in body.split("\n")]
 
-    def test_every_line_fits_the_card(self):
+    def test_count_and_money_share_one_plain_line(self):
         self._closed("milk", "used", 1, "2026-10-02T09:00:00")
         self._closed("cilantro", "used", 1, "2026-10-02T10:00:00")
         self._closed("chicken breast", "tossed", 0, "2026-10-03T09:00:00")
-        for line in self._pre(self._card()):
-            self.assertLessEqual(len(line), card.WIDTH, line)
-        self.assertIn(card.RULE, self._pre(self._card()))
+        html = self._card()
+        self.assertNotIn("<pre>", html)
+        self.assertNotIn("\u2500", html)
+        lines = self._body(html)
+        self.assertTrue(any(re.fullmatch(r"2 items, about \$\d+", l) for l in lines), lines)
+        self.assertTrue(any(re.fullmatch(r"1 item, (about \$\d+|unpriced)", l)
+                            for l in lines), lines)
 
     def test_the_heading_is_the_month(self):
         self._closed("milk", "used", 1, "2026-10-02T09:00:00")
@@ -3573,14 +3589,14 @@ class MonthCard(unittest.TestCase):
     def test_used_comes_first_then_thrown_away(self):
         self._closed("milk", "used", 1, "2026-10-02T09:00:00")
         self._closed("cilantro", "tossed", 0, "2026-10-03T09:00:00")
-        lines = self._pre(self._card())
-        self.assertLess(lines.index("USED BEFORE IT WENT OFF"),
-                        lines.index("THROWN AWAY"))
+        lines = self._body(self._card())
+        self.assertLess(lines.index("<b>Used before it went off</b>"),
+                        lines.index("<b>Thrown away</b>"))
 
     def test_it_says_how_many_were_priced_and_from_where(self):
         self._closed("milk", "used", 1, "2026-10-02T09:00:00")        # priced
         self._closed("cilantro", "used", 1, "2026-10-02T10:00:00")    # unpriced
-        text = "\n".join(self._pre(self._card()))
+        text = "\n".join(self._body(self._card()))
         self.assertIn("1 of 2 priced", text)
         self.assertIn("1 BLS", text)
 
@@ -3625,14 +3641,15 @@ class MonthCard(unittest.TestCase):
         bot.handle_message(tg, self.con, {"chat": {"id": 1, "type": "private"},
                                           "text": "/month"}, CFG)
         self.assertEqual(len(tg.sent), 1)
-        self.assertIn("<pre>", tg.sent[0])
+        self.assertIn("<b>Used before it went off</b>", tg.sent[0])
+        self.assertNotIn("<pre>", tg.sent[0])
 
     def test_an_empty_month_stays_plain_text(self):
         tg = FakeTG()
         bot.handle_message(tg, self.con, {"chat": {"id": 1, "type": "private"},
                                           "text": "/month"}, CFG)
         self.assertIn("no figure to give", tg.sent[0])
-        self.assertNotIn("<pre>", tg.sent[0])
+        self.assertNotIn("<b>", tg.sent[0])      # a sentence, not a card
 
 
 class ReceiptFirstStart(unittest.TestCase):
@@ -4628,7 +4645,8 @@ class CommandsAreAlwaysTheBots(unittest.TestCase):
 
     def test_fridge_is_the_card_with_ai_on(self):
         self._say("/fridge")
-        self.assertIn("<pre>", self.tg.sent[-1])
+        self.assertTrue(self.tg.sent[-1].startswith("<b>In your fridge</b>\n"))
+        self.assertNotIn("<pre>", self.tg.sent[-1])
         self.assertTrue(self.tg.buttons[-1])
 
     def test_an_unknown_command_gets_help_not_the_model(self):
@@ -4658,7 +4676,8 @@ class OneLookForLists(unittest.TestCase):
     def test_a_typed_list_answers_with_the_fridge_card(self):
         self._say("milk, spinach, rice")
         html = self.tg.sent[-1]
-        self.assertTrue(html.startswith("<b>Added to your fridge</b>\n<pre>"))
+        self.assertTrue(html.startswith("<b>Added to your fridge</b>\n"))
+        self.assertNotIn("<pre>", html)
         self.assertIn("Pantry, no nudges: rice.", html.replace("\n", " "))
         self.assertIsNone(self.tg.buttons[-1])      # just bought: nothing to answer
 
@@ -4681,33 +4700,33 @@ class OneLookForLists(unittest.TestCase):
         fridge.add_items(self.con, 1, ["cumin", "olive oil", "onions"], TODAY)
         self._say("/pantry")
         html = self.tg.sent[-1]
-        self.assertIn("<pre>", html)
-        self.assertIn("PANTRY (2)", html)
-        self.assertIn("ON THE COUNTER (1)", html)
+        self.assertNotIn("<pre>", html)
+        self.assertIn("<b>Pantry (2)</b>", html)
+        self.assertIn("<b>On the counter (1)</b>", html)
 
-    def test_pantry_names_wrap_between_names(self):
+    def test_pantry_names_are_one_comma_joined_line(self):
         names = ["cumin", "rice", "olive oil", "chicken bouillon",
                  "smoked paprika", "extra virgin olive oil", "basmati rice"]
-        lines = card._wrap_names(names, "  ")
-        for line in lines:
-            self.assertLessEqual(len(line), card.WIDTH)
-        for name in names:        # each whole name sits on a single line
-            self.assertTrue(any(name in line for line in lines), name)
+        html = card.render_list("h", [("Pantry", names)], "f")
+        lines = html.split("\n")
+        label = lines.index("<b>Pantry (7)</b>")
+        self.assertEqual(lines[label + 1], ", ".join(names))   # every name whole
 
-    def test_items_are_separated_by_a_blank_line(self):
+    def test_items_in_a_section_sit_on_consecutive_lines(self):
         fridge.add_items(self.con, 1, ["milk", "yogurt", "cheddar"], TODAY)
         html, _ = card.render("h", fridge.open_items(self.con, 1), TODAY, "f")
-        body = html.split("<pre>", 1)[1].split("</pre>", 1)[0].split("\n")
+        body = html.split("\n")
         starts = [i for i, l in enumerate(body) if l[:1].isdigit()]
-        for a, b in zip(starts, starts[1:]):
-            self.assertIn("", body[a + 1:b])
+        self.assertEqual(len(starts), 3)
+        self.assertEqual(starts, list(range(starts[0], starts[0] + 3)))
 
-    def test_a_long_name_wraps_instead_of_being_cut(self):
-        rows = card._row("1 butter chicken (leftovers)", "in 3d")
-        self.assertNotIn("…", "".join(rows))
-        self.assertIn("(leftovers)", "".join(rows))
-        for row in rows:
-            self.assertLessEqual(len(row), card.WIDTH)
+    def test_a_long_name_is_never_cut_short(self):
+        name = "butter chicken (leftovers) from sunday with the extra sauce"
+        item = {"id": 1, "name": name, "state": "open", "use_by_date": TODAY,
+                "risk": "yellow", "estimated": 0}
+        html, _ = card.render("h", [item], TODAY, "f")
+        self.assertNotIn("…", html)
+        self.assertIn("1. %s, today" % name, html.split("\n"))
 
     def test_action_buttons_name_what_they_act_on(self):
         self._say("/clear")
@@ -4751,7 +4770,7 @@ class AIVoiceAndListings(unittest.TestCase):
     def test_listing_questions_get_the_card(self):
         for q, marker in (("what's in my fridge?", "In your fridge"),
                           ("What is in the fridge", "In your fridge"),
-                          ("show me my pantry", "PANTRY"),
+                          ("show me my pantry", "<b>Pantry ("),
                           ("what do I have in the freezer?", "freezer")):
             self._say(q)
             self.assertIn(marker, self.tg.sent[-1], q)
@@ -4802,7 +4821,8 @@ class CorrectionCards(unittest.TestCase):
         self._say("spinach, yogurt")
         self._say("those are pantry")
         html = self.tg.sent[-1]
-        self.assertTrue(html.startswith("<b>Moved to your pantry</b>\n<pre>"))
+        self.assertTrue(html.startswith("<b>Moved to your pantry</b>\n"))
+        self.assertNotIn("<pre>", html)
         self.assertIn("spinach", html)
         self.assertIn("yogurt", html)
 
@@ -4816,16 +4836,18 @@ class CorrectionCards(unittest.TestCase):
     def test_those_are_fridge_shows_the_fridge_card_with_buttons(self):
         self._say("cumin, olive oil")
         self._say("those are fridge")
-        self.assertTrue(self.tg.sent[-1].startswith("<b>Moved to your fridge</b>\n<pre>"))
+        self.assertTrue(self.tg.sent[-1].startswith("<b>Moved to your fridge</b>\n"))
+        self.assertNotIn("<pre>", self.tg.sent[-1])
         self.assertTrue(self.tg.buttons[-1])        # nothing at risk: "Mark an item"
 
     def test_undo_names_what_it_took_back(self):
         self._say("milk, cumin")
         self._say("/undo")
         html = self.tg.sent[-1]
-        self.assertTrue(html.startswith("<b>Took back your last list</b>\n<pre>"))
-        self.assertIn("TRACKED (1)", html)
-        self.assertIn("PANTRY (1)", html)
+        self.assertTrue(html.startswith("<b>Took back your last list</b>\n"))
+        self.assertNotIn("<pre>", html)
+        self.assertIn("<b>Tracked (1)</b>", html)
+        self.assertIn("<b>Pantry (1)</b>", html)
         self.assertEqual(fridge.open_items(self.con, 1), [])
 
     def test_explanations_are_not_cards(self):
@@ -4833,7 +4855,7 @@ class CorrectionCards(unittest.TestCase):
         self.assertIn("Nothing to undo.", self.tg.sent[-1])
         self.assertNotIn("<b>", self.tg.sent[-1])     # plain text, never a card
         self._say("those are pantry")
-        self.assertNotIn("<pre>", self.tg.sent[-1])
+        self.assertNotIn("<b>", self.tg.sent[-1])
 
     def test_the_prose_versions_are_unchanged_for_the_model(self):
         fridge.add_items(self.con, 1, ["milk"], TODAY)
@@ -4876,7 +4898,7 @@ class FewerButtons(unittest.TestCase):
         third = self.tg.buttons[0][0][2]
         self._cb(third["callback_data"])
         choice = self.tg.keyboards[-1]
-        self.assertEqual(self._labels(choice)[:3], ["✅ Used 3", "❄️ Froze 3", "\U0001f5d1 Tossed 3"])
+        self.assertEqual(self._labels(choice)[:3], ["3 Used", "3 Froze", "3 Tossed"])
         self._cb(choice[0][0]["callback_data"])           # Used 3
         self.assertIn("1 of 5 handled", self.tg.edits[-1])
         self.assertEqual(self._labels(self.tg.edit_buttons[-1]), ["1", "2", "4", "5"])
@@ -4931,7 +4953,7 @@ class FewerButtons(unittest.TestCase):
         bot.send_freezer(self.tg, self.con, 1, TODAY)
         self.assertEqual(self._labels(self.tg.buttons[0]), ["1", "2", "3", "4", "5"])
         self._cb(self.tg.buttons[0][0][0]["callback_data"])
-        self.assertEqual(self._labels(self.tg.keyboards[-1])[:2], ["✅ Used 1", "\U0001f5d1 Tossed 1"])
+        self.assertEqual(self._labels(self.tg.keyboards[-1])[:2], ["1 Used", "1 Tossed"])
 
     def test_a_stale_pick_says_so(self):
         self._cb("pick:999", message_id=42)
