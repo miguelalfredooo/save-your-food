@@ -1641,6 +1641,22 @@ class RecipeSearch(unittest.TestCase):
                                "Missing: pork chops (*you'd need to buy this*), "
                                "ham steak (*you'd need to buy this*)")
 
+    def test_the_table_overrules_a_pantry_flag_on_perishables(self):
+        items = [{"name": n, "pantry": True} for n in
+                 ("Lucerne Eggs", "Yogurt", "Strawberries", "Swiss cheese", "honey ham",
+                  "Cheerios", "Yellow Onions", "Cento Organic Tomatoes", "bag charge")]
+        result = llm_agent.exec_add_items(self.con, 1, {"items": items}, TODAY)
+        tracked = sorted(i["name"] for i in fridge.open_items(self.con, 1))
+        self.assertEqual(tracked, ["Lucerne Eggs", "Strawberries", "Swiss cheese",
+                                   "Yogurt", "honey ham"])
+        pantry = {i["name"]: i["kind"] for i in fridge.pantry_items(self.con, 1)}
+        self.assertEqual(pantry, {"Cheerios": "stable", "Yellow Onions": "outside",
+                                  "Cento Organic Tomatoes": "stable"})   # a can: its call
+        self.assertNotIn("bag charge", str(result))
+
+    def test_a_living_herb_is_fresh(self):
+        self.assertEqual(sl.not_tracked("Living Dill"), (False, None))
+
     def test_a_cooked_dish_is_not_a_protein_on_hand(self):
         self.assertEqual(llm_agent.proteins(
             ["Butter chicken", "Vienna sausages", "Deli ham", "boneless chicken thighs"]),

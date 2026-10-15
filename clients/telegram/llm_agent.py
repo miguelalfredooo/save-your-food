@@ -378,6 +378,21 @@ def _find_open_item(con, chat_id, name):
     return None
 
 
+# Receipt lines that aren't food, if the model passes one along.
+_NOT_FOOD = re.compile(r"\b(bag (charge|fee)|bottle deposit|deposit|crv|sales tax|tax|"
+                       r"subtotal|total|discount|coupon|savings)\b", re.I)
+
+
+# Food with no shelf-stable form: in a receipt, these are always cold.
+# Anything canned, dried or powdered was already sorted by the table.
+_ALWAYS_COLD = re.compile(
+    r"\b(eggs?|yogh?urt|milk|cheeses?|cheddar|mozzarella|cream|kefir|"
+    r"ham|bacon|deli|salami|turkey|chicken|beef|steak|pork|lamb|sausages?|"
+    r"fish|salmon|shrimp|tofu|berry|berries|strawberr\w*|blueberr\w*|"
+    r"raspberr\w*|lettuce|spinach|kale|arugula|cilantro|parsley|basil|"
+    r"dill|mint|hummus)\b", re.I)
+
+
 def exec_add_items(con, chat_id, args, today):
     """The deterministic capture path caps a single message at
     fridge.MAX_ITEMS and says how many it left out. This tool needs the same
@@ -396,8 +411,15 @@ def exec_add_items(con, chat_id, args, today):
         name = (it.get("name") or "").strip()
         if not name:
             continue
-        if it.get("pantry") or sl.not_tracked(name)[0]:
-            fridge.remember(con, chat_id, name, "stable", today)
+        if _NOT_FOOD.search(name):
+            continue
+        # The model was sending whole receipts to the pantry, eggs, yogurt
+        # and strawberries included, where nothing reminds anyone about them.
+        # Its pantry flag stands except on food that is never shelf-stable;
+        # "tomatoes" can be a can, eggs can't.
+        off, kind = sl.not_tracked(name)
+        if off or (it.get("pantry") and not _ALWAYS_COLD.search(name)):
+            fridge.remember(con, chat_id, name, kind or "stable", today)
             went_to_pantry.append(name)
             continue
         # A date they gave wins. Otherwise the table, which is standard
