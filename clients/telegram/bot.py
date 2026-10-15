@@ -690,6 +690,7 @@ def send_sample_nudge(tg, con, chat_id, today=None):
 _BULLET_RE = re.compile(r"^\s*[-*•]\s+")
 _HEADER_RE = re.compile(r"^\s*#{1,6}\s+(.*)$")
 _HR_RE = re.compile(r"^\s*([-*_])\1{2,}\s*$")
+_USES_RE = re.compile(r"^Uses (your|mostly) ")
 
 
 _TAG_RE = re.compile(r"</?(b|i|code)>")
@@ -743,6 +744,14 @@ def _markdown_to_html(text):
         header = _HEADER_RE.match(line)
         if header:
             blocks.append("<b>%s</b>" % _inline_markdown(card.esc(header.group(1))))
+            i += 1
+            continue
+        # A recipe offer's dish name, the line above its "Uses your ...":
+        # bold whether or not a small model kept the ** around it.
+        if (i + 1 < len(lines) and _USES_RE.match(lines[i + 1])
+                and line.strip() and not _BULLET_RE.match(line)):
+            name = re.sub(r"^\*\*(.*)\*\*$", r"\1", line.strip())
+            blocks.append("<b>%s</b>" % card.esc(name))
             i += 1
             continue
         if _BULLET_RE.match(line):

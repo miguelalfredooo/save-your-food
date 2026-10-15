@@ -12,9 +12,10 @@ Cards used to sit in a <pre> block padded to a fixed width, so dates lined
 up in a column. That broke for the people who most need it to work: large
 text wrapped every padded line, a screen reader read the padding and the
 ruled lines, and a tap on a code block copies it. Now each item is one
-sentence-like line, "1. Spinach, tomorrow (date is a guess)", that wraps
-wherever the phone likes and reads in order. Headings are bold, in sentence
-case, rather than in capitals.
+sentence-like line, "1. Spinach, tomorrow", with any warning in italics on
+the line under it and a blank line before the next item. It wraps wherever
+the phone likes and reads in order. Headings are bold, in sentence case,
+rather than in capitals.
 
 Names, not buttons, carry the item
 ----------------------------------
@@ -137,7 +138,7 @@ def lines_for(n, item, today):
     else:
         line = "%s %s, %s" % (MARK[item["state"]], item["name"], OUTCOME[item["state"]])
     extra = note(item, today)
-    return [line + (" (%s)" % extra if extra else "")]
+    return [line, Italic(extra)] if extra else [line]
 
 
 def nudge_title(items, today):
@@ -169,8 +170,20 @@ class Bold(str):
     """A body line shown in bold: a section heading."""
 
 
+class Italic(str):
+    """A body line shown in italics: a note about the item above it."""
+
+
+def _line_html(line):
+    if isinstance(line, Bold):
+        return "<b>%s</b>" % esc(line)
+    if isinstance(line, Italic):
+        return "<i>%s</i>" % esc(line)
+    return esc(line)
+
+
 def _html(head, body, closing):
-    lines = ["<b>%s</b>" % esc(l) if isinstance(l, Bold) else esc(l) for l in body]
+    lines = [_line_html(l) for l in body]
     # Two bold lines in a row read as one heading: space them apart.
     gap = "\n" if body and isinstance(body[0], Bold) else ""
     html = "<b>%s</b>\n%s%s" % (esc(head), gap, "\n".join(lines))
@@ -202,8 +215,12 @@ def render(head, items, today, footer, closing=None, label_one_tier=True,
             if seen is not None:
                 body.append("")
             if labelled:
-                body.append(Bold(sl.TIERS[t]))
+                body += [Bold(sl.TIERS[t]), ""]
             seen = t
+        elif n > 1:
+            # A blank line between items: a name, its date and its warning
+            # read as one unit, and the eye finds item 7 without counting.
+            body.append("")
         body.extend(lines_for(n, item, today))
     body += ["", footer]
     for note in notes or ():
@@ -241,14 +258,15 @@ def render_freezer(head, items, footer, pick=None):
     date stops meaning anything, so each line says when it went in."""
     body = []
     for n, item in enumerate(items, 1):
+        if n > 1:
+            body.append("")
         outcome = item.get("freezer_outcome")
         if outcome:
-            line = "%s %s, %s" % (MARK[outcome], item["name"], OUTCOME[outcome])
-            # A binned rescue comes back off the month. Said once, on its
+            body.append("%s %s, %s" % (MARK[outcome], item["name"], OUTCOME[outcome]))
+            # A binned rescue comes back off the month. Said once, under its
             # line, as a fact about the figure: no verdict (SKILL §20).
             if outcome == "tossed" and fridge.is_rescue("frozen", item["tier"]):
-                line += " (off this month's count)"
-            body.append(line)
+                body.append(Italic("off this month's count"))
         else:
             when = frozen_on(item)
             body.append("%d. %s%s" % (n, item["name"], ", frozen " + when if when else ""))

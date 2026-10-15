@@ -72,8 +72,8 @@ Rice, dry lentils, cans, spices go to the pantry quietly. Don't
 explain the system unless asked.
 
 RECIPES
-Offering options from search_recipes: send the lines it gives you
-as they are, one per line. Call it again every time they ask what
+Offering options from search_recipes: send the recipes it gives you
+as they are, a blank line between them. Call it again every time they ask what
 to cook, even if you answered a moment ago: the fridge may have
 changed, and an earlier answer is not a list to repeat. Don't write
 out more than one full recipe at a time.
@@ -747,10 +747,14 @@ def _and(names):
 
 
 def recipe_line(title, text, fridge_names, pantry_names):
-    """One finished line for a recipe offer, so a small model only has to
-    copy it: "Ropa Vieja: your tomatoes and dill; flank or skirt steak
-    (you'd need to buy this)". The original ingredient comes first and the
-    swap goes in brackets after it."""
+    """One finished recipe offer, so a small model only has to copy it:
+
+        **Ropa Vieja**
+        Uses your tomatoes and dill
+        Missing: flank or skirt steak (*you'd need to buy this*)
+
+    Short lines read more easily than one long one. The original ingredient
+    comes first and the swap goes after it, in brackets and italics."""
     low = text.lower()
     used, stems = [], set()
     for n in fridge_names:
@@ -760,8 +764,8 @@ def recipe_line(title, text, fridge_names, pantry_names):
             stems.add(stem)          # "fresh dill" and "living dill" say dill once
             used.append(core)
     used = used[:4]
-    line = title.strip() + ": " + ("your " + _and(used) if used
-                                   else "mostly pantry staples")
+    lines = ["**%s**" % title.strip(),
+             "Uses your " + _and(used) if used else "Uses mostly pantry staples"]
     gaps = []
     for item, word in _missing(title, text, list(fridge_names) + list(pantry_names)):
         name = _QUANTITY.sub("", item).strip().lower() or item.lower()
@@ -771,9 +775,11 @@ def recipe_line(title, text, fridge_names, pantry_names):
         cut = re.search(r",|\. ", name[at.end() if at else 0:])
         name = name[:(at.end() if at else 0) + cut.start()] if cut else name
         swap = _swap(word, list(fridge_names) + list(pantry_names))
-        gaps.append("%s (%s)" % (name, "use your %s" % swap.split("(")[0].strip().lower()
-                                 if swap else "you'd need to buy this"))
-    return line + ("; " + ", ".join(gaps) if gaps else "")
+        gaps.append("%s (*%s*)" % (name, "use your %s" % swap.split("(")[0].strip().lower()
+                                   if swap else "you'd need to buy this"))
+    if gaps:
+        lines.append("Missing: " + ", ".join(gaps))
+    return "\n".join(lines)
 
 
 def exec_search_recipes(con, chat_id, args, today):
@@ -787,10 +793,11 @@ def exec_search_recipes(con, chat_id, args, today):
                          "no saved copy yet to fall back on."}
     top = rank_recipes(recipes, in_fridge, in_pantry)[:MAX_RECIPE_MATCHES]
     return {
-        "how_to_list": "Offer these lines as they are, each on its own line "
-                       "starting with \"- \". Keep the part in brackets: it "
-                       "says what they're missing and what to use instead. "
-                       "Don't add ingredient lists.",
+        "how_to_list": "Offer these as they are, with a blank line between "
+                       "them. Keep their line breaks and their ** and * marks, "
+                       "and keep the part in brackets: it says what they're "
+                       "missing and what to use instead. No bullets, and "
+                       "don't add ingredient lists.",
         "lines": [recipe_line(m["title"], m["text"], in_fridge, in_pantry) for m in top],
         "matches": [{"title": m["title"], "text": m["text"][:MAX_RECIPE_CHARS]}
                     for m in top],
