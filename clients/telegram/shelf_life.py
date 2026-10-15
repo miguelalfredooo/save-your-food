@@ -121,7 +121,8 @@ NEVER_STABLE = (
     # "honey" is a pantry keyword; honey ham is deli meat.
     "honey ham", "honey glazed", "honey roasted", "honey turkey",
     # A living herb is a fresh one, roots and all, whatever its name says.
-    "living ",
+    "living dill", "living basil", "living thyme", "living cilantro",
+    "living parsley", "living mint", "living herb", "living lettuce",
 )
 
 # A modifier is enough on its own: dried, ground, powdered, canned, jarred.

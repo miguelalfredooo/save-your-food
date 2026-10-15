@@ -378,9 +378,11 @@ def _find_open_item(con, chat_id, name):
     return None
 
 
-# Receipt lines that aren't food, if the model passes one along.
-_NOT_FOOD = re.compile(r"\b(bag (charge|fee)|bottle deposit|deposit|crv|sales tax|tax|"
-                       r"subtotal|total|discount|coupon|savings)\b", re.I)
+# Receipt lines that aren't food, if the model passes one along. The whole
+# name has to be the fee or the total: "Total cereal" is breakfast.
+_NOT_FOOD = re.compile(r"^\s*(paper |plastic )?(bag (charge|fee)|bags?|bottle deposit|"
+                       r"deposit|crv|(sales )?tax|sub ?total|total|discount|coupon|"
+                       r"savings)[\s\d.$:-]*$", re.I)
 
 
 # Food with no shelf-stable form: in a receipt, these are always cold.
@@ -399,7 +401,7 @@ def exec_add_items(con, chat_id, args, today):
     cap: without it, a huge pasted list (or a model that just keeps adding)
     tracks everything at once with no limit at all, the same shape of bug
     that got 319 items dumped into one chat's fridge via /seed."""
-    added, went_to_pantry = [], []
+    added, went_to_pantry, skipped = [], [], []
     room = fridge.room_left(con, chat_id)
     if room <= 0:
         return {"error": "Their fridge already has %d things tracked, the "
@@ -411,7 +413,8 @@ def exec_add_items(con, chat_id, args, today):
         name = (it.get("name") or "").strip()
         if not name:
             continue
-        if _NOT_FOOD.search(name):
+        if _NOT_FOOD.match(name):
+            skipped.append(name)
             continue
         # The model was sending whole receipts to the pantry, eggs, yogurt
         # and strawberries included, where nothing reminds anyone about them.
@@ -450,6 +453,8 @@ def exec_add_items(con, chat_id, args, today):
         added.append({"name": name, "use_by": use_by.isoformat()})
     con.commit()
     result = {"added": added, "pantry": went_to_pantry}
+    if skipped:
+        result["skipped_not_food"] = skipped
     if n_dropped:
         result["n_dropped"] = n_dropped
         result["note"] = ("Only the first %d items were added; %d more were "

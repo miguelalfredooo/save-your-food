@@ -1652,10 +1652,19 @@ class RecipeSearch(unittest.TestCase):
         pantry = {i["name"]: i["kind"] for i in fridge.pantry_items(self.con, 1)}
         self.assertEqual(pantry, {"Cheerios": "stable", "Yellow Onions": "outside",
                                   "Cento Organic Tomatoes": "stable"})   # a can: its call
-        self.assertNotIn("bag charge", str(result))
+        self.assertEqual(result["skipped_not_food"], ["bag charge"])
+
+    def test_only_a_whole_fee_line_is_dropped(self):
+        result = llm_agent.exec_add_items(self.con, 1, {"items": [
+            {"name": "Total cereal", "pantry": True}, {"name": "TAX 1.20"},
+            {"name": "Subtotal: $42.10"}]}, TODAY)
+        self.assertEqual(result["pantry"], ["Total cereal"])
+        self.assertEqual(result["skipped_not_food"], ["TAX 1.20", "Subtotal: $42.10"])
 
     def test_a_living_herb_is_fresh(self):
         self.assertEqual(sl.not_tracked("Living Dill"), (False, None))
+        self.assertEqual(sl.not_tracked("North Shore Living Thyme"), (False, None))
+        self.assertTrue(sl.not_tracked("Healthy Living crackers")[0])
 
     def test_a_cooked_dish_is_not_a_protein_on_hand(self):
         self.assertEqual(llm_agent.proteins(
