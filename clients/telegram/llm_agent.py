@@ -643,10 +643,12 @@ def rank_recipes(recipes, available, pantry=()):
 # fridge still matches on its onions and peppers, and a small model will
 # happily list it as if it were all there, so the code finds the gap rather
 # than trusting the model to read the ingredient list.
-_MAIN_WORDS = ("steak", "beef", "chicken", "pork", "lamb", "turkey", "veal",
-               "goat", "oxtail", "brisket", "duck", "fish", "salmon", "tuna",
-               "cod", "tilapia", "shrimp", "prawn", "crab", "scallop",
-               "mussel", "clam", "tofu", "sausage", "chorizo", "bacon", "ham")
+# Cured meats come first: "ham steak" is ham and "pork bacon strips" is
+# bacon, whatever else the line says.
+_MAIN_WORDS = ("ham", "bacon", "sausage", "chorizo", "steak", "beef", "chicken",
+               "pork", "lamb", "turkey", "veal", "goat", "oxtail", "brisket",
+               "duck", "fish", "salmon", "tuna", "cod", "tilapia", "shrimp",
+               "prawn", "crab", "scallop", "mussel", "clam", "tofu")
 # "beef broth" and "fish sauce" flavour a dish; they aren't what it's built
 # on, and a pantry full of them mustn't make a beef recipe look covered.
 _NOT_MAIN = ("broth", "stock", "bouillon", "consomm", "powder", "sauce", "fat",
@@ -668,9 +670,10 @@ _CUT_WORDS = frozenset("""
     shelled lb lbs pack
 """.split())
 # What can stand in for what. Nothing crosses a family: tofu isn't offered
-# for a pork chop.
+# for a pork chop, and nor is ground beef.
 _FAMILIES = (
-    ("steak", "beef", "pork", "lamb", "veal", "goat", "oxtail", "brisket"),
+    ("steak", "beef", "lamb", "veal", "goat", "oxtail", "brisket"),
+    ("pork",),
     ("chicken", "turkey", "duck"),
     ("fish", "salmon", "tuna", "cod", "tilapia", "shrimp", "prawn", "crab",
      "scallop", "mussel", "clam"),
@@ -706,20 +709,26 @@ def proteins(names):
     return out
 
 
-def _missing(title, text, available):
-    """[(line, main word)] for the recipe's protein lines that nothing
-    tracked covers, cut before any note: "2lbs flank or skirt steak
-    (season...)" comes back as "2lbs flank or skirt steak". Each protein
-    counts once, so the steps naming the steak again don't repeat it. The
-    title line and step lines are skipped."""
-    have = " ".join(proteins(available)).lower()
-    # Not a plain cut, but the very thing the recipe names: "Vienna
-    # sausages" covers "1 can vienna sausage". "Butter chicken" covers
-    # nothing but a recipe calling for butter chicken.
+# Words that say how a cut comes, not which cut it is: "boneless chicken
+# thighs" is still thighs. What's left once these and the meat word go is
+# the cut itself, "thigh", which a "chicken breast" line doesn't have.
+_HOW_IT_COMES = frozenset("""
+    boneless skinless bone in raw fresh frozen lb lbs pack whole lean large
+    medium jumbo extra peeled shelled deli smoked sliced
+""".split())
+
+
+def _protein_lines(title, text, available):
+    """[(line, main word)] for each protein the recipe is built on, once
+    per protein, cut before any note: "2lbs flank or skirt steak
+    (season...)" comes back as "2lbs flank or skirt steak". The title line,
+    step lines, broths and sauces are skipped, and so is a line naming
+    something they have outright: "Vienna sausages" covers "1 can vienna
+    sausage", though "butter chicken" covers nothing but butter chicken."""
     named = [n.split("(")[0] for n in available
              if _main_word(n) and not any(w in n.lower() for w in _NOT_MAIN)]
     titles = {title.strip().lower(), title.split("(")[0].strip().lower()}
-    seen, missing = set(), []
+    seen, out = set(), []
     for line in text.replace("\xa0", " ").splitlines():
         item = line.split("(")[0].strip()
         low = item.lower()
@@ -730,9 +739,36 @@ def _missing(title, text, available):
         w = _main_word(low)
         if w and w not in seen:
             seen.add(w)
-            if w not in have and not any(_singular(n) in _singular(low) for n in named):
-                missing.append((item, w))
-    return missing
+            if not any(_singular(n) in _singular(low) for n in named):
+                out.append((item, w))
+    return out
+
+
+def _same_cut(have, line):
+    """Whether a tracked cut is the one the line asks for: "boneless chicken
+    thighs" is for "2 lbs chicken thighs", not for "chicken breast". Plain
+    "chicken" is for any of it."""
+    words = [t for t in _singular(have.split("(")[0]).split()
+             if t not in _HOW_IT_COMES and not _main_word(t)]
+    return all(re.search(r"\b" + re.escape(t), _singular(line)) for t in words)
+
+
+def _gaps(title, text, available):
+    """[(line, main word, stand-ins)] for each protein line they don't have
+    as asked. Stand-ins are their own cuts of the same meat first ("chicken
+    breast": their chicken thighs, their chicken legs), else one from the
+    same family (steak: their ground beef), else none, and they'd need to
+    buy it."""
+    cuts = proteins(available)
+    out = []
+    for item, w in _protein_lines(title, text, available):
+        same = [p for p in cuts if _main_word(p) == w]
+        if any(_same_cut(p, item) for p in same):
+            continue
+        family = next((f for f in _FAMILIES if w in f), (w,))
+        stand_ins = same or [p for p in cuts if _main_word(p) in family][:1]
+        out.append((item, w, stand_ins))
+    return out
 
 
 def _singular(text):
@@ -740,21 +776,16 @@ def _singular(text):
 
 
 def missing_mains(title, text, available):
-    """The recipe's protein lines that nothing tracked covers."""
-    return [item for item, _ in _missing(title, text, available)]
+    """The recipe's protein lines with nothing of theirs to stand in."""
+    return [item for item, _, stand_ins in _gaps(title, text, available) if not stand_ins]
 
 
-def _swap(word, available):
-    """A tracked plain cut from the same family as word, or None."""
-    family = next((f for f in _FAMILIES if word in f), (word,))
-    return next((p for p in proteins(available) if _main_word(p) in family), None)
-
-
-def _swap_note(word, available):
-    """What goes in the brackets after a missing protein."""
-    swap = _swap(word, available)
-    return ("use your %s" % swap.split("(")[0].strip().lower() if swap
-            else "you'd need to buy this")
+def _swap_note(stand_ins):
+    """What goes in the brackets after a protein line."""
+    if not stand_ins:
+        return "you'd need to buy this"
+    names = list(dict.fromkeys(p.split("(")[0].strip().lower() for p in stand_ins))
+    return "use your " + " or ".join(names[:2])
 
 
 def _and(names):
@@ -768,8 +799,10 @@ def recipe_line(title, text, fridge_names, pantry_names):
         Uses your tomatoes and dill
         Missing: flank or skirt steak (*you'd need to buy this*)
 
-    Short lines read more easily than one long one. The original ingredient
-    comes first and the swap goes after it, in brackets and italics."""
+    A cut they have in place of the one asked for goes on a "Swap:" line:
+    "chicken breast (*use your chicken thighs or chicken legs*)". Short
+    lines read more easily than one long one. The original ingredient comes
+    first and the swap goes after it, in brackets and italics."""
     low = text.lower()
     used, stems = [], set()
     for n in fridge_names:
@@ -781,17 +814,20 @@ def recipe_line(title, text, fridge_names, pantry_names):
     used = used[:4]
     lines = ["**%s**" % title.strip(),
              "Uses your " + _and(used) if used else "Uses mostly pantry staples"]
-    gaps = []
-    for item, word in _missing(title, text, list(fridge_names) + list(pantry_names)):
+    swaps, missing = [], []
+    for item, word, stand_ins in _gaps(title, text, list(fridge_names) + list(pantry_names)):
         name = _QUANTITY.sub("", item).strip().lower() or item.lower()
+        name = re.sub(r"^of\s+", "", name)          # "1 lb of chicken breast"
         # Drop the prep note after the meat: "bacon, roughly chopped",
         # "pork chops no bone. Season with...".
         at = re.search(r"\b%s" % word, name)
         cut = re.search(r",|\. ", name[at.end() if at else 0:])
         name = name[:(at.end() if at else 0) + cut.start()] if cut else name
-        gaps.append("%s (*%s*)" % (name, _swap_note(word, list(fridge_names) + list(pantry_names))))
-    if gaps:
-        lines.append("Missing: " + ", ".join(gaps))
+        (swaps if stand_ins else missing).append("%s (*%s*)" % (name, _swap_note(stand_ins)))
+    if swaps:
+        lines.append("Swap: " + ", ".join(swaps))
+    if missing:
+        lines.append("Missing: " + ", ".join(missing))
     return "\n".join(lines)
 
 
@@ -827,7 +863,7 @@ def recipe_message(title, text, fridge_names, pantry_names):
     lines = text.replace("\xa0", " ").split("\n")
     while lines and (not lines[0].strip() or lines[0].strip().lower() == title.strip().lower()):
         lines.pop(0)
-    notes = {item: _swap_note(word, available) for item, word in _missing(title, text, available)}
+    notes = {item: _swap_note(stand_ins) for item, _, stand_ins in _gaps(title, text, available)}
     out = []
     for line in lines:
         item = line.split("(")[0].strip()
@@ -1549,7 +1585,7 @@ def _remember(con, chat_id, user_text, reply, now):
 _LINK_RE = re.compile(r"https://[^\s<>\"')\]]+")
 _LIST_MARK = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s+")
 # Lines a model splits an offer into, or keeps from an older shape of one.
-_OFFER_TAIL = re.compile(r"^(uses|missing|your)\b", re.I)
+_OFFER_TAIL = re.compile(r"^(uses|swap|missing|your)\b", re.I)
 
 
 def _offer_title(block):
