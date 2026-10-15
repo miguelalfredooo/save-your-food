@@ -607,6 +607,61 @@ def rank_recipes(recipes, available):
             for _, matched, r in scored]
 
 
+# The main thing a dish is built on. A recipe whose protein isn't in the
+# fridge still matches on its onions and peppers, and a small model will
+# happily list it as if it were all there, so the code finds the gap rather
+# than trusting the model to read the ingredient list.
+_MAIN_WORDS = ("steak", "beef", "chicken", "pork", "lamb", "turkey", "veal",
+               "goat", "oxtail", "brisket", "duck", "fish", "salmon", "tuna",
+               "cod", "tilapia", "shrimp", "prawn", "crab", "scallop",
+               "mussel", "clam", "tofu", "sausage", "chorizo", "bacon", "ham")
+# "beef broth" and "fish sauce" flavour a dish; they aren't what it's built
+# on, and a pantry full of them mustn't make a beef recipe look covered.
+_NOT_MAIN = ("broth", "stock", "bouillon", "consomm", "powder", "sauce", "fat",
+             "cream of", "noodle", "soup")
+# Longer than this, once any note is cut off, a line is a step, not an
+# ingredient: "In a pan, heat up a tablespoon of oil and add pork belly".
+_MAX_INGREDIENT_LINE = 45
+
+
+def proteins(names):
+    """The names that are something a dish is built on, broths and sauces
+    left out."""
+    out = []
+    for name in names:
+        low = name.lower()
+        if any(w in low for w in _NOT_MAIN):
+            continue
+        if any(re.search(r"\b%ss?\b" % w, low) for w in _MAIN_WORDS):
+            out.append(name)
+    return out
+
+
+def missing_mains(title, text, available):
+    """The recipe's protein lines that nothing tracked covers, cut before
+    any note: "2lbs flank or skirt steak (season...)" comes back as "2lbs
+    flank or skirt steak". Each protein counts once, so the steps naming
+    the steak again don't repeat it. The title line and long step lines are
+    skipped."""
+    have = " ".join(proteins(available)).lower()
+    seen, missing = set(), []
+    for line in text.splitlines():
+        item = re.split(r"\(|\. ", line)[0].strip()
+        low = item.lower()
+        if (not item or low == title.strip().lower()
+                or len(item) > _MAX_INGREDIENT_LINE
+                or any(w in low for w in _NOT_MAIN)):
+            continue
+        for w in _MAIN_WORDS:
+            if re.search(r"\b%ss?\b" % w, low):
+                if w not in seen:
+                    seen.add(w)
+                    if w not in have:
+                        missing.append(item)
+                break
+    return missing
+
+
 def exec_search_recipes(con, chat_id, args, today):
     available = ([i["name"] for i in fridge.open_items(con, chat_id)]
                 + [i["name"] for i in fridge.pantry_items(con, chat_id)])
@@ -619,7 +674,14 @@ def exec_search_recipes(con, chat_id, args, today):
     top = rank_recipes(recipes, available)[:MAX_RECIPE_MATCHES]
     return {
         "available_ingredients": available,
+        "available_proteins": proteins(available),
+        "how_to_list": "For a match with missing_main, name each missing item "
+                       "as the recipe does, then a swap from available_proteins "
+                       "in parentheses, e.g. \"flank steak (use your chicken "
+                       "thighs)\". No sensible swap: \"(you'd need to buy "
+                       "this)\". Never list it as if they have everything.",
         "matches": [{"title": m["title"], "matched_ingredients": m["matched_ingredients"],
+                     "missing_main": missing_mains(m["title"], m["text"], available),
                      "text": m["text"][:MAX_RECIPE_CHARS]} for m in top],
     }
 

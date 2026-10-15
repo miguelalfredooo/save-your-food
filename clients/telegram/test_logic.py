@@ -1375,6 +1375,52 @@ class RecipeSearch(unittest.TestCase):
             llm_agent.fetch_recipes = original
         self.assertEqual(result["matches"][0]["title"], "Omelet")
 
+    ROPA_VIEJA = ("Ingredients\n2lbs flank or skirt steak (season with kosher salt)\n"
+                  "1 yellow onion\n1 green bell pepper\n3/4 cup of beef broth\n"
+                  "brown both sides of the flank steak")
+
+    def test_missing_mains_names_the_protein_they_dont_have(self):
+        self.assertEqual(
+            llm_agent.missing_mains("Ropa Vieja", self.ROPA_VIEJA, ["onion", "bell pepper"]),
+            ["2lbs flank or skirt steak"])
+
+    def test_missing_mains_is_empty_when_the_protein_is_tracked(self):
+        self.assertEqual(
+            llm_agent.missing_mains("Ropa Vieja", self.ROPA_VIEJA, ["skirt steak", "onion"]), [])
+
+    def test_missing_mains_ignores_broth_and_sauces(self):
+        text = "1 cup chicken broth\n2 tbsp fish sauce\n1 tsp chicken powder\nrice"
+        self.assertEqual(llm_agent.missing_mains("Rice", text, ["rice"]), [])
+
+    def test_missing_mains_does_not_match_inside_other_words(self):
+        self.assertEqual(llm_agent.missing_mains("Burger", "1 hamburger bun\ncoddled egg", []), [])
+
+    def test_broth_in_the_pantry_does_not_cover_a_beef_recipe(self):
+        self.assertEqual(
+            llm_agent.missing_mains("Stew", "2 lbs beef chuck", ["beef broth", "fish sauce"]),
+            ["2 lbs beef chuck"])
+        self.assertEqual(llm_agent.proteins(["beef broth", "chicken bouillon",
+                                             "chicken thighs"]), ["chicken thighs"])
+
+    def test_missing_mains_skips_the_title_and_step_lines(self):
+        text = ("Honey Garlic Pork Chops\n"
+                "In a pan, heat up a tablespoon of oil and add the pork chops\n"
+                "4 pork chops")
+        self.assertEqual(
+            llm_agent.missing_mains("Honey Garlic Pork Chops", text, []), ["4 pork chops"])
+
+    def test_exec_search_recipes_flags_the_missing_main_and_the_swaps(self):
+        fridge.add_items(self.con, 1, ["onion", "bell pepper", "chicken thighs"], TODAY)
+        original = llm_agent.fetch_recipes
+        llm_agent.fetch_recipes = lambda: [{"title": "Ropa Vieja", "text": self.ROPA_VIEJA}]
+        try:
+            result = llm_agent.exec_search_recipes(self.con, 1, {}, TODAY)
+        finally:
+            llm_agent.fetch_recipes = original
+        self.assertEqual(result["matches"][0]["missing_main"], ["2lbs flank or skirt steak"])
+        self.assertEqual(result["available_proteins"], ["chicken thighs"])
+        self.assertIn("in parentheses", result["how_to_list"])
+
     def test_exec_search_recipes_handles_notes_being_unreachable(self):
         fridge.add_items(self.con, 1, ["milk"], TODAY)
         original = llm_agent.fetch_recipes
