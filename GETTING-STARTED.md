@@ -41,9 +41,9 @@ item:
 
 | Button | Means |
 |---|---|
-| ✅ | Used it |
-| ❄️ | Froze it |
-| 🗑 | Tossed it |
+| Used | You ate it or cooked it |
+| Froze | It went in the freezer |
+| Tossed | It went in the bin |
 
 Each tap updates the same card. When every line is done, the card closes. **If
 nothing needs using, nothing arrives**: silence means you're fine.
