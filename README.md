@@ -99,6 +99,7 @@ reconciliation, and every claim carries how old it is.
 | `ops/` | How option 4 drives the apps. Reference, read when needed |
 | `docs/` | Why it's built this way, what was rejected, and the option 4 setup |
 | `examples/` | Starting shapes for option 4's four data files |
+| `check.sh` | Every check in one run: the bot and calendar tests, and that the skill zip matches its folder. GitHub runs it on each pull request |
 
 ## What it deliberately doesn't do
 
