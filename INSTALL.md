@@ -250,6 +250,10 @@ and is also how to restart the bot after a config change.
 Logs are in `~/Library/Logs/fridge-loop/`. To remove the service: `./uninstall.sh`
 (your `config.json` and data stay).
 
+To update later: `./update.sh`. It pulls the latest code, runs every check on it
+before the bot uses it, and restarts the service only if they all pass. If a check
+fails, nothing changes and the bot keeps running the version it had.
+
 ## Done
 
 Tell the person:

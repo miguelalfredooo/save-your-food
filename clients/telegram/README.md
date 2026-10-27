@@ -56,6 +56,8 @@ and boots out any earlier copy of the service before installing fresh.
                       # 20 lines of each log
     ./uninstall.sh    # stops it and removes the plist; config.json and
                       # fridge.db are untouched
+    ./update.sh       # pulls the latest code, runs every check on it, and
+                      # restarts the service only if they all pass
 
 Logs live in `~/Library/Logs/fridge-loop/bot.log` and `bot.err.log`, rotated
 to `.old` by `install.sh` once either passes 5 MB.
